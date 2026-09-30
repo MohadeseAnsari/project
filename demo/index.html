@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>دموی API — ایران‌داک</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f6f6b'/%3E%3Ctext x='16' y='23' font-size='19' text-anchor='middle' fill='white'%3E%E2%97%88%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -28,21 +29,30 @@
   <section class="panel">
     <h2 class="panel-title">ارسال پایان‌نامه <code>POST /submit</code></h2>
 
+    <div class="actions">
+      <button id="sendBtn" class="btn btn-primary">ارسال درخواست</button>
+      <button id="resetBtn" class="btn btn-ghost">بازنشانی فرم</button>
+    </div>
+
     <div class="scenarios">
-      <span class="scenarios-label">سناریوی آماده:</span>
+      <span class="scenarios-label">سناریو:</span>
       <button class="chip chip-ok" data-scenario="valid">ورودی معتبر → ۲۰۰</button>
       <button class="chip chip-err" data-scenario="missingField">فیلد جاافتاده → ۴۲۲</button>
       <button class="chip chip-err" data-scenario="whitespace">فقط فاصله → ۴۲۲</button>
-      <button class="chip chip-err" data-scenario="longTitle">عنوان بسیار طولانی → ۴۲۲</button>
+      <button class="chip chip-err" data-scenario="longTitle">عنوان طولانی → ۴۲۲</button>
       <button class="chip chip-err" data-scenario="badSecret">رمز اشتباه → ۴۰۱</button>
       <button class="chip chip-err" data-scenario="noSecret">بدون رمز → ۴۰۱</button>
       <button class="chip chip-err" data-scenario="malformed">JSON خراب → ۴۰۰</button>
       <button class="chip chip-warn" data-scenario="extra">فیلد اضافی → ۲۰۰</button>
     </div>
 
+    <p class="note" id="scenarioNote"></p>
+    <p class="note-hint">سناریو فرم را پر می‌کند؛ ارسال با دکمهٔ «ارسال درخواست» در بالا انجام می‌شود.</p>
+
     <div class="field">
       <label for="apiBase">آدرس پایهٔ API</label>
-      <input id="apiBase" type="text" value="http://localhost:8000" spellcheck="false" />
+      <input id="apiBase" type="text" spellcheck="false" />
+      <small class="hint" id="apiBaseHint"></small>
     </div>
 
     <div class="field">
@@ -77,7 +87,7 @@
       </div>
       <div class="field span2">
         <label for="abstract">abstract</label>
-        <textarea id="abstract" rows="3">این پژوهش با هدف بررسی تأثیر عوامل محیطی بر رشد سلولی در بافت پایتخت انسانی انجام شده است. نمونه‌ها در سه محیط کنترل‌شده نگهداری و پس از ۴۸ ساعت اندازه‌گیری شدند.</textarea>
+        <textarea id="abstract" rows="2">این پژوهش با هدف بررسی تأثیر عوامل محیطی بر رشد سلولی در بافت پایتخت انسانی انجام شده است. نمونه‌ها در سه محیط کنترل‌شده نگهداری و پس از ۴۸ ساعت اندازه‌گیری شدند.</textarea>
       </div>
       <div class="field span2">
         <label for="toc">table_of_contents</label>
@@ -86,12 +96,8 @@
 ۳. روش‌شناسی
 ۴. نتایج
 ۵. نتیجه‌گیری</textarea>
-      </div>
-    </div>
 
-    <div class="actions">
-      <button id="sendBtn" class="btn btn-primary">ارسال درخواست</button>
-      <button id="resetBtn" class="btn btn-ghost">بازنشانی فرم</button>
+      </div>
     </div>
   </section>
 

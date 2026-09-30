@@ -18,6 +18,44 @@ const FIELDS = {
 
 let lastRecordId = null;
 
+/* Where the API lives.
+
+Defaults to the same host that served this page, on port 8000 — that is correct
+whether the demo is opened on localhost or reached from another machine, which a
+hardcoded "http://localhost:8000" is not (from another machine that resolves to
+the *visitor's* own localhost and silently fails).
+
+An explicit value in ?api= wins, so a presenter can point one shared page at a
+different deployment without editing files. A typed value always wins over both.
+*/
+const API_PORT = "8000";
+
+function defaultApiBase() {
+  const fromQuery = new URLSearchParams(location.search).get("api");
+  if (fromQuery) return fromQuery.replace(/\/+$/, "");
+  if (location.protocol === "file:") return "http://localhost:" + API_PORT;
+  return `${location.protocol}//${location.hostname}:${API_PORT}`;
+}
+
+function initApiBase() {
+  $("apiBase").value = defaultApiBase();
+  updateApiBaseHint();
+}
+
+function updateApiBaseHint() {
+  const hint = $("apiBaseHint");
+  const isLocal = ["localhost", "127.0.0.1", "::1", ""].includes(location.hostname);
+  if (!isLocal) {
+    hint.className = "hint warn";
+    hint.textContent =
+      `Served from ${location.hostname} — the API is expected on the same host, port ${API_PORT}. ` +
+      `If requests fail, allow this origin on the API (DEMO_CORS_ORIGINS=http://${location.protocol}//${location.hostname}:8080).`;
+  } else {
+    hint.className = "hint";
+    hint.textContent = "Leave as-is for a local run; edit to point at another deployment.";
+  }
+}
+
 function apiBase() {
   return $("apiBase").value.trim().replace(/\/+$/, "");
 }
@@ -63,52 +101,145 @@ function render(status, statusText, body, sent, elapsed) {
   }
 }
 
-/* ---- Scenarios: each one shows a different backend behaviour ---- */
+/* ---- Scenarios ----
+ *
+ * A scenario only *fills the form*. Nothing is sent until the presenter presses
+ * the send button, so the audience can read the payload that is about to go out
+ * and the presenter controls the timing.
+ *
+ * `apply` sets field values. `omit` names fields the backend will not receive at
+ * all, which a form cannot express (an absent key is not an empty string) --
+ * those fields are blanked and greyed out so the omission is visible rather
+ * than implied.
+ */
+const GOOD_INPUT = {
+  username: "demo_user",
+  title: "بررسی اثر متغیرهای محیطی بر رشد پایتخت انسانی",
+  abstract:
+    "این پژوهش با هدف بررسی تأثیر عوامل محیطی بر رشد سلولی در بافت پایتخت انسانی انجام شده است. نمونه‌ها در سه محیط کنترل‌شده نگهداری و پس از ۴۸ ساعت اندازه‌گیری شدند.",
+  field: "پزشکی",
+  university: "دانشگاه تهران",
+  toc: "۱. مقدمه\n۲. مرور ادبیات\n۳. روش‌شناسی\n۴. نتایج\n۵. نتیجه‌گیری",
+  author: "زهرا محمدی",
+  supervisor: "دکتر رضایی",
+};
+
 const SCENARIOS = {
   valid: {
-    note: "درخواست معتبر — رکورد با وضعیت ready ذخیره شد.",
-    body: () => readForm(),
+    label: "ورودی معتبر → ۲۰۰",
+    expect: "درخواست معتبر — رکورد با وضعیت ready ذخیره می‌شود.",
+    apply: () => ({ ...GOOD_INPUT }),
   },
   missingField: {
-    note: "فیلد supervisor جا افتاده — اعتبارسنجی Pydantic (۴۲۲).",
-    body: () => {
-      const b = readForm();
-      delete b.supervisor;
-      return b;
-    },
+    label: "فیلد جاافتاده → ۴۲۲",
+    expect: "کلید supervisor اصلاً ارسال نمی‌شود — اعتبارسنجی Pydantic.",
+    apply: () => ({ ...GOOD_INPUT }),
+    omit: ["supervisor"],
   },
   whitespace: {
-    note: "مقدار فقط فاصله — رد شدن توسط اعتبارسنج non_whitespace (۴۲۲).",
-    body: () => ({ ...readForm(), title: "     " }),
+    label: "فقط فاصله → ۴۲۲",
+    expect: "مقدار title فقط فاصله است — رد می‌شود (نه خالی، نه کوتاه).",
+    apply: () => ({ ...GOOD_INPUT, title: "     " }),
   },
   longTitle: {
-    note: "عنوان بلندتر از ۵۰۰ کاراکتر — نقض max_length (۴۲۲).",
-    body: () => ({ ...readForm(), title: "مطالعه‌ای ".repeat(120) }),
+    label: "عنوان طولانی → ۴۲۲",
+    expect: "عنوان از ۵۰۰ کاراکتر عبور می‌کند — نقض max_length.",
+    apply: () => ({ ...GOOD_INPUT, title: "مطالعه‌ای ".repeat(120) }),
   },
   badSecret: {
-    note: "رمز اشتباه — احراز هویت پیش از اعتبارسنجی (۴۰۱).",
-    body: () => ({ ...readForm(), shared_Secret: "definitely-wrong-secret" }),
+    label: "رمز اشتباه → ۴۰۱",
+    expect: "shared_Secret نادرست — احراز هویت پیش از اعتبارسنجی.",
+    apply: () => ({ ...GOOD_INPUT }),
+    secret: "definitely-wrong-secret",
   },
   noSecret: {
-    note: "رمز ارسال نشده — دسترسی غیرمجاز (۴۰۱).",
-    body: () => {
-      const b = readForm();
-      delete b.shared_Secret;
-      return b;
-    },
+    label: "بدون رمز → ۴۰۱",
+    expect: "shared_Secret اصلاً ارسال نمی‌شود — دسترسی غیرمجاز.",
+    apply: () => ({ ...GOOD_INPUT }),
+    omit: ["secret"],
   },
   malformed: {
-    note: "بدنهٔ JSON خراب — بدنه پیش از هر چیز پارس می‌شود (۴۰۰).",
-    raw: "{ \"username\": \"demo_user\", ",
+    label: "JSON خراب → ۴۰۰",
+    expect: "بدنه JSON ناقص است — بدنه پیش از هر چیز پارس می‌شود.",
+    apply: () => ({ ...GOOD_INPUT }),
+    raw: '{ "shared_Secret": "…", "username": "demo_user", ',
   },
   extra: {
-    note: "فیلدهای اضافی نادیده گرفته می‌شوند و درخواست پذیرفته می‌شود (۲۰۰).",
-    body: () => ({ ...readForm(), unexpected_field: "ignored", nested: { a: 1 } }),
+    label: "فیلد اضافی → ۲۰۰",
+    expect: "کلیدهای ناشناخته نادیده گرفته می‌شوند و درخواست پذیرفته می‌شود.",
+    apply: () => ({ ...GOOD_INPUT }),
+    extra: { unexpected_field: "ignored", nested: { a: 1 } },
   },
 };
 
+/* Form-field key <-> input id. */
+const GOOD_SECRET = FIELDS.secret.value;
+
+const KEY_TO_INPUT = {
+  username: "username",
+  title: "title",
+  abstract: "abstract",
+  field: "field",
+  university: "university",
+  toc: "toc",
+  author: "author",
+  supervisor: "supervisor",
+};
+
+/* Load a scenario into the form. The selected scenario only records *intent*
+ * (omit / raw / extra); the payload is rebuilt from the form at send time, so
+ * an edit made after clicking a chip is what actually gets sent. */
+let activeScenario = "valid";
+
+function applyScenario(key) {
+  const s = SCENARIOS[key];
+  if (!s) return;
+  activeScenario = key;
+
+  const values = s.apply();
+
+  for (const [formKey, inputId] of Object.entries(KEY_TO_INPUT)) {
+    const el = $(inputId);
+    el.value = values[formKey] ?? "";
+    // Omitted fields are blanked and dimmed, so the audience can see the key is
+    // absent rather than empty.
+    el.classList.toggle("omitted", (s.omit || []).includes(formKey));
+    el.closest(".field").classList.toggle(
+      "is-omitted",
+      (s.omit || []).includes(formKey)
+    );
+  }
+
+  FIELDS.secret.value = (s.omit || []).includes("secret") ? "" : s.secret ?? GOOD_SECRET;
+  FIELDS.secret.classList.toggle("omitted", (s.omit || []).includes("secret"));
+  FIELDS.secret.closest(".field").classList.toggle(
+    "is-omitted",
+    (s.omit || []).includes("secret")
+  );
+
+  $("scenarioNote").textContent = s.expect;
+  $("scenarioNote").className = "note";
+
+  document.querySelectorAll("[data-scenario]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.scenario === key);
+  });
+}
+
+/* Build the payload from the form as it currently stands. */
+function buildPayload() {
+  const payload = readForm();
+
+  for (const formKey of SCENARIOS[activeScenario]?.omit || []) {
+    const payloadKey = formKey === "secret" ? "shared_Secret" : formKey;
+    delete payload[payloadKey];
+  }
+
+  Object.assign(payload, SCENARIOS[activeScenario]?.extra || {});
+  return payload;
+}
+
 async function send() {
-  const scenario = SCENARIOS[sendingScenario || "valid"];
+  const scenario = SCENARIOS[activeScenario] || SCENARIOS.valid;
   const btn = $("sendBtn");
   btn.disabled = true;
   btn.textContent = "در حال ارسال…";
@@ -117,14 +248,18 @@ async function send() {
   const url = `${apiBase()}/submit`;
 
   let sentBody;
-  let requestInit = { method: "POST", headers: { "Content-Type": "application/json" } };
+  const requestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  };
 
   if (scenario.raw !== undefined) {
-    // Raw string body: reproduces the malformed-JSON path (HTTP 400).
+    // Raw string body: reproduces the malformed-JSON path (HTTP 400). The
+    // scenario chip fills the form, but the wire payload is deliberately broken.
     sentBody = scenario.raw;
     requestInit.body = scenario.raw;
   } else {
-    sentBody = scenario.body();
+    sentBody = buildPayload();
     requestInit.body = JSON.stringify(sentBody);
   }
 
@@ -137,18 +272,35 @@ async function send() {
     } catch {
       body = "(بدنهٔ پاسخ JSON نبود)";
     }
-    render(res.status, scenario.note, body, sentBody, elapsed);
+    render(res.status, outcomeFor(res.status), body, sentBody, elapsed);
   } catch (err) {
     const elapsed = Math.round(performance.now() - started);
     render(0, "ارتباط با سرور برقرار نشد — آدرس API را بررسی کنید.", String(err), sentBody, elapsed);
   } finally {
-    sendingScenario = null;
     btn.disabled = false;
     btn.textContent = "ارسال درخواست";
   }
 }
 
-let sendingScenario = null;
+/* Describe what the server actually did, rather than what the scenario expected.
+   A scenario is only a pre-filled form, so the response is the source of truth —
+   which also means an edit made after picking a chip is described correctly. */
+function outcomeFor(status) {
+  switch (status) {
+    case 200:
+      return "پذیرفته شد — رکورد با وضعیت ready ذخیره شد و Worker آن را پردازش می‌کند.";
+    case 400:
+      return "بدنه JSON معتبر نبود — قبل از هر بررسی دیگری رد شد (۴۰۰).";
+    case 401:
+      return "احراز هویت ناموفق — قبل از اعتبارسنجی رد شد، پس رکوردی ساخته نشد (۴۰۱).";
+    case 422:
+      return "رمز درست بود اما بار اعتبارسنجی نشد (۴۲۲).";
+    case 429:
+      return "محدودیت نرخ: حداکثر ۱۰ درخواست در دقیقه (۴۲۹).";
+    default:
+      return status >= 500 ? "خطای داخلی سرور (۵xx)." : `پاسخ غیرمنتظره (${status}).`;
+  }
+}
 
 /* ---- Poll a submitted record to show the async worker pipeline ---- */
 async function pollRecord() {
@@ -207,22 +359,32 @@ async function probe() {
 }
 
 /* ---- Wiring ---- */
+$("apiBase").addEventListener("input", updateApiBaseHint);
+
+// A chip only fills the form. The presenter then presses send, so the audience
+// can read the payload first and the timing of the request stays under control.
 document.querySelectorAll("[data-scenario]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    sendingScenario = btn.dataset.scenario;
-    send();
-  });
+  btn.addEventListener("click", () => applyScenario(btn.dataset.scenario));
 });
 
-$("sendBtn").addEventListener("click", () => {
-  sendingScenario = "valid";
-  send();
-});
+$("sendBtn").addEventListener("click", send);
+
+// Editing a field invalidates the scenario's "expect" line, since the presenter
+// may have changed the payload away from what the chip set up.
+Object.values(FIELDS).forEach((el) =>
+  el.addEventListener("input", () => {
+    if (activeScenario !== "valid") {
+      $("scenarioNote").textContent =
+        "فرم ویرایش شده — همان چیزی که الان در فیلدهاست ارسال می‌شود.";
+      $("scenarioNote").className = "note edited";
+    }
+  })
+);
 
 $("pollBtn").addEventListener("click", pollRecord);
 
 $("resetBtn").addEventListener("click", () => {
-  sendingScenario = null;
+  applyScenario("valid");
   $("statusBanner").className = "banner idle";
   $("statusCode").textContent = "—";
   $("statusText").textContent = "هنوز درخواستی ارسال نشده است.";
@@ -233,5 +395,7 @@ $("resetBtn").addEventListener("click", () => {
   lastRecordId = null;
 });
 
+initApiBase();
+applyScenario("valid");
 probe();
 setInterval(probe, 15000);

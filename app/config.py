@@ -69,5 +69,17 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Origins allowed to call the API from a browser, as a comma-separated list.
+    #
+    # Needed by the demo UI, which is served from a different port than the API
+    # and is therefore a cross-origin request. Left as an explicit list rather
+    # than "*" on purpose: this API authenticates with a shared secret, and a
+    # wildcard would let any site a presenter visits make credentialed calls
+    # against it.
+    #
+    # Set DEMO_CORS_ORIGINS when the demo is served from another host, e.g.
+    # "http://example.com:8080". The defaults cover local development only.
+    demo_cors_origins: str = "http://localhost:8080,http://127.0.0.1:8080"
+
 
 settings = Settings()

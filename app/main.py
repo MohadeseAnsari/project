@@ -36,16 +36,21 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Allows the browser-based demo UI (served separately on :8080) to call the API
-# from :8000. Restricted to local development origins.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-    ],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# from :8000. Configurable via DEMO_CORS_ORIGINS; defaults to local development
+# origins. An explicit list, not "*", because the API is authenticated with a
+# shared secret.
+_DEMO_CORS_ORIGINS = [
+    origin.strip()
+    for origin in settings.demo_cors_origins.split(",")
+    if origin.strip()
+]
+if _DEMO_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_DEMO_CORS_ORIGINS,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 app.include_router(router)
 
 

@@ -57,7 +57,7 @@ body {
   background-size: 28px 28px;
   color: var(--ink);
   min-height: 100vh;
-  line-height: 1.7;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -70,26 +70,26 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 18px 28px;
+  padding: 12px 20px;
   background: var(--card);
   border-bottom: 1px solid var(--line);
 }
 
-.brand { display: flex; align-items: center; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 11px; }
 
 .brand-mark {
-  width: 46px;
-  height: 46px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--accent);
   color: #fff;
-  font-size: 22px;
+  font-size: 18px;
 }
 
-.topbar h1 { font-size: 19px; margin: 0; font-weight: 700; }
-.topbar p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+.topbar h1 { font-size: 17px; margin: 0; font-weight: 700; }
+.topbar p { margin: 0; font-size: 12px; color: var(--ink-soft); }
 
 .health {
   display: flex;
@@ -111,14 +111,19 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
 .dot.bad { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
 
-/* ===== Layout ===== */
+/* ===== Layout =====
+   Sized to fit a 1080p 16:9 screen (the presentation target) without
+   scrolling: ~940px of content under a typical browser's chrome. The
+   density knobs (line-height, padding, the JSON block cap) are all
+   deliberately modest rather than extreme, so the page still reads well
+   when projected. */
 .layout {
   display: grid;
-  grid-template-columns: 1.15fr .85fr;
-  gap: 22px;
-  max-width: 1240px;
-  margin: 26px auto;
-  padding: 0 24px;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 16px;
+  max-width: 1400px;
+  margin: 16px auto;
+  padding: 0 18px;
   align-items: start;
 }
 
@@ -131,14 +136,14 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 22px;
+  padding: 14px 16px;
 }
 
 .panel-title {
-  margin: 0 0 18px;
-  font-size: 16px;
+  margin: 0 0 12px;
+  font-size: 15px;
   font-weight: 700;
-  padding-bottom: 12px;
+  padding-bottom: 9px;
   border-bottom: 1px dashed var(--line);
 }
 
@@ -154,32 +159,32 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 }
 
 .sub {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--ink-soft);
-  margin: 20px 0 8px;
+  margin: 13px 0 5px;
 }
 
 /* ===== Scenario chips ===== */
 .scenarios {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  margin-bottom: 20px;
-  padding: 14px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
 }
 
-.scenarios-label { font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.scenarios-label { font-size: 11px; font-weight: 600; color: var(--ink-soft); }
 
 .chip {
   font-family: inherit;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid transparent;
   cursor: pointer;
@@ -192,21 +197,69 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 .chip-err  { background: var(--err-soft);  color: var(--err);  border-color: #f0c9c9; }
 .chip-warn { background: var(--warn-soft); color: var(--warn); border-color: #edd9ac; }
 
-/* ===== Form ===== */
+/* The selected scenario, so the audience can see which one is loaded. */
+.chip.active {
+  box-shadow: 0 0 0 3px rgba(31, 111, 107, .22);
+  font-weight: 700;
+}
+.chip-ok.active   { background: var(--ok-soft);   box-shadow: 0 0 0 3px rgba(47,125,85,.25); }
+.chip-err.active  { background: var(--err-soft);  box-shadow: 0 0 0 3px rgba(178,59,59,.22); }
+.chip-warn.active { background: var(--warn-soft); box-shadow: 0 0 0 3px rgba(165,106,18,.22); }
+
+/* What the loaded scenario is about to demonstrate. */
+.note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 7px;
+  padding: 7px 10px;
+}
+.note.edited { color: var(--warn); background: var(--warn-soft); border-inline-start-color: var(--warn); }
+
+.note-hint {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* A field whose key is deliberately left out of the payload. */
+.field.is-omitted label::after {
+  content: " — ارسال نمی‌شود";
+  color: var(--err);
+  font-weight: 500;
+}
+.field.is-omitted input,
+.field.is-omitted textarea {
+  background: var(--err-soft);
+  border-style: dashed;
+  border-color: #e0a5a5;
+  color: #9a9a9a;
+}
+
+/* ===== Form =====
+   Three columns for the short single-line fields, so username/field/
+   university and author/supervisor each take one row instead of three. The
+   two long fields span the full width. */
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px 10px;
 }
-@media (max-width: 620px) {
+@media (max-width: 860px) {
+  .grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
   .grid { grid-template-columns: 1fr; }
 }
 .span2 { grid-column: 1 / -1; }
 
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: 3px; }
 
 .field label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--ink-soft);
   direction: ltr;
@@ -217,12 +270,12 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 .field input,
 .field textarea {
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--ink);
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 8px;
+  padding: 7px 9px;
   outline: none;
   transition: border-color .15s ease, box-shadow .15s ease;
   resize: vertical;
@@ -236,15 +289,25 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 
 .field input:invalid:not(:placeholder-shown) { border-color: var(--err); }
 
+.hint {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  direction: ltr;
+  text-align: right;
+}
+
+.hint.warn { color: var(--warn); }
+
 /* ===== Buttons ===== */
-.actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+/* Sits directly under the panel title, so the gap is below it. */
+.actions { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 
 .btn {
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 11px 22px;
-  border-radius: 10px;
+  padding: 8px 16px;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: transform .08s ease, filter .15s ease;
@@ -261,11 +324,11 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 .banner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 14px 16px;
-  border-radius: 12px;
-  font-size: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
   border: 1px solid var(--line);
   background: var(--bg);
 }
@@ -285,26 +348,29 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
 #statusText { font-weight: 500; }
 .ms { margin-inline-start: auto; font-size: 12px; opacity: .75; direction: ltr; }
 
-/* ===== Code blocks ===== */
+/* ===== Code blocks =====
+   Capped low enough that both blocks plus the rest of the panel fit on one
+   screen. These payloads are short and uniform in shape, so the cap only ever
+   clips a long generated article body; the block scrolls, so nothing is lost. */
 .code {
   direction: ltr;
   text-align: left;
   background: #fbf9f3;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px;
-  font-size: 12.5px;
-  line-height: 1.65;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
   overflow: auto;
-  max-height: 300px;
+  max-height: 158px;
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
   color: #22303d;
 }
 
-.flow { margin: 0; padding-inline-start: 20px; font-size: 13px; color: var(--ink-soft); }
-.flow li { margin-bottom: 6px; }
+.flow { margin: 0; padding-inline-start: 18px; font-size: 12px; color: var(--ink-soft); }
+.flow li { margin-bottom: 3px; }
 .flow code {
   background: var(--accent-soft);
   color: var(--accent);
@@ -315,10 +381,36 @@ code, pre { font-family: "Vazirmatn", ui-monospace, monospace; }
   display: inline-block;
 }
 
+/* ===== Short viewports (e.g. 1366x768) =====
+   The base layout targets 1080p. On a 768-tall screen the browser chrome eats
+   most of the viewport, so shave the remaining fat rather than letting the
+   page scroll during a presentation. */
+@media (max-height: 820px) {
+  .layout { margin: 10px auto; gap: 12px; }
+  .panel { padding: 11px 13px; }
+  .code { max-height: 104px; font-size: 11.5px; }
+  .sub { margin: 9px 0 4px; }
+  .scenarios { padding: 7px 9px; margin-bottom: 9px; }
+  .note { padding: 6px 9px; }
+  .topbar { padding: 9px 18px; }
+  .field input, .field textarea { padding: 6px 8px; }
+  /* Keep the pipeline walkthrough -- it is presentation content -- but lay it
+     out horizontally so it costs one line instead of four. */
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding-inline-start: 0;
+    list-style: none;
+  }
+  .flow li { margin-bottom: 0; }
+  .flow b { display: none; }
+}
+
 /* ===== Footer ===== */
 .foot {
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-soft);
-  padding: 8px 0 28px;
+  padding: 4px 0 14px;
 }

@@ -45,11 +45,28 @@ services:
       AVALAI_API_KEY: ${AVALAI_API_KEY}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+      # Browser origins allowed to call the API (the demo UI is served from :8080).
+      # Add the host you will present from, e.g. "http://example.com:8080".
+      DEMO_CORS_ORIGINS: ${DEMO_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  # Static demo UI for the API. Separate from the API so the presentation page
+  # can be reloaded or replaced without restarting the service it talks to.
+  demo:
+    build: .
+    # serve.py rather than `python -m http.server`: the slim image has no
+    # /etc/mime.types, so http.server serves the webfonts as
+    # application/octet-stream and browsers reject the font outright.
+    command: python /srv/demo/serve.py
+    volumes:
+      - ./demo:/srv/demo:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
 
   worker:
     build: .
