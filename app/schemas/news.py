@@ -1,0 +1,91 @@
+"""Pydantic contracts for the HTTP API.
+
+These models describe the actual request/response shapes of the existing
+endpoints. They are used both for runtime validation (where the endpoint
+applies them) and for OpenAPI/Swagger schema generation.
+"""
+
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class ThesisInput(BaseModel):
+    """Request body for ``POST /submit`` — the nine-field input contract.
+
+    All nine fields are required. ``shared_Secret`` is the authentication
+    secret and is checked by the endpoint BEFORE this model is applied, so a
+    missing/invalid secret never reaches validation and never creates a
+    database record. Extra fields are ignored.
+
+    The examples below are fake placeholders for Swagger "Try it out" only.
+    """
+
+    shared_Secret: str = Field(
+        ...,
+        example="REPLACE_WITH_REAL_SECRET",
+        description="Authentication secret. Checked before payload validation.",
+    )
+    username: str = Field(min_length=1, max_length=255, example="test_user")
+    title: str = Field(min_length=1, max_length=500, example="Sample Thesis Title")
+    abstract: str = Field(min_length=1, max_length=2000, example="This is a sample abstract used for API testing.")
+    field: str = Field(min_length=1, max_length=200, example="پزشکی")
+    university: str = Field(min_length=1, max_length=255, example="Tehran University")
+    table_of_contents: str = Field(min_length=1, max_length=5000, example="1. Introduction\n2. Methods\n3. Results")
+    author: str = Field(min_length=1, max_length=255, example="John Doe")
+    supervisor: str = Field(min_length=1, max_length=255, example="Dr. Smith")
+
+    @field_validator(
+        "username", "title", "abstract", "field",
+        "university", "table_of_contents", "author", "supervisor",
+    )
+    @classmethod
+    def not_whitespace(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be whitespace-only")
+        return v
+
+
+class SubmitResponse(BaseModel):
+    """Response for a valid submission: the record id and initial status."""
+
+    id: UUID = Field(example="123e4567-e89b-12d3-a456-426614174000")
+    status: str = Field(example="ready")
+
+
+class HealthResponse(BaseModel):
+    """Health endpoint payload: application and database connectivity."""
+
+    status: str = Field(example="ok")
+    database: str = Field(example="connected")
+
+
+class RecordResponse(BaseModel):
+    """Response for ``GET /records/{record_id}`` — the stored record state."""
+
+    id: UUID = Field(example="123e4567-e89b-12d3-a456-426614174000")
+    status: str = Field(example="review")
+    field: str = Field(example="پزشکی")
+    output_json: dict | None = Field(default=None, example={"title": "...", "lead": "...", "body": "..."})
+    error_message: str | None = Field(default=None)
+
+
+class ServiceInfo(BaseModel):
+    """Response for the root endpoint."""
+
+    service: str = Field(example="IranDoc News Generation")
+    version: str = Field(example="1.0.0")
+
+
+class ErrorResponse(BaseModel):
+    """Error payload returned by the API's HTTPException handlers."""
+
+    detail: str = Field(example="Unauthorized")
+
+
+class GeneratedNews(BaseModel):
+    """Structured LLM output contract (PydanticAI ``output_type``)."""
+
+    title: str
+    lead: str
+    body: str
