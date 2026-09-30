@@ -89,7 +89,10 @@ async def session(test_database):
     """
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE main, fields, categories, models, prompts RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE deliveries, field_channel_routes, channels, "
+                "main, fields, categories, models, prompts RESTART IDENTITY CASCADE"
+            )
         )
     async with async_session() as s:
         yield s
