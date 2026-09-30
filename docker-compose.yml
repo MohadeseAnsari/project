@@ -1,10 +1,18 @@
 services:
   postgres:
     image: postgres:16
-    ports: 
-      ["5432:5432"]
+    # Bound to loopback only. Publishing 5432 on all interfaces put the database
+    # on the public internet; combined with a default `postgres` password it was
+    # wiped by an automated scanner. Other services reach it over the compose
+    # network, so nothing needs the published port -- use an SSH tunnel for
+    # admin access (`ssh -L 5432:localhost:5432 <host>`).
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # No default on purpose. A `:-postgres` fallback fails open to a guessable
+      # password when the variable is simply unset, which is exactly what
+      # happened. Compose now refuses to start instead.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-irandoc_news}
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -22,7 +30,7 @@ services:
     build: .
     command: python scripts/apply_migrations.py
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,7 +48,7 @@ services:
       retries: 3
       start_period: 10s
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       SHARED_SECRET: ${SHARED_SECRET}
       AVALAI_API_KEY: ${AVALAI_API_KEY}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
@@ -72,7 +80,7 @@ services:
     build: .
     command: python -m app.worker.worker
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       AVALAI_API_KEY: ${AVALAI_API_KEY}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
@@ -95,7 +103,7 @@ services:
     build: .
     command: python -m app.messaging.worker
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       BALE_BOT_TOKEN: ${BALE_BOT_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       SENDER_SEND_DELAY_SECONDS: ${SENDER_SEND_DELAY_SECONDS:-5}
