@@ -19,19 +19,31 @@ class ThesisInput(BaseModel):
     The examples below are fake placeholders for Swagger "Try it out" only.
     """
 
+    model_config = {"json_schema_extra": {"example": {
+        "shared_Secret": "REPLACE_WITH_REAL_SECRET",
+        "username": "test_user",
+        "title": "Sample Thesis Title",
+        "abstract": "This is a sample abstract used for API testing.",
+        "field": "پزشکی",
+        "university": "Tehran University",
+        "table_of_contents": "1. Introduction\n2. Methods\n3. Results",
+        "author": "John Doe",
+        "supervisor": "Dr. Smith",
+    }}}
+
     shared_Secret: str = Field(
         ...,
-        example="REPLACE_WITH_REAL_SECRET",
+        json_schema_extra={"example": "REPLACE_WITH_REAL_SECRET"},
         description="Authentication secret. Checked before payload validation.",
     )
-    username: str = Field(min_length=1, max_length=255, example="test_user")
-    title: str = Field(min_length=1, max_length=500, example="Sample Thesis Title")
-    abstract: str = Field(min_length=1, max_length=2000, example="This is a sample abstract used for API testing.")
-    field: str = Field(min_length=1, max_length=200, example="پزشکی")
-    university: str = Field(min_length=1, max_length=255, example="Tehran University")
-    table_of_contents: str = Field(min_length=1, max_length=5000, example="1. Introduction\n2. Methods\n3. Results")
-    author: str = Field(min_length=1, max_length=255, example="John Doe")
-    supervisor: str = Field(min_length=1, max_length=255, example="Dr. Smith")
+    username: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "test_user"})
+    title: str = Field(min_length=1, max_length=500, json_schema_extra={"example": "Sample Thesis Title"})
+    abstract: str = Field(min_length=1, max_length=2000, json_schema_extra={"example": "This is a sample abstract used for API testing."})
+    field: str = Field(min_length=1, max_length=200, json_schema_extra={"example": "پزشکی"})
+    university: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "Tehran University"})
+    table_of_contents: str = Field(min_length=1, max_length=5000, json_schema_extra={"example": "1. Introduction\n2. Methods\n3. Results"})
+    author: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "John Doe"})
+    supervisor: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "Dr. Smith"})
 
     @field_validator(
         "username", "title", "abstract", "field",
@@ -47,38 +59,38 @@ class ThesisInput(BaseModel):
 class SubmitResponse(BaseModel):
     """Response for a valid submission: the record id and initial status."""
 
-    id: int = Field(example=1)
-    status: str = Field(example="ready")
+    id: int = Field(json_schema_extra={"example": 1})
+    status: str = Field(json_schema_extra={"example": "ready"})
 
 
 class HealthResponse(BaseModel):
     """Health endpoint payload: application and database connectivity."""
 
-    status: str = Field(example="ok")
-    database: str = Field(example="connected")
+    status: str = Field(json_schema_extra={"example": "ok"})
+    database: str = Field(json_schema_extra={"example": "connected"})
 
 
 class RecordResponse(BaseModel):
     """Response for ``GET /records/{record_id}`` — the stored record state."""
 
-    id: int = Field(example=1)
-    status: str = Field(example="review")
-    field: str = Field(example="پزشکی")
-    output_json: dict | None = Field(default=None, example={"title": "...", "lead": "...", "body": "..."})
+    id: int = Field(json_schema_extra={"example": 1})
+    status: str = Field(json_schema_extra={"example": "review"})
+    field: str = Field(json_schema_extra={"example": "پزشکی"})
+    output_json: dict | None = Field(default=None, json_schema_extra={"example": {"title": "...", "lead": "...", "body": "..."}})
     error_message: str | None = Field(default=None)
 
 
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 
-    service: str = Field(example="IranDoc News Generation")
-    version: str = Field(example="1.0.0")
+    service: str = Field(json_schema_extra={"example": "IranDoc News Generation"})
+    version: str = Field(json_schema_extra={"example": "1.0.0"})
 
 
 class ErrorResponse(BaseModel):
     """Error payload returned by the API's HTTPException handlers."""
 
-    detail: str = Field(example="Unauthorized")
+    detail: str = Field(json_schema_extra={"example": "Unauthorized"})
 
 
 class GeneratedNews(BaseModel):

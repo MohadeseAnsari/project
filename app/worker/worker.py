@@ -151,7 +151,7 @@ async def get_active_prompt(session) -> Prompt | None:
     return result.scalar_one_or_none()
 
 
-async def heartbeat_loop(session, job: Main, stop_event: asyncio.Event) -> None:
+async def heartbeat_loop(job_id: int, stop_event: asyncio.Event) -> None:
     """Refresh the job's ``heartbeat_at`` until ``stop_event`` is set.
 
     Uses its OWN async session (separate from the processing session) because
@@ -170,8 +170,11 @@ async def heartbeat_loop(session, job: Main, stop_event: asyncio.Event) -> None:
         if stop_event.is_set():
             break
         try:
-            job.heartbeat_at = datetime.utcnow()
-            await session.commit()
+            async with async_session() as hb_session:
+                await hb_session.execute(
+                    update(Main).where(Main.id == job_id).values(heartbeat_at=datetime.utcnow())
+                )
+                await hb_session.commit()
         except Exception as e:
             logger.warning("Heartbeat update failed: %s", e)
 
@@ -216,7 +219,7 @@ async def process_job(session, job: Main) -> None:
     await session.commit()
 
     stop_event = asyncio.Event()
-    heartbeat_task = asyncio.create_task(heartbeat_loop(session, job, stop_event))
+    heartbeat_task = asyncio.create_task(heartbeat_loop(job.id, stop_event))
     try:
         output = await generate_news(thesis_data)
     finally:

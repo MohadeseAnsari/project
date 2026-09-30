@@ -83,7 +83,7 @@ async def test_submit_process_review_flow(test_database, postgres_available):
             candidate = await claim_next_job(session)
             if candidate is None:
                 break
-            if str(candidate.id) == record_id:
+            if candidate.id == record_id:
                 job = candidate
                 break
             candidate.status = "ready"
