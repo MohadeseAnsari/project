@@ -10,6 +10,7 @@ CREATE TABLE fields (
     name VARCHAR(500) UNIQUE NOT NULL,
     normalized_name VARCHAR(500) UNIQUE NOT NULL,
     category_id INTEGER NOT NULL REFERENCES categories(id),
+    source VARCHAR(20) NOT NULL DEFAULT 'spreadsheet',
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
