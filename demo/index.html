@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>دموی API — ایران‌داک</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◈</span>
+    <div>
+      <h1>دموی زندهٔ API ایران‌داک</h1>
+      <p>تولید خودکار خبر از پایان‌نامه‌ها — ارائهٔ بک‌اند</p>
+    </div>
+  </div>
+  <div class="health" id="healthBox">
+    <span class="dot" id="healthDot"></span>
+    <span id="healthText">در حال بررسی…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============ پنل ارسال ============ -->
+  <section class="panel">
+    <h2 class="panel-title">ارسال پایان‌نامه <code>POST /submit</code></h2>
+
+    <div class="scenarios">
+      <span class="scenarios-label">سناریوی آماده:</span>
+      <button class="chip chip-ok" data-scenario="valid">ورودی معتبر → ۲۰۰</button>
+      <button class="chip chip-err" data-scenario="missingField">فیلد جاافتاده → ۴۲۲</button>
+      <button class="chip chip-err" data-scenario="whitespace">فقط فاصله → ۴۲۲</button>
+      <button class="chip chip-err" data-scenario="longTitle">عنوان بسیار طولانی → ۴۲۲</button>
+      <button class="chip chip-err" data-scenario="badSecret">رمز اشتباه → ۴۰۱</button>
+      <button class="chip chip-err" data-scenario="noSecret">بدون رمز → ۴۰۱</button>
+      <button class="chip chip-err" data-scenario="malformed">JSON خراب → ۴۰۰</button>
+      <button class="chip chip-warn" data-scenario="extra">فیلد اضافی → ۲۰۰</button>
+    </div>
+
+    <div class="field">
+      <label for="apiBase">آدرس پایهٔ API</label>
+      <input id="apiBase" type="text" value="http://localhost:8000" spellcheck="false" />
+    </div>
+
+    <div class="field">
+      <label for="secret">shared_Secret</label>
+      <input id="secret" type="password" value="vps-e2e-shared-secret-2026" spellcheck="false" />
+    </div>
+
+    <div class="grid">
+      <div class="field">
+        <label for="username">username</label>
+        <input id="username" value="demo_user" />
+      </div>
+      <div class="field">
+        <label for="field">field (رشتهٔ فارسی)</label>
+        <input id="field" value="پزشکی" />
+      </div>
+      <div class="field">
+        <label for="university">university</label>
+        <input id="university" value="دانشگاه تهران" />
+      </div>
+      <div class="field">
+        <label for="author">author</label>
+        <input id="author" value="زهرا محمدی" />
+      </div>
+      <div class="field">
+        <label for="supervisor">supervisor</label>
+        <input id="supervisor" value="دکتر رضایی" />
+      </div>
+      <div class="field span2">
+        <label for="title">title</label>
+        <input id="title" value="بررسی اثر متغیرهای محیطی بر رشد پایتخت انسانی" />
+      </div>
+      <div class="field span2">
+        <label for="abstract">abstract</label>
+        <textarea id="abstract" rows="3">این پژوهش با هدف بررسی تأثیر عوامل محیطی بر رشد سلولی در بافت پایتخت انسانی انجام شده است. نمونه‌ها در سه محیط کنترل‌شده نگهداری و پس از ۴۸ ساعت اندازه‌گیری شدند.</textarea>
+      </div>
+      <div class="field span2">
+        <label for="toc">table_of_contents</label>
+        <textarea id="toc" rows="3">۱. مقدمه
+۲. مرور ادبیات
+۳. روش‌شناسی
+۴. نتایج
+۵. نتیجه‌گیری</textarea>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="sendBtn" class="btn btn-primary">ارسال درخواست</button>
+      <button id="resetBtn" class="btn btn-ghost">بازنشانی فرم</button>
+    </div>
+  </section>
+
+  <!-- ============ پنل نتیجه ============ -->
+  <section class="panel">
+    <h2 class="panel-title">نتیجه <code id="resultMeta">—</code></h2>
+
+    <div id="statusBanner" class="banner idle">
+      <span id="statusCode">—</span>
+      <span id="statusText">هنوز درخواستی ارسال نشده است.</span>
+      <span id="statusTime" class="ms"></span>
+    </div>
+
+    <h3 class="sub">پاسخ سرور</h3>
+    <pre id="responseBody" class="code">—</pre>
+
+    <h3 class="sub">درخواست ارسالی</h3>
+    <pre id="requestBody" class="code">—</pre>
+
+    <h3 class="sub">رفتار سیستم پس از ارسال</h3>
+    <ol class="flow">
+      <li><b>۱.</b> ذخیرهٔ رکورد با وضعیت <code>ready</code></li>
+      <li><b>۲.</b> پردازش غیرهمزمان توسط Worker</li>
+      <li><b>۳.</b> طبقه‌بندی رشتهٔ فارسیِ <code>field</code> به‌صورت قاعده‌محور</li>
+      <li><b>۴.</b> تولید خبر توسط LLM و ذخیرهٔ <code>output_json</code></li>
+    </ol>
+    <button id="pollBtn" class="btn btn-soft">بررسی وضعیت رکورد (GET /records/{id})</button>
+  </section>
+
+</main>
+
+<footer class="foot">
+  سرویس: <span id="svcName">—</span> · نسخه: <span id="svcVer">—</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
