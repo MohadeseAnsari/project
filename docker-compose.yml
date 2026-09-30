@@ -69,5 +69,32 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # Publisher: sends articles that reached status='review' to their routed
+  # channels, throttled by SENDER_SEND_DELAY_SECONDS. Separate from `worker` so
+  # channel rate limits and platform outages never affect article generation.
+  # Bot tokens are required here (unlike the api/worker services) — without one
+  # there is nothing to send with.
+  sender:
+    build: .
+    command: python -m app.messaging.worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      BALE_BOT_TOKEN: ${BALE_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      SENDER_SEND_DELAY_SECONDS: ${SENDER_SEND_DELAY_SECONDS:-5}
+      SENDER_POLL_INTERVAL_SECONDS: ${SENDER_POLL_INTERVAL_SECONDS:-2}
+      SENDER_MAX_ATTEMPTS: ${SENDER_MAX_ATTEMPTS:-5}
+      SENDER_BACKOFF_BASE_SECONDS: ${SENDER_BACKOFF_BASE_SECONDS:-10}
+      SENDER_REQUEST_TIMEOUT_SECONDS: ${SENDER_REQUEST_TIMEOUT_SECONDS:-20}
+      SENDER_LEASE_MINUTES: ${SENDER_LEASE_MINUTES:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      worker:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   pg_data:
