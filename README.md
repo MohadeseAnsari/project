@@ -99,7 +99,6 @@ curl.exe http://localhost:8000/health
 Apply migrations and seed fields (first run only):
 
 ```bash
-docker compose exec api python scripts/apply_migrations.py
 docker compose exec api python scripts/seed_fields.py
 ```
 
@@ -113,6 +112,15 @@ once:
 2. `002_seed_categories.sql` — 13 categories + `other`
 3. `003_seed_prompt.sql` — the v1 system prompt
 4. `004_seed_model.sql` — the active model configuration
+
+Migrations run automatically: the one-shot `migrate` service executes
+`scripts/apply_migrations.py` on every `docker compose up`, and both `api` and
+`worker` wait on it via `condition: service_completed_successfully`. Because the
+runner skips already-recorded filenames, it is a no-op on subsequent runs, and a
+failed migration stops `api`/`worker` from starting rather than letting them run
+against a missing schema. No job or field rows are inserted by this step.
+
+To run it by hand:
 
 ```bash
 docker compose exec api python scripts/apply_migrations.py

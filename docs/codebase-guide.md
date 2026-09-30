@@ -56,7 +56,8 @@ project/
 │   └── worker/worker.py      # persistent sequential Worker + recovery
 ├── migrations/               # SQL migrations (applied by scripts/apply_migrations.py)
 ├── scripts/
-│   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table)
+│   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table);
+│   │                          # run automatically by the one-shot `migrate` compose service
 │   └── seed_fields.py        # loads data/fields.xlsx into the fields table
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
@@ -240,7 +241,6 @@ ssh user@your-vps
 git clone <repo> && cd project
 cp .env.example .env          # edit with real credentials
 docker compose up -d
-docker compose exec api python scripts/apply_migrations.py
 docker compose exec api python scripts/seed_fields.py
 ```
 
