@@ -19,11 +19,18 @@ Persistent sequential Worker  (claim → normalize → classify → generate)
 AvalAI / PydanticAI  (LLM news generation — the ONLY use of the LLM)
     ↓
 PostgreSQL  (main.status = 'review', output_json = {title, lead, body})
+    ↓
+Persistent sender Worker  (processed-but-unsent → render → send → mark sent)
+    ↓
+Bale / Telegram channels  (deliveries.status = 'sent')
 ```
 
 - **PostgreSQL** is both the persistent store and the job queue.
 - **One persistent sequential Worker** processes jobs one at a time, oldest
   first (`ORDER BY created_at`, `FOR UPDATE SKIP LOCKED`).
+- **One persistent sender Worker** publishes finished articles to channels,
+  with a configurable delay between sends. It is a separate process so channel
+  rate limits and platform outages never affect generation.
 - **The LLM is used ONLY for news generation.** Field/category classification
   is deterministic and rule-based — the LLM never classifies.
 - **No Redis, Celery, Kafka, Kubernetes, or microservices.**
@@ -49,11 +56,17 @@ project/
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + AvalAI client
 │   │   └── prompts.py        # Versioned system prompt (injection-safe)
-│   └── worker/worker.py      # Persistent sequential Worker + recovery
+│   ├── worker/worker.py      # Persistent sequential Worker + recovery
+│   └── messaging/
+│       ├── formatting.py     # Article → channel message text
+│       ├── platforms.py      # Bale + Telegram HTTP clients
+│       ├── dispatcher.py     # Delivery queue: enqueue / claim / retry
+│       └── worker.py         # Persistent sender Worker + recovery
 ├── migrations/               # SQL migrations (authoritative schema)
 ├── scripts/
 │   ├── apply_migrations.py    # Ordered, once-only migration runner
-│   └── seed_fields.py        # Loads data/fields.xlsx into the fields table
+│   ├── seed_fields.py        # Loads data/fields.xlsx into the fields table
+│   └── manage_channels.py    # Channels + field → channel routes CLI
 ├── tests/                    # pytest suite (PostgreSQL-backed)
 ├── data/fields.xlsx          # 533 source field names
 ├── docs/                     # architecture.md, erd.md, codebase-guide.md
@@ -84,6 +97,14 @@ Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored.
 | `WORKER_POLL_INTERVAL_SECONDS` | Queue poll interval | No (default: 1) |
 | `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Heartbeat interval | No (default: 30) |
 | `WORKER_LEASE_MINUTES` | Stale-job recovery timeout | No (default: 5) |
+| `BALE_BOT_TOKEN` | Bale bot token used by the `sender` service | Yes for sending |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (unused until a Telegram channel is routed) | No |
+| `SENDER_SEND_DELAY_SECONDS` | Delay between two consecutive channel sends | No (default: 5) |
+| `SENDER_POLL_INTERVAL_SECONDS` | Sender idle poll interval | No (default: 2) |
+| `SENDER_MAX_ATTEMPTS` | Send attempts before a delivery is parked as `failed` | No (default: 5) |
+| `SENDER_BACKOFF_BASE_SECONDS` | Base for exponential send backoff | No (default: 10) |
+| `SENDER_REQUEST_TIMEOUT_SECONDS` | Per-send HTTP timeout | No (default: 20) |
+| `SENDER_LEASE_MINUTES` | Abandoned-send recovery timeout | No (default: 5) |
 | `POSTGRES_PASSWORD` | PostgreSQL admin password (postgres service) | No (default: postgres) |
 | `POSTGRES_DB` | PostgreSQL database name (postgres service) | No (default: irandoc_news) |
 
@@ -112,6 +133,8 @@ once:
 2. `002_seed_categories.sql` — 13 categories + `other`
 3. `003_seed_prompt.sql` — the v1 system prompt
 4. `004_seed_model.sql` — the active model configuration
+5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`,
+   `deliveries`, plus the initial Bale channel and its routes for every field
 
 Migrations run automatically: the one-shot `migrate` service executes
 `scripts/apply_migrations.py` on every `docker compose up`, and both `api` and
@@ -135,6 +158,69 @@ normalized and deterministically classified. Idempotent
 ```bash
 docker compose exec api python scripts/seed_fields.py
 ```
+
+## Channel Delivery
+
+Once an article reaches `status = 'review'` it is *processed*. The `sender`
+service publishes processed articles to channels:
+
+```
+main.status = 'review'  →  deliveries row per routed channel  →  send  →  deliveries.status = 'sent'
+```
+
+- **What counts as "processed but not sent"** is not a flag — it is the absence
+  of a delivery for a routed channel. Once a field fans out to several
+  channels, an article has one independent send state per destination, each with
+  its own attempt count and error.
+- **Message format** (per channel, `📢` footer names the channel):
+
+  ```
+  📰 *Title*
+
+  📰 Lead
+
+  📄 Body
+
+  📢 @newschanneltest123
+  ```
+
+- **Throttle**: `SENDER_SEND_DELAY_SECONDS` is applied after every send attempt,
+  so a channel never sees a burst.
+- **Retries**: timeouts, rate limits and 5xx responses are retried with
+  exponential backoff up to `SENDER_MAX_ATTEMPTS`, then the delivery is parked
+  in `failed` with its error for manual inspection. A permanent error (unknown
+  chat, revoked token, bad request) fails immediately instead of burning
+  attempts that could never succeed.
+- **Crash recovery**: a `sending` row older than `SENDER_LEASE_MINUTES` is
+  re-queued, trading a possible duplicate post for never losing an article.
+- **Human confirmation** (planned) will gate on the reserved
+  `awaiting_confirmation` status, which exists in the schema but is never
+  written today.
+
+Inspect delivery state:
+
+```sql
+SELECT d.id, d.status, d.attempts, d.error_message,
+       c.platform, c.chat_id, d.sent_at
+FROM deliveries d JOIN channels c ON c.id = d.channel_id
+ORDER BY d.id DESC LIMIT 20;
+```
+
+### Channels and field → channel routes
+
+Every field currently routes to the one Bale channel. Routes are rows, so
+splitting fields across channels or adding Telegram is a data change:
+
+```bash
+docker compose exec api python scripts/manage_channels.py list
+docker compose exec api python scripts/manage_channels.py add-channel \
+    --platform telegram --chat-id -1001234567890 --username @mychannel
+docker compose exec api python scripts/manage_channels.py route --field-id 12 --channel-id 2
+docker compose exec api python scripts/manage_channels.py unroute --field-id 12 --channel-id 1
+```
+
+A field with no route falls back to all active channels, so fields discovered
+at runtime (unknown fields created by the generation Worker) still publish.
 
 ## API / Swagger
 

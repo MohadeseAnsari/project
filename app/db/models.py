@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -54,6 +55,9 @@ class Field(Base):
 
     category = relationship("Category", back_populates="fields")
     main_records = relationship("Main", back_populates="field_record")
+    channel_routes = relationship(
+        "FieldChannelRoute", back_populates="field_record", cascade="all, delete-orphan"
+    )
 
 
 class Model(Base):
@@ -130,3 +134,96 @@ class Main(Base):
     category = relationship("Category", back_populates="main_records")
     model = relationship("Model", back_populates="main_records")
     prompt = relationship("Prompt", back_populates="main_records")
+    deliveries = relationship(
+        "Delivery", back_populates="article", cascade="all, delete-orphan"
+    )
+
+
+class Channel(Base):
+    """A destination the sender Worker can publish to.
+
+    A channel is a platform plus a destination chat id — deliberately NOT a
+    credential. Bot tokens stay in configuration (``app/config.py``), so a
+    channel row can be read, joined and audited without exposing a secret.
+
+    ``username`` is rendered as the message footer so readers know which
+    channel the article came from.
+    """
+
+    __tablename__ = "channels"
+    __table_args__ = (
+        CheckConstraint("platform IN ('bale', 'telegram')", name="ck_channels_platform"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String(20), nullable=False)
+    chat_id = Column(BigInteger, nullable=False)
+    username = Column(String(255), nullable=True)
+    title = Column(String(255), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    routes = relationship("FieldChannelRoute", back_populates="channel")
+    deliveries = relationship("Delivery", back_populates="channel")
+
+
+class FieldChannelRoute(Base):
+    """The one-to-many field -> channel mapping.
+
+    Today every field routes to the single Bale channel, but the mapping is a
+    table rather than a constant so splitting fields across Bale/Telegram
+    channels later is a row insert and not a code change.
+    """
+
+    __tablename__ = "field_channel_routes"
+
+    field_id = Column(Integer, ForeignKey("fields.id", ondelete="CASCADE"), primary_key=True)
+    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    field_record = relationship("Field", back_populates="channel_routes")
+    channel = relationship("Channel", back_populates="routes")
+
+
+class Delivery(Base):
+    """The per-(article, channel) send record claimed by the sender Worker.
+
+    ``deliveries`` — not a flag on ``main`` — is what makes "processed but not
+    sent" answerable: once a field fans out to several channels an article has
+    many independent send states, each with its own attempts and error.
+
+    Status lifecycle: ``pending`` → ``sending`` → ``sent`` | ``failed``, with
+    ``pending`` returned after a retryable failure. ``awaiting_confirmation`` is
+    reserved for the planned human-in-the-loop step and is not written yet.
+
+    Unlike the generation Worker, sending IS retried: a transient network or
+    provider error should not silently drop a published article. Attempts are
+    bounded (``next_attempt_at`` + backoff, then ``failed``) so a permanently
+    broken channel cannot block the queue forever.
+    """
+
+    __tablename__ = "deliveries"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'sending', 'sent', 'failed', 'awaiting_confirmation')",
+            name="ck_deliveries_status",
+        ),
+        Index("ix_deliveries_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_deliveries_channel_id", "channel_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    main_id = Column(Integer, ForeignKey("main.id", ondelete="CASCADE"), nullable=False)
+    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(30), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    platform_message_id = Column(BigInteger, nullable=True)
+    error_message = Column(Text, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=False, server_default=func.now())
+    sent_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    article = relationship("Main", back_populates="deliveries")
+    channel = relationship("Channel", back_populates="deliveries")

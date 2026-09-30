@@ -9,8 +9,8 @@ satisfies them.
 ## 1. Overall architecture
 
 The service is a **modular monolith**: one Python codebase, one deployable
-application, three runtime components (PostgreSQL, API, Worker). There are
-no microservices, no Redis/Celery/Kafka, and exactly one Worker.
+application, four runtime components (PostgreSQL, API, Worker, Sender). There
+are no microservices, no Redis/Celery/Kafka, and exactly one Worker of each kind.
 
 ```
 Client ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (main.status='ready')
@@ -20,6 +20,11 @@ Worker ◀──claim (FOR UPDATE SKIP LOCKED, FIFO)──────┘
   │  2. PydanticAI Agent ──▶ AvalAI (OpenAI-compatible) ──▶ {title, lead, body}
   ▼
 PostgreSQL (main.status='review', output_json=..., model_id, prompt_id)
+  │
+Sender ◀──claim deliveries (processed, not yet sent for that channel)
+  │  render message ──▶ Bale / Telegram ──▶ deliveries.status='sent'
+  ▼
+Channel (throttled: SENDER_SEND_DELAY_SECONDS between sends)
 ```
 
 Separation of responsibilities (Assignment 2):
@@ -31,6 +36,7 @@ Separation of responsibilities (Assignment 2):
 | Generate news | `app/news/` (PydanticAI + AvalAI) | Only journalistic generation |
 | Job state / queue / results | PostgreSQL | Source of truth |
 | Sequential processing + recovery | `app/worker/` | One Worker, persistent |
+| Publishing to channels + send retry | `app/messaging/` | Separate Worker, never blocks generation |
 
 ## 2. Project structure
 
@@ -53,17 +59,23 @@ project/
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + AvalAI client
 │   │   └── prompts.py        # versioned system prompt (injection-safe)
-│   └── worker/worker.py      # persistent sequential Worker + recovery
+│   ├── worker/worker.py      # persistent sequential Worker + recovery
+│   └── messaging/
+│       ├── formatting.py     # article -> channel message (emoji sections, bold title)
+│       ├── platforms.py      # Bale + Telegram sendMessage clients
+│       ├── dispatcher.py     # delivery queue: enqueue, claim, retry policy
+│       └── worker.py         # persistent sender Worker + recovery
 ├── migrations/               # SQL migrations (applied by scripts/apply_migrations.py)
 ├── scripts/
 │   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table);
 │   │                          # run automatically by the one-shot `migrate` compose service
-│   └── seed_fields.py        # loads data/fields.xlsx into the fields table
+│   ├── seed_fields.py        # loads data/fields.xlsx into the fields table
+│   └── manage_channels.py    # channels + field -> channel routes CLI
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
 ├── docs/                     # this guide, architecture.md, erd.md
 ├── Dockerfile                # python:3.12-slim, non-root user
-├── docker-compose.yml        # postgres + api + worker, named volume
+├── docker-compose.yml        # postgres + api + worker + sender, named volume
 ├── requirements.txt
 └── .env.example              # documented variables, no real secrets
 ```
@@ -130,6 +142,21 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   `category_id` / `model_id` / `prompt_id` audit FKs, `output_json` (JSONB),
   `error_message`, `claimed_at` / `heartbeat_at` (recovery), `created_at` /
   `updated_at`. Indexed on `(status, created_at)`, `field_id`, `category_id`.
+- **channels** — a publishing destination: `platform` (`bale|telegram`,
+  CHECK), `chat_id` (BIGINT, because chat ids exceed 2³¹), `username` (rendered
+  as the message footer), `title`, `is_active`. Unique per
+  `(platform, chat_id)`. Migration 005 seeds the one Bale channel in use.
+  **No credentials here** — bot tokens live in configuration, so a channel row
+  is never a secret.
+- **field_channel_routes** — the one-to-many field → channel mapping,
+  `(field_id, channel_id)` primary key, cascading deletes. Every field routes
+  to the single Bale channel today; splitting fields across channels is a row
+  insert, not a code change.
+- **deliveries** — one row per (article, channel): `status`
+  (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
+  `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
+  `sent_at`. Unique per `(main_id, channel_id)`, which is what makes queueing
+  idempotent. Indexed on `(status, next_attempt_at)`.
 
 The schema is created **only** by SQL migrations tracked in the `_migrations`
 table. The test suite runs against a dedicated PostgreSQL test database
@@ -138,10 +165,20 @@ table. The test suite runs against a dedicated PostgreSQL test database
 
 ## 6. Queue
 
-The queue **is** the `main` table. Claiming uses
+The generation queue **is** the `main` table. Claiming uses
 `SELECT ... WHERE status='ready' ORDER BY created_at LIMIT 1 FOR UPDATE
 SKIP LOCKED`, which gives FIFO creation-order processing and safe claiming.
 No external queue system is used (Assignment 2/4).
+
+Publishing has its own queue, the `deliveries` table, because "processed but
+not sent" is per *channel*: once a field fans out to several channels one
+article has several independent send states. The sender claims the oldest **due**
+delivery (`status='pending' AND next_attempt_at <= now()`) with the same
+`FOR UPDATE SKIP LOCKED`, then waits `SENDER_SEND_DELAY_SECONDS`.
+
+`main.status='review'` means *processed*; a review row with no delivery for a
+routed channel means *not yet sent*. That is why there is no `sent` flag on
+`main`.
 
 ## 7. Field normalization
 
@@ -188,6 +225,10 @@ included in its input.
 | LLM failure | job → `failed` with error text; Worker continues with the next job |
 | Worker loop | per-iteration try/except; logs and keeps polling |
 | Heartbeat | best-effort; failures logged, do not fail the job |
+| Send timeout / 429 / 5xx | retryable → delivery back to `pending` with backoff, then `failed` at `SENDER_MAX_ATTEMPTS` |
+| Send 4xx / `ok:false` | permanent → delivery `failed` immediately (an unknown chat stays unknown) |
+| No bot token for a platform | delivery `failed` with a clear error rather than being silently skipped |
+| Sender loop | per-iteration try/except; logs and keeps polling |
 
 ## 11. Recovery
 
@@ -201,17 +242,31 @@ decision for this design. `WORKER_LEASE_MINUTES` (default 5) controls how
 quickly abandoned jobs are recovered; the heartbeat interval
 (`WORKER_HEARTBEAT_INTERVAL_SECONDS`, default 30) must stay well below it.
 
+The sender has the analogous mechanism: `recover_stale_deliveries` returns
+`sending` deliveries older than `SENDER_LEASE_MINUTES` to `pending`. Because a
+send is short, a send interrupted by shutdown is deliberately **not** recorded
+as failed — `asyncio.CancelledError` is re-raised and the row is recovered, so a
+graceful stop never invents a failure that did not happen.
+
+Sending is retried (unlike generation, which is not): a transient provider
+error losing a published article is worse than a duplicate post.
+
 ## 12. Docker
 
-`docker-compose.yml` defines three services on one implicit bridge network:
+`docker-compose.yml` defines four services on one implicit bridge network:
 
 - **postgres** — `postgres:16`, named volume `pg_data` (data survives
   container recreation), healthcheck via `pg_isready`, port 5432 published
   to localhost (required for pgAdmin; not exposed beyond localhost).
+- **migrate** — one-shot `scripts/apply_migrations.py`; `api`, `worker` and
+  `sender` wait on it with `condition: service_completed_successfully`.
 - **api** — built from `Dockerfile`, port 8000, healthcheck against
   `/health`, `depends_on: postgres (service_healthy)`.
 - **worker** — same image, runs `python -m app.worker.worker`,
   `restart: unless-stopped`, `depends_on: postgres (service_healthy)`.
+- **sender** — same image, runs `python -m app.messaging.worker`,
+  `restart: unless-stopped`. Needs `BALE_BOT_TOKEN`; it is a separate service
+  so a channel outage or a slow send delay cannot slow down generation.
 
 All configuration comes from environment variables (see `.env.example`);
 nothing secret is baked into images. Inside the containers, services reach
@@ -221,10 +276,13 @@ PostgreSQL at `postgres:5432` — never `localhost`.
 
 `tests/` (run with `python -m pytest -q`):
 
-- **Unit tests** use in-memory SQLite (`tests/conftest.py`) — fast, no
-  PostgreSQL needed: auth, API contract, normalization, classification
+- **Unit tests** run against a real PostgreSQL test database
+  (`irandoc_news_test`) built from the same migrations — no SQLite, no
+  `create_all()`: auth, API contract, normalization, classification
   (including `معماری داخلی` vs `معماری`), Worker claim/process/fail/
-  recovery, health.
+  recovery, health, and channel delivery (`tests/test_messaging.py`).
+- Platform HTTP calls in the delivery tests are always stubbed, so no test
+  contacts Bale or Telegram and the suite is offline.
 - **Integration/E2E** (`tests/test_e2e.py`) runs against real PostgreSQL:
   submit via the API, then either claim-and-process with a mocked LLM or
   observe the live Worker finish the job. It skips automatically when
@@ -278,6 +336,9 @@ windows/panes instead of background shell jobs you cannot reattach to.
 | Worker not claiming | queue empty? `docker compose logs worker` |
 | Field classified as `other` | check `app/fields/classification.py` keyword rules |
 | Container can't reach DB | use `postgres` (not `localhost`) as host inside containers |
+| Nothing sent to the channel | is the article `review`? `SELECT * FROM deliveries ORDER BY id DESC` — `pending` with a future `next_attempt_at` is waiting out backoff, `failed` has `error_message` |
+| Sends fail immediately | `deliveries.error_message`; a `failed` row with `no bot token configured` means `BALE_BOT_TOKEN` is missing from the `sender` service |
+| Article never delivered | `main.field_id IS NULL` → the field has no route and delivery fell back to active channels; check `manage_channels.py list` |
 
 ## Engineering decisions (not explicitly required by the assignments)
 
@@ -296,3 +357,23 @@ windows/panes instead of background shell jobs you cannot reattach to.
   batch process with no HTTP surface, and the assignments do not require it.
 - At-least-once processing on crash (possible duplicate LLM call) instead
   of exactly-once, which would require distributed transactions.
+- A dedicated `deliveries` table instead of a `sent` flag on `main`: once a
+  field fans out to several channels, one article has several independent send
+  states, each needing its own attempts, error and recovery.
+- A separate sender service instead of a second loop inside the Worker: the
+  inter-send delay and platform outages would otherwise sit on generation's
+  critical path.
+- Bounded send retries with backoff instead of unlimited retries: a permanently
+  broken channel must not stall every article queued behind it. Permanent
+  errors (unknown chat, revoked token) fail immediately rather than burning
+  attempts that could never succeed.
+- Bot tokens in configuration instead of on the `channels` row: a channel is a
+  destination, not a credential, so channel rows stay safe to read and audit.
+- A field with no route falls back to all active channels: fields discovered at
+  runtime have no route row, and silently dropping their articles would be worse
+  than publishing them to the current channel set.
+- `awaiting_confirmation` exists in the `deliveries` status enum but is never
+  written: the human confirmation step is planned, and having the value now
+  avoids a schema change when it lands.
+- At-least-once sending on crash (possible duplicate post in the channel) —
+  the same trade-off as generation, and for the same reason.

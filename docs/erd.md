@@ -7,6 +7,10 @@ erDiagram
     fields ||--o{ main : "selected_for"
     models ||--o{ main : "generated_by"
     prompts ||--o{ main : "generated_with"
+    fields ||--o{ field_channel_routes : "routed_by"
+    channels ||--o{ field_channel_routes : "receives"
+    channels ||--o{ deliveries : "target_of"
+    main ||--o{ deliveries : "published_as"
 
     categories {
         SERIAL id PK
@@ -63,4 +67,40 @@ erDiagram
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
+
+    channels {
+        SERIAL id PK
+        VARCHAR platform UK
+        BIGINT chat_id UK
+        VARCHAR username
+        VARCHAR title
+        BOOLEAN is_active
+        TIMESTAMP created_at
+    }
+
+    field_channel_routes {
+        INTEGER field_id PK,FK
+        INTEGER channel_id PK,FK
+        TIMESTAMP created_at
+    }
+
+    deliveries {
+        SERIAL id PK
+        INTEGER main_id FK
+        INTEGER channel_id FK
+        VARCHAR status
+        INTEGER attempts
+        BIGINT platform_message_id
+        TEXT error_message
+        TIMESTAMP claimed_at
+        TIMESTAMP next_attempt_at
+        TIMESTAMP sent_at
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
 ```
+
+`main.status` is the generation lifecycle: `ready`, `processing`, `review`,
+`failed`. `deliveries.status` is the separate publishing lifecycle: `pending`,
+`sending`, `sent`, `failed`, `awaiting_confirmation` (reserved for the planned
+human confirmation step, never written today).
