@@ -20,7 +20,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
@@ -77,13 +77,104 @@ async def channels_for_article(session, article: Main) -> list[Channel]:
     return list(result.scalars().all())
 
 
+def _has_undelivered_channel():
+    """SQL predicate: the article resolves to some active channel with no delivery.
+
+    Mirrors ``channels_for_article`` exactly, because the two must agree or the
+    batch query would either skip articles the resolver would route (silent
+    non-delivery) or keep returning articles the resolver has nothing to do
+    for (the starvation this replaces).
+
+    An active channel ``c`` is a target when either:
+
+    - the article's field routes to ``c``, or
+    - the field has no route to any *active* channel, in which case every
+      active channel is a target (the documented fallback).
+
+    ``c`` still needs sending when no ``deliveries`` row exists for
+    ``(article, c)``. Note this is per-channel, not per-article: an article
+    already sent to one channel but not another must still be returned.
+    """
+    # Does this field route to ANY active channel? Distinguishes "routed
+    # somewhere" from "has no active route", which is what makes the fallback
+    # fire in `channels_for_article`.
+    #
+    # `.correlate(Main)` is required, not decorative: without it SQLAlchemy adds
+    # `main` to this subquery's own FROM and renders
+    # `field_channel_routes.field_id = main.field_id` as a self-comparison that
+    # is true for any field with any route, making the predicate global rather
+    # than per-article.
+    field_has_active_route = exists(
+        select(1)
+        .select_from(FieldChannelRoute)
+        .join(Channel, Channel.id == FieldChannelRoute.channel_id)
+        .where(
+            and_(
+                FieldChannelRoute.field_id == Main.field_id,
+                Channel.is_active.is_(True),
+            )
+        )
+        .correlate(Main)
+    )
+
+    # One row per active channel this article could go to, LEFT JOINed to its
+    # route (is_routed) and to its delivery (delivered). Kept as a single join
+    # level rather than nested EXISTS on an aliased Channel: a nested
+    # correlated subquery re-renders its own `channels_1` alias instead of
+    # binding the outer one, which silently turns a per-channel test into a
+    # per-article one. `.correlate(Main)` then keeps the outer article bound.
+    return exists(
+        select(1)
+        .select_from(Channel)
+        .outerjoin(
+            FieldChannelRoute,
+            and_(
+                FieldChannelRoute.field_id == Main.field_id,
+                FieldChannelRoute.channel_id == Channel.id,
+            ),
+        )
+        .outerjoin(
+            Delivery,
+            and_(
+                Delivery.main_id == Main.id,
+                Delivery.channel_id == Channel.id,
+            ),
+        )
+        .where(
+            and_(
+                Channel.is_active.is_(True),
+                # No delivery row for (this article, this channel).
+                Delivery.id.is_(None),
+                # Either the field routes to this channel, or it routes to no
+                # active channel at all and the fallback applies.
+                or_(
+                    FieldChannelRoute.channel_id.isnot(None),
+                    ~field_has_active_route,
+                ),
+            )
+        )
+        .correlate(Main)
+    )
+
+
 async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     """Create pending deliveries for processed articles that lack them.
 
-    An article qualifies when it is ``review`` with a usable ``output_json``.
-    The existing-delivery test is an anti-join so a re-run (or a second replica)
-    never duplicates a pending send; the unique constraint on
-    ``(main_id, channel_id)`` is the backstop.
+    An article qualifies when it is ``review`` with a usable ``output_json`` AND
+    at least one channel it resolves to has no delivery row yet.
+
+    The "still needs sending" test is an anti-join expressed in SQL, not a
+    Python filter applied after ``LIMIT``. That distinction is load-bearing: if
+    the exclusion ran afterwards, the first ``batch_size`` articles would fill
+    the window with rows that are already queued, the query would return the
+    same window on every subsequent pass, and any article beyond it would never
+    be delivered — permanently, not slowly, because the window stays saturated
+    as the queue drains. Keeping the exclusion inside the query means the
+    ``LIMIT`` only ever counts articles that have real work to do.
+
+    The per-article ``already`` set below is kept as a race guard for a second
+    sender replica inserting between the SELECT and the INSERT; the unique
+    constraint on ``(main_id, channel_id)`` is the final backstop.
 
     Returns:
         Number of deliveries created.
@@ -92,6 +183,7 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
         select(Main)
         .where(Main.status == "review")
         .where(Main.output_json.isnot(None))
+        .where(_has_undelivered_channel())
         .order_by(Main.id)
         .limit(batch_size)
     )
@@ -306,7 +398,15 @@ async def deliver_one(
         # recovery re-queue it, rather than recording a failure that never happened.
         raise
     except Exception as e:  # defensive: an unexpected bug must not kill the loop
-        await mark_retry(session, delivery, f"unexpected error: {e}", _backoff_delay(delivery.attempts))
+        # The attempt cap applies here too. A bug that throws on every attempt
+        # would otherwise retry forever, which is the unbounded-retry failure
+        # mode the cap exists to prevent -- and one bad article would sit in the
+        # queue re-raising instead of being parked for inspection.
+        error = f"unexpected error: {e}"
+        if delivery.attempts >= settings.sender_max_attempts:
+            await mark_failed(session, delivery, error)
+        else:
+            await mark_retry(session, delivery, error, _backoff_delay(delivery.attempts))
         return False
 
     await mark_sent(session, delivery, message_id)

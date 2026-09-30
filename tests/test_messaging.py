@@ -447,6 +447,71 @@ async def test_ensure_picks_up_articles_processed_later(session: AsyncSession):
     assert await ensure_pending_deliveries(session) == 1
 
 
+@pytest.mark.asyncio
+async def test_ensure_reaches_articles_beyond_a_saturated_batch(session: AsyncSession):
+    """Regression: a full batch window must not starve later articles.
+
+    The exclusion of already-queued articles has to happen inside the query.
+    Filtering in Python after LIMIT leaves the window permanently saturated by
+    the first `batch_size` articles, so everything past them is never delivered
+    and never recovers as the queue drains.
+    """
+    field = await _field(session)
+    channel = await _channel(session)
+    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
+    await session.commit()
+
+    for _ in range(5):
+        await _article(session, field)
+    await session.commit()
+
+    # Two passes of a 2-article window must cover all five.
+    assert await ensure_pending_deliveries(session, batch_size=2) == 2
+    assert await ensure_pending_deliveries(session, batch_size=2) == 2
+    assert await ensure_pending_deliveries(session, batch_size=2) == 1
+
+    delivered = set(
+        (await session.execute(select(Delivery.main_id))).scalars().all()
+    )
+    every_article = set((await session.execute(select(Main.id))).scalars().all())
+    assert delivered == every_article
+    assert await ensure_pending_deliveries(session, batch_size=2) == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_returns_article_delivered_to_one_channel_but_not_another(
+    session: AsyncSession,
+):
+    """The undelivered test is per-channel, not per-article.
+
+    An article sent to one channel but not another still needs work, so it must
+    stay visible to the batch query.
+    """
+    field = await _field(session)
+    first = await _channel(session, "bale", 100)
+    second = await _channel(session, "telegram", 200)
+    session.add_all(
+        [
+            FieldChannelRoute(field_id=field.id, channel_id=first.id),
+            FieldChannelRoute(field_id=field.id, channel_id=second.id),
+        ]
+    )
+    await session.commit()
+
+    article = await _article(session, field)
+    session.add(
+        Delivery(main_id=article.id, channel_id=first.id, status="sent")
+    )
+    await session.commit()
+
+    assert await ensure_pending_deliveries(session) == 1
+    pending = (
+        await session.execute(select(Delivery).where(Delivery.channel_id == second.id))
+    ).scalar_one()
+    assert pending.main_id == article.id
+    assert pending.status == "pending"
+
+
 # --------------------------------------------------------------------------
 # claiming
 # --------------------------------------------------------------------------
@@ -624,6 +689,24 @@ async def test_unexpected_exception_is_retried_not_fatal(session: AsyncSession):
     assert await deliver_one(session, delivery, {"bale": client}) is False
     await session.refresh(delivery)
     assert delivery.status == "pending"
+    assert "unexpected error" in delivery.error_message
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_gives_up_after_max_attempts(session: AsyncSession):
+    """A bug that throws every time must not retry forever.
+
+    The cap that stops a retryable *platform* error from looping applies to an
+    unexpected exception too; otherwise one broken article re-raises indefinitely
+    and never reaches `failed` for manual inspection.
+    """
+    delivery = await _pending(session, attempts=settings.sender_max_attempts)
+    delivery = await claim_next_delivery(session)
+    client = StubClient(RuntimeError("bug"))
+
+    assert await deliver_one(session, delivery, {"bale": client}) is False
+    await session.refresh(delivery)
+    assert delivery.status == "failed"
     assert "unexpected error" in delivery.error_message
 
 
