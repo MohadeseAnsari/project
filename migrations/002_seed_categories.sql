@@ -1,0 +1,15 @@
+INSERT INTO categories (name, description) VALUES
+    ('پزشکی و علوم سلامت', 'Medical and health sciences'),
+    ('مهندسی و فناوری', 'Engineering and technology'),
+    ('هنر و معماری', 'Art and architecture'),
+    ('دامپزشکی', 'Veterinary medicine'),
+    ('علوم اجتماعی و اقتصاد', 'Social sciences and economics'),
+    ('علوم انسانی', 'Humanities'),
+    ('علوم پایه', 'Basic sciences'),
+    ('علوم تربیتی و روان‌شناسی', 'Educational sciences and psychology'),
+    ('کامپیوتر و فناوری اطلاعات', 'Computer and IT'),
+    ('حقوق و علوم سیاسی', 'Law and political sciences'),
+    ('کشاورزی و منابع طبیعی', 'Agriculture and natural resources'),
+    ('ورزش و تربیت بدنی', 'Sports and physical education'),
+    ('رسانه و ارتباطات', 'Media and communications'),
+    ('other', 'Uncategorized fields');
