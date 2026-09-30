@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16
+    ports: 
+      ["5432:5432"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-irandoc_news}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      SHARED_SECRET: ${SHARED_SECRET}
+      AVALAI_API_KEY: ${AVALAI_API_KEY}
+      AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python -m app.worker.worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      AVALAI_API_KEY: ${AVALAI_API_KEY}
+      AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
+      WORKER_LEASE_MINUTES: ${WORKER_LEASE_MINUTES:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pg_data:
