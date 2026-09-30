@@ -1,0 +1,14 @@
+fastapi==0.141.1
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pydantic==2.13.5
+pydantic-settings==2.7.0
+pydantic-ai==2.51.0
+openai==3.19.2
+openpyxl==3.1.5
+httpx==0.28.1
+slowapi==0.1.9
+pytest==8.3.4
+pytest-asyncio==0.25.0
