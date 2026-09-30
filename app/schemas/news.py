@@ -5,8 +5,6 @@ endpoints. They are used both for runtime validation (where the endpoint
 applies them) and for OpenAPI/Swagger schema generation.
 """
 
-from uuid import UUID
-
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -49,7 +47,7 @@ class ThesisInput(BaseModel):
 class SubmitResponse(BaseModel):
     """Response for a valid submission: the record id and initial status."""
 
-    id: UUID = Field(example="123e4567-e89b-12d3-a456-426614174000")
+    id: int = Field(example=1)
     status: str = Field(example="ready")
 
 
@@ -63,7 +61,7 @@ class HealthResponse(BaseModel):
 class RecordResponse(BaseModel):
     """Response for ``GET /records/{record_id}`` — the stored record state."""
 
-    id: UUID = Field(example="123e4567-e89b-12d3-a456-426614174000")
+    id: int = Field(example=1)
     status: str = Field(example="review")
     field: str = Field(example="پزشکی")
     output_json: dict | None = Field(default=None, example={"title": "...", "lead": "...", "body": "..."})

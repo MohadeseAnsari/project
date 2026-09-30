@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
 CREATE TABLE categories (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL,
@@ -33,7 +31,7 @@ CREATE TABLE prompts (
 );
 
 CREATE TABLE main (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id SERIAL PRIMARY KEY,
     username VARCHAR(255) NOT NULL,
     title TEXT NOT NULL,
     abstract TEXT NOT NULL,

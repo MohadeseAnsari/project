@@ -12,7 +12,6 @@ used as an interactive testing tool. They do not change the endpoint logic.
 
 import json
 import logging
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import text
@@ -55,7 +54,7 @@ async def submit(request: Request, session: AsyncSession = Depends(get_session))
     creates a database record.
 
     Returns:
-        ``{"id": <uuid>, "status": "ready"}`` with HTTP 200.
+        ``{"id": <int>, "status": "ready"}`` with HTTP 200.
 
     Raises:
         400: malformed JSON body.
@@ -132,9 +131,9 @@ async def health(session: AsyncSession = Depends(get_session)):
     },
 )
 async def get_record(
-    record_id: UUID = Path(
+    record_id: int = Path(
         ...,
-        example="123e4567-e89b-12d3-a456-426614174000",
+        example=1,
         description="The record identifier returned by POST /submit.",
     ),
     shared_Secret: str = Query(
@@ -159,7 +158,7 @@ async def get_record(
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
     return {
-        "id": str(record.id),
+        "id": record.id,
         "status": record.status,
         "field": record.field,
         "output_json": record.output_json,

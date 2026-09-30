@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 
 from sqlalchemy import (
@@ -14,7 +13,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -27,7 +26,7 @@ class Category(Base):
 
     __tablename__ = "categories"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
@@ -46,7 +45,7 @@ class Field(Base):
 
     __tablename__ = "fields"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True)
     name = Column(String(500), unique=True, nullable=False)
     normalized_name = Column(String(500), unique=True, nullable=False)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
@@ -62,7 +61,7 @@ class Model(Base):
 
     __tablename__ = "models"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
     provider = Column(String(50), nullable=False)
     version = Column(String(50), nullable=False)
@@ -77,7 +76,7 @@ class Prompt(Base):
 
     __tablename__ = "prompts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True)
     version = Column(String(50), unique=True, nullable=False)
     system_prompt = Column(Text, nullable=False)
     is_active = Column(Boolean, nullable=False, default=False)
@@ -106,7 +105,7 @@ class Main(Base):
         Index("ix_main_category_id", "category_id"),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True)
     username = Column(String(255), nullable=False)
     title = Column(Text, nullable=False)
     abstract = Column(Text, nullable=False)
