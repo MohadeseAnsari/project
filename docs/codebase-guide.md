@@ -1,11 +1,16 @@
 # Codebase Guide
 
-A junior-developer guide to the IranDoc News Generation service.
+A junior-developer guide to the IranDoc News Generation service. It explains
+what each part exists for and how a thesis becomes a news article. The
+authoritative requirements live in `docs/irandoc_four_assignments_english_only.txt`
+(one directory above the project root); this guide explains how the code
+satisfies them.
 
 ## 1. Overall architecture
 
 The service is a **modular monolith**: one Python codebase, one deployable
-application, three runtime components (PostgreSQL, API, Worker).
+application, three runtime components (PostgreSQL, API, Worker). There are
+no microservices, no Redis/Celery/Kafka, and exactly one Worker.
 
 ```
 Client ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (main.status='ready')
@@ -17,29 +22,49 @@ Worker ◀──claim (FOR UPDATE SKIP LOCKED, FIFO)──────┘
 PostgreSQL (main.status='review', output_json=..., model_id, prompt_id)
 ```
 
+Separation of responsibilities (Assignment 2):
+
+| Concern | Owner | Rule |
+|---|---|---|
+| Authenticate / validate / create job | API | Never calls the LLM |
+| Normalize + classify field | `app/fields/` | Deterministic rules, never the LLM |
+| Generate news | `app/news/` (PydanticAI + AvalAI) | Only journalistic generation |
+| Job state / queue / results | PostgreSQL | Source of truth |
+| Sequential processing + recovery | `app/worker/` | One Worker, persistent |
+
 ## 2. Project structure
 
 ```
 project/
 ├── app/
-│   ├── main.py               # FastAPI app, lifespan
-│   ├── config.py             # Settings from env
-│   ├── db/                   # connection, models
-│   ├── schemas/news.py       # Pydantic models
-│   ├── api/                  # routes, limits
-│   ├── auth/secret.py        # Secret verification
-│   ├── fields/               # normalization, classification
-│   ├── news/                 # generation, prompts
-│   └── worker/worker.py      # Sequential worker
-├── migrations/               # SQL migrations
-├── scripts/                  # Seed/migration scripts
-├── tests/                    # Automated tests
+│   ├── main.py               # FastAPI app, lifespan (logging + engine disposal)
+│   ├── config.py             # pydantic-settings: all config from env/.env
+│   ├── db/
+│   │   ├── connection.py     # shared async engine, session factory, get_session
+│   │   └── models.py         # SQLAlchemy ORM models (schema via migrations)
+│   ├── schemas/news.py       # Pydantic contracts: ThesisInput, GeneratedNews, ...
+│   ├── api/
+│   │   ├── routes.py         # /submit, /health, /records/{id}
+│   │   └── limits.py         # slowapi rate limiter (10/min per client)
+│   ├── auth/secret.py        # constant-time shared-secret verification
+│   ├── fields/
+│   │   ├── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
+│   │   └── classification.py # priority-ordered keyword rules -> category
+│   ├── news/
+│   │   ├── generation.py     # PydanticAI Agent + AvalAI client
+│   │   └── prompts.py        # versioned system prompt (injection-safe)
+│   └── worker/worker.py      # persistent sequential Worker + recovery
+├── migrations/               # SQL migrations (applied by scripts/apply_migrations.py)
+├── scripts/
+│   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table)
+│   └── seed_fields.py        # loads data/fields.xlsx into the fields table
+├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
-├── docs/                     # Documentation
-├── Dockerfile
-├── docker-compose.yml
+├── docs/                     # this guide, architecture.md, erd.md
+├── Dockerfile                # python:3.12-slim, non-root user
+├── docker-compose.yml        # postgres + api + worker, named volume
 ├── requirements.txt
-└── .env.example
+└── .env.example              # documented variables, no real secrets
 ```
 
 ## 3. Request lifecycle (API)
@@ -49,10 +74,21 @@ project/
 1. **Parse JSON** — malformed bodies get `400`.
 2. **Authenticate** — `shared_Secret` is compared with the environment
    configured secret using `hmac.compare_digest` (constant time). Missing or
-   wrong secret → `401`. **Authentication happens before validation**.
-3. **Validate** — Pydantic `ThesisInput` enforces the nine-field contract.
-4. **Store** — a `main` row is inserted with `status='ready'`.
-5. **No LLM** — the request path never calls the LLM.
+   wrong secret → `401`. **Authentication happens before validation**, so a
+   failed authentication never creates a database record.
+3. **Validate** — Pydantic `ThesisInput` enforces the nine-field contract
+   (all nine fields are required, including `table_of_contents`;
+   `shared_Secret` is checked separately, before this model is applied).
+   Empty/whitespace-only strings → `422`. Unknown extra fields are ignored.
+4. **Store** — a `main` row is inserted with `status='ready'` and returned as
+   `{"id": <int>, "status": "ready"}` with `200`.
+5. **No LLM** — the request path never calls the LLM; generation is
+   asynchronous in the Worker.
+
+`GET /health` runs `SELECT 1` and reports `ok/connected` vs
+`unhealthy/disconnected` — it distinguishes "process alive" from
+"application actually healthy". `GET /records/{id}?shared_Secret=...`
+returns a record's status and (when finished) its output.
 
 ## 4. Worker lifecycle
 
@@ -61,26 +97,202 @@ project/
 1. **Recover** — `recover_stale_jobs` resets `processing` jobs whose
    `heartbeat_at` is older than `WORKER_LEASE_MINUTES` back to `ready`.
 2. **Claim** — `claim_next_job` selects the oldest `ready` job
-   (`ORDER BY created_at`, FIFO) with `FOR UPDATE SKIP LOCKED`.
-3. **Process** — `process_job`: classify, generate news, store the result.
-4. **Fail** — any exception → `fail_job` sets `failed` with the error text.
-5. **Empty queue** — the Worker waits `WORKER_POLL_INTERVAL_SECONDS` and loops.
+   (`ORDER BY created_at`, FIFO) with `FOR UPDATE SKIP LOCKED`, sets
+   `processing`, and stamps `claimed_at`/`heartbeat_at`.
+3. **Process** — `process_job`:
+   - resolves the field (exact normalized match, else classify + insert as
+     `source='runtime'`) and links `field_id`/`category_id`;
+   - links the active `model_id`/`prompt_id` (auditability);
+   - starts a heartbeat task, calls the LLM, stores
+     `output_json={title, lead, body}`, sets `review`.
+4. **Fail** — any exception → `fail_job` sets `failed` with the error text
+   (truncated to 2000 chars). There is **no automatic retry counter**; failed
+   jobs stay failed.
+5. **Empty queue** — the Worker waits `WORKER_POLL_INTERVAL_SECONDS` and
+   loops; it stays alive. SIGTERM/SIGINT trigger graceful shutdown after the
+   current job.
 
 ## 5. Database
 
-PostgreSQL is both the persistent store and the queue. See [erd.md](erd.md).
+PostgreSQL is both the persistent store and the queue. Tables (see
+`migrations/001_initial_schema.sql` and `docs/erd.md`):
 
-## 6. Field normalization
+- **categories** — 13 seeded categories + `other` (migration 002).
+- **fields** — 533 fields seeded from `data/fields.xlsx` (migration-free,
+  via `scripts/seed_fields.py`) plus runtime-discovered fields;
+  `normalized_name` is the unique stable identity, `source` distinguishes
+  `spreadsheet` vs `runtime`.
+- **models** — LLM model configuration; `is_active` selects the one in use.
+- **prompts** — versioned system prompts; `is_active` selects the one in use.
+- **main** — the thesis/news record and queue entry: thesis fields, `status`
+  (`ready|processing|review|failed`, CHECK constraint), `field_id` /
+  `category_id` / `model_id` / `prompt_id` audit FKs, `output_json` (JSONB),
+  `error_message`, `claimed_at` / `heartbeat_at` (recovery), `created_at` /
+  `updated_at`. Indexed on `(status, created_at)`, `field_id`, `category_id`.
 
-`app/fields/normalization.py` — Unicode NFC, zero-width removal, trim,
-whitespace collapse. The result is the field's stable identity.
+The schema is created **only** by SQL migrations tracked in the `_migrations`
+table. The test suite runs against a dedicated PostgreSQL test database
+(`irandoc_news_test`) built from the same migrations — no SQLite, no
+`create_all()`.
 
-## 7. Classification
+## 6. Queue
 
-`app/fields/classification.py` — deterministic, rule-based, never the LLM.
-Specific keywords before broad ones; unknown fields fall back to `other`.
+The queue **is** the `main` table. Claiming uses
+`SELECT ... WHERE status='ready' ORDER BY created_at LIMIT 1 FOR UPDATE
+SKIP LOCKED`, which gives FIFO creation-order processing and safe claiming.
+No external queue system is used (Assignment 2/4).
 
-## 8. LLM generation
+## 7. Field normalization
 
-`app/news/generation.py` — PydanticAI Agent with `output_type=GeneratedNews`
-over AvalAI's OpenAI-compatible API. The LLM is never used for classification.
+`app/fields/normalization.py` — pure, deterministic:
+
+1. Unicode NFC normalization,
+2. zero-width character removal (`U+200B`, `U+200D`, `U+200E`, `U+200F`,
+   `U+FEFF`),
+3. trim + collapse internal whitespace.
+
+The result is the field's **stable identity**: exact matching, duplicate
+prevention (unique index on `normalized_name`), and runtime insertion all use
+it. Re-running the seed script is idempotent
+(`ON CONFLICT (normalized_name) DO NOTHING`).
+
+## 8. Classification
+
+`app/fields/classification.py` — deterministic, rule-based, **never the LLM**.
+Priority-ordered keyword rules map a normalized field to a category. Within
+each category, specific keywords are listed before broad ones, so
+`معماری داخلی` matches its specific rule and is **not** swallowed by the
+broad `معماری` rule. Unmatched fields fall back to the `other` category.
+Unknown incoming fields are inserted with `source='runtime'` and the
+deterministically classified category.
+
+## 9. LLM generation
+
+`app/news/generation.py` — PydanticAI `Agent` with
+`output_type=GeneratedNews` (`title`, `lead`, `body`) over AvalAI's
+OpenAI-compatible API (`AsyncOpenAI` client). The system prompt
+(`app/news/prompts.py`) frames thesis metadata as **data, not instructions**
+(to prevent prompt injection from thesis content) and forbids unsupported
+additions, promotional language, and unnecessary repetition. The client uses
+a bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s — see Engineering
+decisions). The LLM is never used for classification, and no secrets are
+included in its input.
+
+## 10. Error handling
+
+| Layer | Behavior |
+|---|---|
+| API | 400 malformed JSON, 401 bad secret, 422 validation, 500 DB failure (no record created) |
+| Worker claim | row-level lock; crash-safe |
+| LLM failure | job → `failed` with error text; Worker continues with the next job |
+| Worker loop | per-iteration try/except; logs and keeps polling |
+| Heartbeat | best-effort; failures logged, do not fail the job |
+
+## 11. Recovery
+
+If the Worker dies mid-job (crash, container kill, host restart), the job
+stays `processing` with a stale heartbeat. On the next loop iteration,
+`recover_stale_jobs` resets it to `ready` and it is processed again. This
+covers both a crash **before** the LLM call and a crash **after** the LLM
+response but before the DB commit — the trade-off is at-least-once
+processing (a possible duplicate LLM call), which is the accepted engineering
+decision for this design. `WORKER_LEASE_MINUTES` (default 5) controls how
+quickly abandoned jobs are recovered; the heartbeat interval
+(`WORKER_HEARTBEAT_INTERVAL_SECONDS`, default 30) must stay well below it.
+
+## 12. Docker
+
+`docker-compose.yml` defines three services on one implicit bridge network:
+
+- **postgres** — `postgres:16`, named volume `pg_data` (data survives
+  container recreation), healthcheck via `pg_isready`, port 5432 published
+  to localhost (required for pgAdmin; not exposed beyond localhost).
+- **api** — built from `Dockerfile`, port 8000, healthcheck against
+  `/health`, `depends_on: postgres (service_healthy)`.
+- **worker** — same image, runs `python -m app.worker.worker`,
+  `restart: unless-stopped`, `depends_on: postgres (service_healthy)`.
+
+All configuration comes from environment variables (see `.env.example`);
+nothing secret is baked into images. Inside the containers, services reach
+PostgreSQL at `postgres:5432` — never `localhost`.
+
+## 13. Testing
+
+`tests/` (run with `python -m pytest -q`):
+
+- **Unit tests** use in-memory SQLite (`tests/conftest.py`) — fast, no
+  PostgreSQL needed: auth, API contract, normalization, classification
+  (including `معماری داخلی` vs `معماری`), Worker claim/process/fail/
+  recovery, health.
+- **Integration/E2E** (`tests/test_e2e.py`) runs against real PostgreSQL:
+  submit via the API, then either claim-and-process with a mocked LLM or
+  observe the live Worker finish the job. It skips automatically when
+  PostgreSQL is unavailable.
+- An autouse fixture disposes the shared engine pool after each test
+  because pytest-asyncio uses a fresh event loop per test.
+
+## 14. VPS deployment
+
+The same Compose stack runs on an Ubuntu VPS:
+
+```bash
+ssh user@your-vps
+git clone <repo> && cd project
+cp .env.example .env          # edit with real credentials
+docker compose up -d
+docker compose exec api python scripts/apply_migrations.py
+docker compose exec api python scripts/seed_fields.py
+```
+
+Local Docker success does not automatically guarantee VPS success: verify
+the ports (8000, 5432) are reachable, the volume is mounted, environment
+variables are set, and the containers are on the expected network. Use safe
+test data only — never real/sensitive thesis data (Assignment 4 security
+boundary).
+
+## 15. SSH
+
+Access the VPS with `ssh user@your-vps`. For routine operations prefer a
+dedicated, non-root user, key-based authentication, and a firewall that
+exposes only the required ports.
+
+## 16. tmux
+
+Use tmux on the VPS so sessions survive disconnection:
+
+```bash
+tmux new -s irandoc        # create session
+# detach: Ctrl-b d        # reattach: tmux attach -t irandoc
+```
+
+Run the API and Worker (or `docker compose logs -f`) in separate tmux
+windows/panes instead of background shell jobs you cannot reattach to.
+
+## 17. Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `/health` reports `disconnected` | postgres container status, `DATABASE_URL`, network |
+| Jobs stuck in `processing` | Worker logs; `WORKER_LEASE_MINUTES` vs heartbeat interval |
+| Jobs in `failed` | `main.error_message` (LLM/provider errors) |
+| Worker not claiming | queue empty? `docker compose logs worker` |
+| Field classified as `other` | check `app/fields/classification.py` keyword rules |
+| Container can't reach DB | use `postgres` (not `localhost`) as host inside containers |
+
+## Engineering decisions (not explicitly required by the assignments)
+
+- `LLM_TIMEOUT_SECONDS` (default 120s): a hung LLM call would otherwise
+  block the single Worker forever; the timeout lets the job fail and the
+  Worker continue.
+- `main.id` is an auto-incrementing Integer (matching the approved ERD sketch).
+- The schema extends the approved ERD with `normalized_name`, `source`,
+  `is_active` (models/prompts), and `claimed_at`/`heartbeat_at` — all
+  required by Assignments 3–4 (stable field identity, auditability, crash
+  recovery).
+- `table_of_contents` is required by the API input contract (all nine
+  fields), while the database column remains nullable to preserve any
+  pre-existing rows.
+- `/health` intentionally does not report Worker state: the Worker is a
+  batch process with no HTTP surface, and the assignments do not require it.
+- At-least-once processing on crash (possible duplicate LLM call) instead
+  of exactly-once, which would require distributed transactions.
