@@ -70,3 +70,40 @@ script tag is invisible and changes no pixels).
 Freshness is `MAX(main.heartbeat_at)` — the last time the generation Worker
 touched a job. The demo page must not show processing times or record counts;
 this panel is the only place counts appear.
+
+## Wiring: one system, not a parallel app
+
+1. **One database.** The panel uses the same PostgreSQL instance and tables
+   through `app/db/connection.py` (`async_session`) and `app/db/models.py`.
+   No second database, schema copy, model set, or cache exists.
+2. **Shared domain logic.** Intake lives in `app/submissions.py`
+   (`create_thesis_record`), used by both `POST /submit` and the panel form.
+   Generation resolution lives in `app/news/generation.py`
+   (`resolve_generation_config`), used by both the Worker and the panel
+   regenerate action; the probe (`probe_model_connection`) is shared by the
+   API test-connection and the panel test button. Route resolution and message
+   preview use the sender's own `channels_for_article` / `render_article`.
+   Nothing is copied between worker and panel.
+3. **Same state machine.** `main`: `ready|processing|review|failed` plus
+   `rejected` (added *with* migration `006`, human reject only); `deliveries`:
+   `pending|sending|sent|failed|awaiting_confirmation`. No other values exist.
+4. **Panel submit = machine submit.** Both insert `main(status='ready')`; the
+   Worker claims it on its next poll with no glue.
+5. **One writer per concern.** The panel never calls Bale/Telegram and never
+   sends inline: approve flips gated rows to `pending`, retry re-queues
+   `failed` rows; the sender Worker performs every send.
+6. **Live data only.** Every page renders real rows; empty states (no models,
+   no channels, no output yet) replace mock content.
+7. **HTMX polling.** The records/deliveries tables re-poll their own partials
+   (`hx-trigger="load, every 15s"`) — no websockets, no threads, and the
+   machine shared secret never reaches the browser.
+8. **Same config.** The panel reads `app/config.py` and the same `.env`,
+   adding only `PANEL_SECRET_KEY` (+ panel login credentials).
+9. **End-to-end proof.** `tests/test_panel_e2e.py` drives the whole chain
+   (panel submit → worker → gated delivery → panel approve → sender → sent,
+   LLM + platform stubbed). Live proof on 2026-10-08: panel record 41 went
+   `ready → review` (real LLM output), approval released the delivery
+   `awaiting_confirmation → pending`, and the sender delivered it
+   (`message_id=174486`, audit `submit,approve`).
+10. **Machine API untouched.** `POST /submit`, `/health`, `GET /records/{id}`
+    keep their exact contracts (covered by the existing suite).
