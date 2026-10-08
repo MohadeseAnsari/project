@@ -197,12 +197,15 @@ it. Re-running the seed script is idempotent
 ## 8. Classification
 
 `app/fields/classification.py` — deterministic, rule-based, **never the LLM**.
-Priority-ordered keyword rules map a normalized field to a category. Within
-each category, specific keywords are listed before broad ones, so
-`معماری داخلی` matches its specific rule and is **not** swallowed by the
-broad `معماری` rule. Unmatched fields fall back to the `other` category.
-Unknown incoming fields are inserted with `source='runtime'` and the
-deterministically classified category.
+Token-aware longest-match rules map a normalized field to a category:
+multi-token phrases match exactly, ≤4-char keywords match whole tokens only,
+longer keywords may substring-match at lower score, and the longest match
+wins (category order breaks ties only). `معماری داخلی` matches its specific
+rule and is **not** swallowed by the broad `معماری` rule; `مو` can never fire
+inside `موزه`. `classify_with_reason` returns `(category, matched_keyword,
+rule)` so every decision is explainable. Unmatched fields fall back to the
+`other` category. Unknown incoming fields are inserted with
+`source='runtime'` and the deterministically classified category.
 
 ## 9. LLM generation
 

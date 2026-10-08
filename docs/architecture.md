@@ -52,8 +52,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### Field Classification (Deterministic)
 - Normalizes field names (Unicode NFC, trim, collapse whitespace)
 - Looks up exact normalized match in database
-- Falls back to priority-ordered keyword rules (specific before broad)
-- Unknown fields → `other` category
+- Falls back to token-aware longest-match keyword rules: multi-token
+  phrases match exactly, ≤4-char keywords match whole tokens only (so `مو`
+  never fires inside `موزه`), longer keywords may substring-match at lower
+  score; the longest match wins and category order breaks ties only
+- Negative keywords veto genuine collisions (documented in code)
+- Every decision returns `(category, matched_keyword, rule)` — the panel
+  shows WHY, and `fields.matched_keyword` stores it
+- Unknown fields → `other` category (reviewed names only; see report)
 - No LLM involvement
 
 ### LLM Generation (PydanticAI + AvalAI)
