@@ -11,8 +11,8 @@ docker compose ps
 ```
 
 Expected: `postgres`, `api`, `worker`, `sender`, and `web` containers running.
-The review panel (`web`, same image, `PANEL_PORT`, default `8081`) is at
-**http://YOUR_HOST:8081/login** — see `docs/admin-panel.md`. It shows counts;
+The review panel (`web`, same image, loopback-only `PANEL_PORT`) is reached
+through the HTTPS reverse proxy — see `docs/admin-panel.md`. It shows counts;
 the client demo below must not show processing times or record counts.
 
 ## 2. Check API/database health

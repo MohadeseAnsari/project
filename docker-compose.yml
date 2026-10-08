@@ -124,10 +124,10 @@ services:
     restart: unless-stopped
 
   # Server-rendered review panel (Jinja2 + locally vendored HTMX, no build
-  # step). Same image as `api` with a different command. Owner decision: the
-  # panel is reachable from the internet, so the published port binds 0.0.0.0
-  # by default. PANEL_PORT is the single knob: keep `8081` for public access,
-  # or set `127.0.0.1:8081` to revert to loopback-only (SSH tunnel) access.
+  # step). Same image as `api` with a different command. Deployed
+  # loopback-only: the ONLY public door is the HTTPS reverse proxy forwarding
+  # to it. PANEL_PORT is the single knob: `127.0.0.1:8081` (default, private);
+  # `8081` binds all interfaces (public emergency use, only behind TLS).
   web:
     build: .
     command: uvicorn app.panel.app:panel_app --host 0.0.0.0 --port 8081

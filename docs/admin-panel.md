@@ -15,28 +15,27 @@ cp .env.example .env   # set PANEL_ADMIN_PASSWORD + PANEL_SECRET_KEY
 docker compose up -d web
 ```
 
-Open **http://YOUR_HOST:8081/login** (`PANEL_PORT`, default `8081`, binds all
-interfaces). The first admin (`PANEL_ADMIN_USERNAME`, default `admin`) is
+Open the panel through your HTTPS reverse proxy, which forwards to loopback
+`127.0.0.1:8081` (`PANEL_PORT`, default `127.0.0.1:8081`). The first admin
+(`PANEL_ADMIN_USERNAME`, default `admin`) is
 created at startup from env vars when no users exist; the password is stored
 as an argon2 hash, never plaintext. A signed `panel_session` cookie (12h,
-HttpOnly, Lax) keeps the login.
+HttpOnly, Lax, Secure behind the proxy) keeps the login.
 
 ## Security notes (public exposure)
 
-- Plain HTTP transmits the panel password unencrypted. The recommended next
-  step is TLS via a reverse proxy (terminate HTTPS there, forward to the
-  `web` service), then set `PANEL_COOKIE_SECURE=true` so the session cookie
-  is sent with the `Secure` flag.
+- The deployment binds the panel to loopback only: the ONLY public door is
+  the HTTPS reverse proxy in front of it. Plain HTTP on `:8081` is never
+  exposed to the internet, and plain HTTP transmits the panel password
+  unencrypted — TLS at the proxy is required, not optional. Emergency public
+  exposure only with `PANEL_PORT=8081` and only behind a TLS proxy.
 - Login is rate-limited per IP with lockout after repeated failures, and
   failed logins are written to the audit trail. Every other panel route
   requires login (anonymous browsers redirect to `/login`); there are no
   debug routes and no unauthenticated listing endpoints.
-- To revert to loopback-only access (SSH tunnel), change exactly one value:
-
-```bash
-PANEL_PORT=127.0.0.1:8081
-docker compose up -d web
-```
+- The app trusts `X-Forwarded-For` / `X-Forwarded-Proto` only from the local
+  proxy (loopback peer); direct clients' headers are ignored, so the lockout,
+  audit IPs, and Secure-cookie logic always see the real visitor.
 
 ## Roles
 

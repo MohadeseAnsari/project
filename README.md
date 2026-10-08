@@ -109,7 +109,7 @@ Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored.
 | `PANEL_ADMIN_USERNAME` | Review panel first admin username | No (default: admin) |
 | `PANEL_ADMIN_PASSWORD` | Review panel first admin password (env only, hashed with argon2) | Yes for panel login |
 | `PANEL_SECRET_KEY` | Review panel cookie signing key | Yes for panel |
-| `PANEL_PORT` | Published panel port (`8081` public, `127.0.0.1:8081` loopback-only) | No (default: 8081) |
+| `PANEL_PORT` | Published panel port (loopback-only by default; `8081` binds all interfaces) | No (default: 127.0.0.1:8081) |
 | `PANEL_COOKIE_SECURE` | Send session cookie with Secure (enable behind TLS proxy) | No (default: false) |
 | `PANEL_LOGIN_MAX_ATTEMPTS` / `PANEL_LOGIN_WINDOW_MINUTES` / `PANEL_LOGIN_LOCKOUT_MINUTES` | Per-IP login failures in window before lockout | No (defaults: 10/10/15) |
 | `POSTGRES_PASSWORD` | PostgreSQL admin password (postgres service) | No (default: postgres) |
@@ -125,11 +125,12 @@ curl.exe http://localhost:8000/health
 ```
 
 Review panel (same image, `web` service): set `PANEL_ADMIN_PASSWORD` +
-`PANEL_SECRET_KEY` in `.env`, then open **http://YOUR_HOST:8081/login**
-(`PANEL_PORT`, default `8081`, binds all interfaces). Plain HTTP transmits
-the password unencrypted — put TLS in front (reverse proxy) before exposing
-it; to revert to loopback-only access set `PANEL_PORT=127.0.0.1:8081`. See
-`docs/admin-panel.md` for pages, roles, and security notes.
+`PANEL_SECRET_KEY` in `.env`, then open the panel through your HTTPS reverse
+proxy (it forwards to loopback `127.0.0.1:8081`; plain HTTP on `:8081` is not
+exposed to the internet). Plain HTTP transmits the password unencrypted — TLS
+at the proxy is required, not optional. Emergency public exposure only with
+`PANEL_PORT=8081` and only behind a TLS proxy. See `docs/admin-panel.md` for
+pages, roles, and security notes.
 
 Apply migrations and seed fields (first run only):
 
