@@ -15,7 +15,7 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings
-from app.fields.classification import classify_field
+from app.fields.classification import classify_with_reason
 from app.fields.normalization import normalize_field
 
 
@@ -34,20 +34,21 @@ async def seed_fields():
         skipped = 0
         for raw in raw_fields:
             norm = normalize_field(raw)
-            cat_name = classify_field(norm)
+            cat_name, matched_keyword, _ = classify_with_reason(norm)
             cat_id = cat_map.get(cat_name)
             if cat_id is None:
                 cat_id = cat_map.get("other")
 
             status = await conn.execute(
                 """
-                INSERT INTO fields (name, normalized_name, category_id, source)
-                VALUES ($1, $2, $3, 'spreadsheet')
+                INSERT INTO fields (name, normalized_name, category_id, matched_keyword, source)
+                VALUES ($1, $2, $3, $4, 'spreadsheet')
                 ON CONFLICT (normalized_name) DO NOTHING
                 """,
                 raw,
                 norm,
                 cat_id,
+                matched_keyword,
             )
             # asyncpg command tag: "INSERT 0 1" = row written, "INSERT 0 0" = conflict-skipped
             if status == "INSERT 0 1":

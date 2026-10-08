@@ -41,6 +41,9 @@ class Category(Base):
 
     fields = relationship("Field", back_populates="category")
     main_records = relationship("Main", back_populates="category")
+    channel_routes = relationship(
+        "CategoryChannelRoute", back_populates="category", cascade="all, delete-orphan"
+    )
 
 
 class Field(Base):
@@ -48,7 +51,8 @@ class Field(Base):
 
     ``normalized_name`` is the stable identity used for exact matching and
     duplicate prevention;     ``source`` distinguishes spreadsheet-seeded fields
-    from runtime-discovered ones.
+    from runtime-discovered ones; ``matched_keyword`` records WHY the field
+    got its category (see ``classify_with_reason``).
     """
 
     __tablename__ = "fields"
@@ -58,6 +62,7 @@ class Field(Base):
     normalized_name = Column(String(500), unique=True, nullable=False)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     source = Column(String(20), nullable=False, default="spreadsheet")
+    matched_keyword = Column(String(200), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     category = relationship("Category", back_populates="fields")
@@ -222,6 +227,7 @@ class Channel(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     routes = relationship("FieldChannelRoute", back_populates="channel")
+    category_routes = relationship("CategoryChannelRoute", back_populates="channel")
     deliveries = relationship("Delivery", back_populates="channel")
 
 
@@ -243,6 +249,27 @@ class FieldChannelRoute(Base):
     channel = relationship("Channel", back_populates="routes")
 
 
+class CategoryChannelRoute(Base):
+    """The category -> channel mapping: the business routing chain.
+
+    An article reaches a channel through field -> category -> channels, so
+    the category (not each of the 500+ fields) is what the owner manages.
+    ``field_channel_routes`` stays as the field-level exception table and is
+    consulted when a category has no route; unmapped categories fall back to
+    all active channels. The permissive seed (every category to every active
+    channel) preserves pre-existing publishing behavior until refined.
+    """
+
+    __tablename__ = "category_channel_routes"
+
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), primary_key=True)
+    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    category = relationship("Category", back_populates="channel_routes")
+    channel = relationship("Channel", back_populates="category_routes")
+
+
 class Delivery(Base):
     """The per-(article, channel) send record claimed by the sender Worker.
 
@@ -251,8 +278,13 @@ class Delivery(Base):
     many independent send states, each with its own attempts and error.
 
     Status lifecycle: ``pending`` → ``sending`` → ``sent`` | ``failed``, with
-    ``pending`` returned after a retryable failure. ``awaiting_confirmation`` is
-    reserved for the planned human-in-the-loop step and is not written yet.
+    ``pending`` returned after a retryable failure. ``awaiting_confirmation``
+    is the gated initial status when ``REQUIRE_HUMAN_CONFIRMATION`` is on:
+    approval flips it to ``pending``.
+
+    ``category_id``/``route_source`` snapshot which category and which route
+    level (``category`` | ``field`` | ``fallback``) produced the row, so a
+    delivery stays explainable after later route edits.
 
     Unlike the generation Worker, sending IS retried: a transient network or
     provider error should not silently drop a published article. Attempts are
@@ -273,6 +305,8 @@ class Delivery(Base):
     id = Column(Integer, primary_key=True)
     main_id = Column(Integer, ForeignKey("main.id", ondelete="CASCADE"), nullable=False)
     channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
+    route_source = Column(String(20), nullable=True)
     status = Column(String(30), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, default=0)
     platform_message_id = Column(BigInteger, nullable=True)
@@ -285,3 +319,4 @@ class Delivery(Base):
 
     article = relationship("Main", back_populates="deliveries")
     channel = relationship("Channel", back_populates="deliveries")
+    category = relationship("Category")
