@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # writes `pending` directly (the pre-gate behaviour).
     require_human_confirmation: bool = True
 
+    # Review panel (server-rendered Jinja2 + HTMX). Credentials come from env
+    # only; the first admin is created at runtime, never seeded in migrations.
+    panel_admin_username: str = "admin"
+    panel_admin_password: str = ""
+    panel_secret_key: str = "change-me-in-production"
+    panel_host: str = "127.0.0.1"
+    panel_port: int = 8081
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

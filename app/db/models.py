@@ -99,6 +99,47 @@ class Prompt(Base):
     main_records = relationship("Main", back_populates="prompt")
 
 
+class Role(Base):
+    """A panel role (admin full access, editor review only)."""
+
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(20), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    users = relationship("PanelUser", back_populates="role")
+
+
+class PanelUser(Base):
+    """A human panel account (argon2 password hash, never plaintext)."""
+
+    __tablename__ = "panel_users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), unique=True, nullable=False)
+    password_hash = Column(Text, nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    role = relationship("Role", back_populates="users")
+
+
+class AuditLog(Base):
+    """Who did what to which record (review/retry/config changes)."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("panel_users.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(50), nullable=False)
+    main_id = Column(Integer, ForeignKey("main.id", ondelete="SET NULL"), nullable=True)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
 class Main(Base):
     """The thesis/news record and job-state queue entry.
 

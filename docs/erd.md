@@ -11,6 +11,9 @@ erDiagram
     channels ||--o{ field_channel_routes : "receives"
     channels ||--o{ deliveries : "target_of"
     main ||--o{ deliveries : "published_as"
+    roles ||--o{ panel_users : "grants"
+    panel_users ||--o{ audit_logs : "performed_by"
+    main ||--o{ audit_logs : "acted_on"
 
     categories {
         SERIAL id PK
@@ -71,6 +74,31 @@ erDiagram
         TIMESTAMP heartbeat_at
         TIMESTAMP created_at
         TIMESTAMP updated_at
+    }
+
+    roles {
+        SERIAL id PK
+        VARCHAR name UK
+        TEXT description
+        TIMESTAMP created_at
+    }
+
+    panel_users {
+        SERIAL id PK
+        VARCHAR username UK
+        TEXT password_hash
+        INTEGER role_id FK
+        BOOLEAN is_active
+        TIMESTAMP created_at
+    }
+
+    audit_logs {
+        SERIAL id PK
+        INTEGER user_id FK
+        VARCHAR action
+        INTEGER main_id FK
+        TEXT detail
+        TIMESTAMP created_at
     }
 
     channels {
