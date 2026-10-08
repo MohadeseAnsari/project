@@ -1,24 +1,44 @@
 <table>
-  <thead><tr><th>شناسه</th><th>وضعیت</th><th>رشته</th><th>دانشگاه</th><th>عنوان</th><th>ایجاد</th></tr></thead>
+  <thead>
+    <tr>
+      <th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
+      <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
+      <th style="width:196px">عملیات</th>
+    </tr>
+  </thead>
   <tbody>
     {% for r in items %}
     <tr>
-      <td><a href="/records/{{ r.id }}">{{ r.id }}</a></td>
-      <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+      <td class="num">{{ r.id|fa }}</td>
+      <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
       <td>{{ r.field }}</td>
       <td>{{ r.university }}</td>
-      <td>{{ r.title[:70] }}</td>
-      <td>{{ r.created_at|jalali }}</td>
+      <td>
+        {% if r.status == 'review' %}<span class="badge s-review">★ در انتظار بازبینی</span>
+        {% elif r.status == 'processing' %}<span class="badge s-processing">… در حال تولید خبر</span>
+        {% elif r.status == 'ready' %}<span class="badge s-ready">… در صف، منتظر worker</span>
+        {% elif r.status == 'failed' %}<span class="badge s-failed">! تولید ناموفق</span>
+        {% elif r.status == 'rejected' %}<span class="badge s-failed">رد شده</span>
+        {% else %}<span class="badge s-off">{{ r.status }}</span>{% endif %}
+      </td>
+      <td class="num">{{ r.created_at|jalali }}</td>
+      <td>
+        {% if r.status == 'review' %}
+        <form method="post" action="/records/{{ r.id }}/review" style="display:inline"><input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
+        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
+        {% else %}
+        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">مشاهده</a>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
-<p>صفحه {{ page }} از {{ (total // page_size) + (1 if total % page_size else 0) }} — مجموع {{ total }}</p>
-<div>
-  {% if page > 1 %}
-  <button class="btn btn-ghost btn-small" hx-get="/records/table?{{ query }}&page={{ page - 1 }}" hx-target="#records-table">قبلی</button>
-  {% endif %}
-  {% if page * page_size < total %}
-  <button class="btn btn-ghost btn-small" hx-get="/records/table?{{ query }}&page={{ page + 1 }}" hx-target="#records-table">بعدی</button>
-  {% endif %}
+<div class="foot">
+  نمایش {{ ((page - 1) * page_size + 1)|fa }} تا {{ ([page * page_size, total]|min)|fa }} از {{ total|fa }} رکورد
+  <div class="pager">
+    {% if page > 1 %}<a href="#" hx-get="/records/table?{{ query }}&page={{ page - 1 }}&page_size={{ page_size }}" hx-target="#records-table">قبلی</a>{% endif %}
+    <b>{{ page|fa }}</b>
+    {% if page * page_size < total %}<a href="#" hx-get="/records/table?{{ query }}&page={{ page + 1 }}&page_size={{ page_size }}" hx-target="#records-table">بعدی</a>{% endif %}
+  </div>
 </div>

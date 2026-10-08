@@ -331,15 +331,56 @@ def _record_filters(status, field, university, q):
 @panel_app.get("/records", response_class=HTMLResponse)
 async def records_page(
     request: Request, status: str = "", field: str = "", university: str = "",
-    q: str = "", order: str = "newest",
+    q: str = "", order: str = "newest", page: int = 1,
 ):
-    """Show the filterable record list (rows load via HTMX partial)."""
+    """Show the filterable record list (first page server-rendered, rest via HTMX)."""
     user = await require_login(request)
     from urllib.parse import urlencode
 
+    page = max(1, page)
+    page_size = 20
+    async with async_session() as session:
+        counts = dict(
+            (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
+        )
+        delivery_counts = dict(
+            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
+        )
+        field_options = [
+            r[0] for r in (
+                await session.execute(select(Main.field).distinct().order_by(Main.field).limit(50))
+            ).all()
+        ]
+        university_options = [
+            r[0] for r in (
+                await session.execute(select(Main.university).distinct().order_by(Main.university).limit(50))
+            ).all()
+        ]
+        filters = _record_filters(status or None, field or None, university or None, q or None)
+        count_q = select(func.count()).select_from(Main)
+        if filters:
+            count_q = count_q.where(*filters)
+        total = (await session.execute(count_q)).scalar_one()
+        ordering = [Main.created_at.desc(), Main.id.desc()] if order != "oldest" else [Main.created_at.asc(), Main.id.asc()]
+        query_sel = select(Main)
+        if filters:
+            query_sel = query_sel.where(*filters)
+        items = (
+            await session.execute(query_sel.order_by(*ordering).limit(page_size).offset((page - 1) * page_size))
+        ).scalars().all()
+        counts_ctx = await _sidebar_counts(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order}.items() if v})
     return templates.TemplateResponse(request, "records.html",
-        _ctx(request, user, active="records", status=status, field=field, university=university, q=q, order=order, query=query),
+        _ctx(
+            request, user, active="records", **counts_ctx,
+            status=status, field=field, university=university, q=q, order=order, query=query,
+            kpi_review=counts.get("review", 0),
+            kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
+            kpi_sent=delivery_counts.get("sent", 0),
+            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
+            field_options=field_options, university_options=university_options,
+            items=items, total=total, page=page, page_size=page_size,
+        ),
     )
 
 
@@ -374,9 +415,11 @@ async def records_table(
 
 
 @panel_app.get("/records/{record_id}", response_class=HTMLResponse)
-async def record_detail(request: Request, record_id: int):
-    """Show one record with editable output, deliveries, and audit history."""
+async def record_detail(request: Request, record_id: int, tab: str = "text"):
+    """Show one record with editable output, raw/meta/history/delivery tabs."""
     user = await require_login(request)
+    if tab not in ("text", "raw", "meta", "history", "delivery"):
+        tab = "text"
     async with async_session() as session:
         record = await session.get(Main, record_id)
         if not record:
@@ -386,12 +429,50 @@ async def record_detail(request: Request, record_id: int):
         ).scalars().all()
         for d in deliveries:
             d.channel = await session.get(Channel, d.channel_id)
-        history = (
-            await session.execute(select(AuditLog).where(AuditLog.main_id == record.id).order_by(AuditLog.id.desc()).limit(50))
+        model_name = None
+        if record.model_id:
+            model = await session.get(Model, record.model_id)
+            model_name = model.name if model else None
+        prompt_version = None
+        if record.prompt_id:
+            prompt = await session.get(Prompt, record.prompt_id)
+            prompt_version = prompt.version if prompt else None
+        routed_channels = None
+        if record.field_id:
+            routed = (
+                await session.execute(
+                    select(Channel).join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id).where(
+                        FieldChannelRoute.field_id == record.field_id))
+            ).scalars().all()
+            if routed:
+                routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
+        # History: lifecycle steps from real timestamps, then audit entries.
+        history = [
+            {"title": "ثبت درخواست", "sub": f"وضعیت: ready · {_jalali(record.created_at)}"},
+        ]
+        if record.claimed_at:
+            history.append({"title": "worker پردازش را برداشت", "sub": f"وضعیت: processing · {_jalali(record.claimed_at)}"})
+        if record.output_json:
+            history.append({"title": "خروجی مدل ذخیره شد", "sub": f"وضعیت: review · {_jalali(record.updated_at)}"})
+        elif record.error_message:
+            history.append({"title": "تولید ناموفق ماند", "sub": f"وضعیت: failed · {_jalali(record.updated_at)}"})
+        if record.status == "review":
+            history.append({"title": "در انتظار تصمیم بازبین", "sub": "پس از تأیید: ارسال به کانال‌های مسیرشده"})
+        elif record.status == "rejected":
+            history.append({"title": "خبر رد شد", "sub": f"{_jalali(record.updated_at)}"})
+        audits = (
+            await session.execute(select(AuditLog).where(AuditLog.main_id == record.id).order_by(AuditLog.id.desc()).limit(20))
         ).scalars().all()
-        for h in history:
-            h.user = await session.get(PanelUser, h.user_id) if h.user_id else None
-    return templates.TemplateResponse(request, "record_detail.html", _ctx(request, user, active="records", record=record, deliveries=deliveries, history=history)
+        for a in audits:
+            actor = await session.get(PanelUser, a.user_id) if a.user_id else None
+            history.append({"title": _audit_title(a), "sub": f"{actor.username if actor else 'سیستم'} · {_jalali(a.created_at)}"})
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "record_detail.html",
+        _ctx(
+            request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
+            history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
+            routed_channels=routed_channels,
+        )
     )
 
 
@@ -438,12 +519,53 @@ async def record_review(
 
 @panel_app.get("/deliveries", response_class=HTMLResponse)
 async def deliveries_page(request: Request, status: str = "", platform: str = "", main_id: str = ""):
-    """Show the filterable delivery list (rows load via HTMX partial)."""
+    """Show the filterable delivery list (first page server-rendered)."""
     user = await require_login(request)
     from urllib.parse import urlencode
 
-    query = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
-    return templates.TemplateResponse(request, "deliveries.html", _ctx(request, user, active="deliveries", status=status, platform=platform, main_id=main_id, query=query)
+    page_size = 20
+    status_f = status or None
+    platform_f = platform or None
+    mid = int(main_id.strip()) if main_id.strip().isdigit() else None
+    async with async_session() as session:
+        base = select(func.count()).select_from(Delivery)
+        if platform_f:
+            base = base.join(Channel, Channel.id == Delivery.channel_id).where(Channel.platform == platform_f)
+        if status_f:
+            base = base.where(Delivery.status == status_f)
+        if mid is not None:
+            base = base.where(Delivery.main_id == mid)
+        total = (await session.execute(base)).scalar_one()
+        query = select(Delivery, Channel, Main).join(
+            Channel, Channel.id == Delivery.channel_id).join(Main, Main.id == Delivery.main_id)
+        if status_f:
+            query = query.where(Delivery.status == status_f)
+        if platform_f:
+            query = query.where(Channel.platform == platform_f)
+        if mid is not None:
+            query = query.where(Delivery.main_id == mid)
+        pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size))).all()
+        items = [
+            {
+                "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
+                "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
+                "channel_name": c.username or c.title or c.platform,
+            }
+            for d, c, m in pairs
+        ]
+        last_failed = (
+            await session.execute(select(Delivery).where(Delivery.status == "failed").order_by(Delivery.id.desc()).limit(1))
+        ).scalar_one_or_none()
+        last_error = f"خطای آخر: «{last_failed.error_message}» — {_jalali(last_failed.updated_at)}" if last_failed and last_failed.error_message else None
+        counts_ctx = await _sidebar_counts(session)
+    query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
+    return templates.TemplateResponse(request, "deliveries.html",
+        _ctx(
+            request, user, active="deliveries", **counts_ctx, status=status, platform=platform,
+            main_id=main_id, query=query_str, items=items, total=total, page=1, page_size=page_size,
+            last_error=last_error, max_attempts=settings.sender_max_attempts,
+            backoff_base=settings.sender_backoff_base_seconds,
+        )
     )
 
 
@@ -453,29 +575,40 @@ async def deliveries_table(request: Request, status: str = "", platform: str = "
     user = await require_login(request)
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
+    status_f = status or None
+    platform_f = platform or None
+    mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     async with async_session() as session:
         base = select(func.count()).select_from(Delivery)
-        if platform:
-            base = base.join(Channel, Channel.id == Delivery.channel_id).where(Channel.platform == platform)
-        if status:
-            base = base.where(Delivery.status == status)
-        if main_id.strip().isdigit():
-            base = base.where(Delivery.main_id == int(main_id.strip()))
+        if platform_f:
+            base = base.join(Channel, Channel.id == Delivery.channel_id).where(Channel.platform == platform_f)
+        if status_f:
+            base = base.where(Delivery.status == status_f)
+        if mid is not None:
+            base = base.where(Delivery.main_id == mid)
         total = (await session.execute(base)).scalar_one()
-        query = select(Delivery, Channel).join(Channel, Channel.id == Delivery.channel_id).order_by(Delivery.id.desc()).limit(page_size).offset((page - 1) * page_size)
-        if status:
-            query = query.where(Delivery.status == status)
-        if platform:
-            query = query.where(Channel.platform == platform)
-        if main_id.strip().isdigit():
-            query = query.where(Delivery.main_id == int(main_id.strip()))
-        pairs = (await session.execute(query)).all()
-        items = []
-        for delivery, channel in pairs:
-            delivery.channel = channel
-            items.append(delivery)
+        query = select(Delivery, Channel, Main).join(
+            Channel, Channel.id == Delivery.channel_id).join(Main, Main.id == Delivery.main_id)
+        if status_f:
+            query = query.where(Delivery.status == status_f)
+        if platform_f:
+            query = query.where(Channel.platform == platform_f)
+        if mid is not None:
+            query = query.where(Delivery.main_id == mid)
+        pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size).offset((page - 1) * page_size))).all()
+        items = [
+            {
+                "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
+                "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
+                "channel_name": c.username or c.title or c.platform,
+            }
+            for d, c, m in pairs
+        ]
+    from urllib.parse import urlencode
+
+    query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
     return templates.TemplateResponse(request, "deliveries_table.html",
-        {"request": request, "current_user": user, "items": items, "total": total, "page": page},
+        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str},
     )
 
 

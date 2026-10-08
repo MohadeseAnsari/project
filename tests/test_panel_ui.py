@@ -75,4 +75,4 @@ async def test_login_and_htmx_records_table(session: AsyncSession):
         table = await client.get("/records/table", params={"page": 1, "page_size": 5})
         assert table.status_code == 200
         assert "<table>" in table.text
-        assert "مجموع" in table.text
+        assert "رکورد" in table.text
