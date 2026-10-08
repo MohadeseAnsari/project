@@ -487,3 +487,55 @@ async def test_editor_cannot_reset_passwords(session: AsyncSession):
     async with _client() as client:
         await _login(client, "panel-editor")
         assert (await client.post("/users/1/password", data={"new_password": "hacked123"})).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_creates_user_with_role_over_http(session: AsyncSession):
+    """Admin-only page creates a user with the chosen role (min length enforced)."""
+    from sqlalchemy import select
+
+    from app.db.models import PanelUser
+
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        short = await client.post(
+            "/users", data={"username": "newbie", "password": "short", "role": "editor"},
+            follow_redirects=False,
+        )
+        assert short.status_code == 422
+        bad_role = await client.post(
+            "/users", data={"username": "newbie", "password": "longenough1", "role": "owner"},
+            follow_redirects=False,
+        )
+        assert bad_role.status_code == 422
+        created = await client.post(
+            "/users", data={"username": "newbie", "password": "longenough1", "role": "editor"},
+            follow_redirects=False,
+        )
+        assert created.status_code == 302
+    row = (await session.execute(select(PanelUser).where(PanelUser.username == "newbie"))).scalar_one()
+    assert row.is_active is True
+    async with _client() as client:
+        response = await client.post(
+            "/login", data={"username": "newbie", "password": "longenough1"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_admin_deactivates_user_over_http(session: AsyncSession):
+    """Deactivation blocks login at once; editors cannot touch this endpoint."""
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        assert (await client.post("/users/1/toggle", follow_redirects=False)).status_code == 403
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        assert (await client.post("/users/1/toggle", follow_redirects=False)).status_code == 422
+        toggled = await client.post("/users/2/toggle", follow_redirects=False)
+        assert toggled.status_code == 302
+    async with _client() as client:
+        assert (await client.post("/login", data={"username": "panel-editor", "password": "secret123"}, follow_redirects=False)).status_code == 401
