@@ -638,35 +638,130 @@ async def delivery_retry(request: Request, delivery_id: int):
 
 @panel_app.get("/fields", response_class=HTMLResponse)
 async def fields_page(request: Request):
-    """List known thesis fields with their categories."""
+    """List known thesis fields with categories, routes, and top-field bars."""
     user = await require_login(request)
     async with async_session() as session:
-        rows = (await session.execute(select(Field).order_by(Field.id.desc()).limit(200))).scalars().all()
+        rows = (await session.execute(select(Field).order_by(Field.id.desc()).limit(100))).scalars().all()
+        fields = []
         for f in rows:
-            f.category = await session.get(Category, f.category_id) if f.category_id else None
-    return templates.TemplateResponse(request, "fields.html", _ctx(request, user, active="fields", fields=rows))
+            cat = await session.get(Category, f.category_id) if f.category_id else None
+            routed = (
+                await session.execute(
+                    select(Channel).join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id).where(
+                        FieldChannelRoute.field_id == f.id))
+            ).scalars().all()
+            fields.append(
+                {
+                    "id": f.id, "name": f.name, "source": f.source,
+                    "category_name": cat.name if cat else None,
+                    "channel_names": "، ".join(c.username or c.title or c.platform for c in routed) or None,
+                }
+            )
+        total = (await session.execute(select(func.count()).select_from(Field))).scalar_one()
+        top_rows = (
+            await session.execute(
+                select(Main.field, func.count()).group_by(Main.field).order_by(func.count().desc()).limit(3))
+        ).all()
+        top_total = sum(n for _, n in top_rows) or 1
+        top = [{"name": name, "pct": int(round(n / top_total * 100))} for name, n in top_rows]
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "fields.html",
+        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top))
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
-async def categories_page(request: Request):
-    """List deterministic field categories."""
+async def categories_page(request: Request, q: str = ""):
+    """List categories as cards with their real field names as chips."""
     user = await require_login(request)
     async with async_session() as session:
-        rows = (await session.execute(select(Category).order_by(Category.id))).scalars().all()
-    return templates.TemplateResponse(request, "categories.html", _ctx(request, user, active="categories", categories=rows))
+        query = select(Category).order_by(Category.id)
+        if q.strip():
+            query = query.where(Category.name.ilike(f"%{q.strip()}%"))
+        rows = (await session.execute(query)).scalars().all()
+        total = (await session.execute(select(func.count()).select_from(Category))).scalar_one()
+        categories = []
+        for c in rows:
+            names = (
+                await session.execute(select(Field.name).where(Field.category_id == c.id).order_by(Field.id).limit(9))
+            ).scalars().all()
+            n = (
+                await session.execute(select(func.count()).select_from(Field).where(Field.category_id == c.id))
+            ).scalar_one()
+            categories.append(
+                {"name": c.name, "description": c.description, "field_names": names, "field_count": n}
+            )
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "categories.html",
+        _ctx(request, user, active="categories", **counts_ctx, categories=categories, total=total, q=q))
 
 
 @panel_app.get("/channels", response_class=HTMLResponse)
-async def channels_page(request: Request):
-    """List channels and field→channel routes (admin manages them)."""
+async def channels_page(request: Request, channel_id: int | None = None, new: str = ""):
+    """List channels with route matrix and the selected channel settings."""
     user = await require_login(request)
     async with async_session() as session:
         channels = (await session.execute(select(Channel).order_by(Channel.id))).scalars().all()
-        routes = (await session.execute(select(FieldChannelRoute).limit(500))).scalars().all()
-        for r in routes:
-            field = await session.get(Field, r.field_id)
-            r.field_name = field.name if field else "—"
-    return templates.TemplateResponse(request, "channels.html", _ctx(request, user, active="channels", channels=channels, routes=routes))
+        for c in channels:
+            c.route_count = (
+                await session.execute(
+                    select(func.count()).select_from(FieldChannelRoute).where(FieldChannelRoute.channel_id == c.id))
+            ).scalar_one()
+        selected = None
+        if channel_id is not None:
+            selected = await session.get(Channel, channel_id)
+        if selected is None:
+            selected = channels[0] if channels else None
+        fields = (await session.execute(select(Field).order_by(Field.id).limit(30))).scalars().all()
+        matrix = []
+        for f in fields:
+            ids = set(
+                (await session.execute(
+                    select(FieldChannelRoute.channel_id).where(FieldChannelRoute.field_id == f.id))
+                ).scalars().all()
+            )
+            matrix.append({"field_name": f.name, "channel_ids": ids})
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "channels.html",
+        _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
+             matrix=matrix, show_new=bool(new)))
+
+
+@panel_app.post("/channels/{channel_id}/toggle")
+async def channel_toggle(request: Request, channel_id: int):
+    """Flip a channel's active switch (admin only)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        row = await session.get(Channel, channel_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
+        row.is_active = not row.is_active
+        await session.commit()
+        await audit(session, user.id, "channel_create", None, f"toggle channel={channel_id} active={row.is_active}")
+    return RedirectResponse(url="/channels", status_code=302)
+
+
+@panel_app.post("/channels/{channel_id}")
+async def channel_update(
+    request: Request, channel_id: int, title: str = Form(""),
+    chat_id: str = Form(""), username: str = Form(""),
+):
+    """Update a channel's display fields (admin only; no tokens on rows)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        row = await session.get(Channel, channel_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
+        row.title = title.strip() or None
+        row.username = username.strip() or None
+        if chat_id.strip().lstrip("-").isdigit():
+            row.chat_id = int(chat_id.strip())
+        await session.commit()
+        await audit(session, user.id, "channel_create", None, f"update channel={channel_id}")
+    return RedirectResponse(url=f"/channels?channel_id={channel_id}", status_code=302)
 
 
 @panel_app.post("/channels")
@@ -722,12 +817,19 @@ async def channel_unroute(request: Request, field_id: int = Form(...), channel_i
 
 
 @panel_app.get("/models", response_class=HTMLResponse)
-async def models_page(request: Request):
-    """List model configurations with activate/test actions."""
+async def models_page(request: Request, model_id: int | None = None):
+    """List models with the selected (default active) settings and test cards."""
     user = await require_login(request)
     async with async_session() as session:
         rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-    return templates.TemplateResponse(request, "models.html", _ctx(request, user, active="models", models=rows))
+        selected = None
+        if model_id is not None:
+            selected = await session.get(Model, model_id)
+        if selected is None:
+            selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "models.html",
+        _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected, test_result=None))
 
 
 @panel_app.post("/models")
@@ -754,7 +856,12 @@ async def panel_model_create(
             await session.commit()
         except Exception:
             await session.rollback()
-            return templates.TemplateResponse(request, "models.html", _ctx(request, user, active="models", models=[], error="نام مدل تکراری است."), status_code=422)
+            rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
+            selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
+            counts_ctx = await _sidebar_counts(session)
+            return templates.TemplateResponse(request, "models.html",
+                _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
+                     test_result=None, error="نام مدل تکراری است."), status_code=422)
         await audit(session, user.id, "model_create", None, f"name={name}")
     return RedirectResponse(url="/models", status_code=302)
 
@@ -778,6 +885,30 @@ async def panel_model_activate(request: Request, model_id: int):
     return RedirectResponse(url="/models", status_code=302)
 
 
+@panel_app.post("/models/{model_id}")
+async def panel_model_update(
+    request: Request, model_id: int, base_url: str = Form(""),
+    api_key_env: str = Form(""), temperature: str = Form(""),
+    max_output_tokens: str = Form(""), description: str = Form(""),
+):
+    """Update the selected model's connection fields (admin only; name fixed)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        row = await session.get(Model, model_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+        row.base_url = base_url.strip() or None
+        row.api_key_env = api_key_env.strip() or None
+        row.temperature = float(temperature) if temperature.strip() else None
+        row.max_output_tokens = int(max_output_tokens) if max_output_tokens.strip() else None
+        row.description = description.strip() or None
+        await session.commit()
+        await audit(session, user.id, "model_create", None, f"update model={row.name}")
+    return RedirectResponse(url=f"/models?model_id={model_id}", status_code=302)
+
+
 @panel_app.post("/models/{model_id}/test")
 async def panel_model_test(request: Request, model_id: int):
     """Probe one model with a real 1-token call; the key is never shown."""
@@ -790,30 +921,41 @@ async def panel_model_test(request: Request, model_id: int):
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
         base_url = row.base_url or settings.avalai_base_url
         api_key = (os.environ.get(row.api_key_env) if row.api_key_env else None) or settings.avalai_api_key
+        test_result = None
+        error = None
+        ok_msg = None
         if not api_key:
-            models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-            return templates.TemplateResponse(request, "models.html", _ctx(request, user, active="models", models=models, error="کلید API پیکربندی نشده است."))
-        try:
-            from openai import AsyncOpenAI
+            error = "کلید API پیکربندی نشده است."
+        else:
+            try:
+                from openai import AsyncOpenAI
 
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
-            await client.chat.completions.create(model=row.name, messages=[{"role": "user", "content": "test"}], max_tokens=1)
-            ok_msg = f"اتصال مدل {row.name} موفق بود."
-            await audit(session, user.id, "model_test", None, f"model={row.name} ok=true")
-        except Exception as e:
-            models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-            return templates.TemplateResponse(request, "models.html", _ctx(request, user, active="models", models=models, error=f"اتصال ناموفق: {e}"[:500]))
-        models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-    return templates.TemplateResponse(request, "models.html", _ctx(request, user, active="models", models=models, ok=ok_msg))
+                client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
+                await client.chat.completions.create(model=row.name, messages=[{"role": "user", "content": "test"}], max_tokens=1)
+                test_result = {"ok": True, "model": row.name, "error": None}
+                ok_msg = f"اتصال مدل {row.name} موفق بود."
+                await audit(session, user.id, "model_test", None, f"model={row.name} ok=true")
+            except Exception as e:
+                test_result = {"ok": False, "model": row.name, "error": str(e)[:500]}
+                await audit(session, user.id, "model_test", None, f"model={row.name} ok=false")
+        rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
+        selected = await session.get(Model, model_id)
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "models.html",
+        _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
+             test_result=test_result, error=error, ok=ok_msg))
 
 
 @panel_app.get("/prompts", response_class=HTMLResponse)
 async def prompts_page(request: Request):
-    """List immutable prompt versions with an editor for the next version."""
+    """Show the active prompt editor, versions, and the JSON contract."""
     user = await require_login(request)
     async with async_session() as session:
         rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
-    return templates.TemplateResponse(request, "prompts.html", _ctx(request, user, active="prompts", prompts=rows))
+        selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "prompts.html",
+        _ctx(request, user, active="prompts", **counts_ctx, prompts=rows, selected=selected))
 
 
 @panel_app.post("/prompts")
@@ -828,7 +970,12 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
             await session.commit()
         except Exception:
             await session.rollback()
-            return templates.TemplateResponse(request, "prompts.html", _ctx(request, user, active="prompts", prompts=[], error="نسخه تکراری است."), status_code=422)
+            rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+            selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
+            counts_ctx = await _sidebar_counts(session)
+            return templates.TemplateResponse(request, "prompts.html",
+                _ctx(request, user, active="prompts", **counts_ctx, prompts=rows, selected=selected,
+                     error="نسخه تکراری است."), status_code=422)
         await audit(session, user.id, "prompt_create", None, f"version={version}")
     return RedirectResponse(url="/prompts", status_code=302)
 
@@ -864,7 +1011,9 @@ async def submit_page(request: Request):
     async with async_session() as session:
         models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
         prompts = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
-    return templates.TemplateResponse(request, "submit.html", _ctx(request, user, active="submit", models=models, prompts=prompts))
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "submit.html",
+        _ctx(request, user, active="submit", **counts_ctx, models=models, prompts=prompts))
 
 
 @panel_app.post("/submit")

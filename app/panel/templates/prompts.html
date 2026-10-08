@@ -1,31 +1,40 @@
 {% extends "base.html" %}
 {% block title %}پرامپت‌ها{% endblock %}
+{% block h1 %}پرامپت‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › پرامپت‌ها{% endblock %}
 {% block content %}
-<h2>پرامپت‌ها (نسخه‌های تغییرناپذیر)</h2>
-<div class="card">
-  <table>
-    <thead><tr><th>نسخه</th><th>فعال</th><th>ایجاد</th><th>کنش</th></tr></thead>
-    <tbody>
+<div class="side3">
+  <div class="card">
+    <h3>ویرایش پرامپت فعال<span class="grow"></span>{% if selected %}<span class="badge s-sent">{{ selected.version }} — فعال</span>{% endif %}</h3>
+    <div class="body">
+      {% if selected %}
+      <form method="post" action="/prompts">
+        <div class="field"><label>نسخهٔ تازه</label><input type="text" name="version" placeholder="مثلاً v2" required></div>
+        <div class="field"><label>متن راهنما</label><textarea name="system_prompt" rows="9" style="direction:rtl">{{ selected.system_prompt }}</textarea></div>
+        <div class="chips" style="margin-top:8px"><span class="chip"><b>{{ '{{ title }}' }}</b> عنوان</span><span class="chip"><b>{{ '{{ abstract }}' }}</b> چکیده</span><span class="chip"><b>{{ '{{ field }}' }}</b> رشته</span><span class="chip"><b>{{ '{{ university }}' }}</b> دانشگاه</span><span class="chip"><b>{{ '{{ author }}' }}</b> نویسنده</span></div>
+        <div style="display:flex;gap:9px;margin-top:12px"><button class="btn btn-primary" type="submit">ذخیره به‌عنوان نسخهٔ تازه</button></div>
+        <div class="hint" style="margin-top:9px">نسخهٔ تازه سطر تازه می‌سازد و جایگزین فعال می‌شود؛ نسخه‌های قبلی هرگز ویرایش نمی‌شوند.</div>
+      </form>
+      {% else %}
+      <p>پرامپتی تعریف نشده است.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="card"><h3>نسخه‌ها</h3><div class="body" style="display:flex;flex-direction:column;gap:9px">
       {% for p in prompts %}
-      <tr>
-        <td><code class="ltr">{{ p.version }}</code></td>
-        <td>{% if p.is_active %}بله{% else %}خیر{% endif %}</td>
-        <td>{{ p.created_at|jalali }}</td>
-        <td>{% if not p.is_active %}
-          <form class="inline" method="post" action="/prompts/{{ p.id }}/activate"><button class="btn btn-small" type="submit">فعال‌سازی</button></form>
-          {% endif %}</td>
-      </tr>
-      <tr><td colspan="4"><pre style="white-space:pre-wrap">{{ p.system_prompt[:500] }}</pre></td></tr>
+      {% if p.is_active %}
+      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><span class="badge s-sent">فعال</span><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
+      {% else %}
+      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><form method="post" action="/prompts/{{ p.id }}/activate" style="display:inline"><button class="rowbtn" type="submit">بازگرداندن</button></form><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
+      {% endif %}
       {% endfor %}
-    </tbody>
-  </table>
-</div>
-<div class="card">
-  <h3>نسخه جدید (سطر جدید + غیرفعال‌سازی قبلی، هرگز ویرایش درجا)</h3>
-  <form method="post" action="/prompts">
-    <label>نسخه</label><input name="version" required />
-    <label>متن سیستمی</label><textarea name="system_prompt" rows="6" required></textarea>
-    <p><button class="btn" type="submit">ایجاد نسخه</button></p>
-  </form>
+    </div></div>
+    <div class="card"><h3>خروجی JSON مورد انتظار</h3><div class="body">
+      <div class="code">{<br>&nbsp;&nbsp;"title": "…",<br>&nbsp;&nbsp;"lead": "…",<br>&nbsp;&nbsp;"body": "…"<br>}</div>
+      <div class="hint" style="margin-top:9px">اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
+    </div></div>
+  </div>
 </div>
 {% endblock %}
