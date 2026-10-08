@@ -174,16 +174,42 @@ async def login_page(request: Request):
 
 @panel_app.post("/login")
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
-    """Verify credentials, sign the session cookie, and audit the login."""
-    from app.panel.auth import hash_password, set_session_cookie, verify_password  # noqa: F401 (keeps import local, avoids cycles)
+    """Verify credentials, sign the session cookie, and audit the login.
+
+    Public-exposure hardening: per-IP lockout is checked before any password
+    work; failures are counted and written to the audit trail, and reaching
+    the cap locks the IP (429). Passwords are verified with argon2, which
+    compares in a way that does not bail out early on the first wrong byte.
+    """
+    from app.panel.auth import (
+        clear_login_failures,
+        hash_password,  # noqa: F401 (kept for symmetry with verify import)
+        is_login_locked,
+        record_login_failure,
+        set_session_cookie,
+        verify_password,
+    )
+
+    ip = request.client.host if request.client else "unknown"
+    if is_login_locked(ip):
+        return templates.TemplateResponse(request, "login.html",
+            _ctx(request, None, error="تلاش‌های ناموفق زیاد بود؛ لطفاً چند دقیقه بعد دوباره تلاش کنید."),
+            status_code=429)
 
     async with async_session() as session:
         row = (
             await session.execute(select(PanelUser).where(PanelUser.username == username))
         ).scalar_one_or_none()
         if not row or not row.is_active or not verify_password(row.password_hash, password):
+            await audit(session, row.id if row else None, "login_failed", None, f"username={username}")
+            just_locked = record_login_failure(ip)
+            if just_locked:
+                return templates.TemplateResponse(request, "login.html",
+                    _ctx(request, None, error="تلاش‌های ناموفق زیاد بود؛ لطفاً چند دقیقه بعد دوباره تلاش کنید."),
+                    status_code=429)
             return templates.TemplateResponse(request, "login.html", _ctx(request, None, error="نام کاربری یا گذرواژه نادرست است."), status_code=401
             )
+        clear_login_failures(ip)
         await audit(session, row.id, "login", None, f"username={username}")
         response = RedirectResponse(url="/", status_code=302)
         set_session_cookie(response, row.id)
@@ -293,7 +319,7 @@ async def dashboard(request: Request):
 
 
 _ACTION_FA = {
-    "login": "ورود به کنسول", "approve": "تأیید و انتشار", "reject": "رد خبر",
+    "login": "ورود به کنسول", "login_failed": "ورود ناموفق", "approve": "تأیید و انتشار", "reject": "رد خبر",
     "save_draft": "ذخیرهٔ پیش‌نویس", "retry": "تلاش مجدد ارسال",
     "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",

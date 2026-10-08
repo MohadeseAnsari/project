@@ -44,7 +44,12 @@ def verify_password(password_hash: str, password: str) -> bool:
 
 
 def set_session_cookie(response, user_id: int) -> None:
-    """Sign the user id into an HttpOnly cookie (12h, Lax, no JS access)."""
+    """Sign the user id into an HttpOnly cookie (12h, Lax, no JS access).
+
+    ``Secure`` is sent only when ``PANEL_COOKIE_SECURE`` is on (TLS reverse
+    proxy in front); over plain HTTP browsers would drop a Secure cookie and
+    nobody could log in.
+    """
     token = _serializer().dumps({"uid": user_id})
     response.set_cookie(
         _cookie_name,
@@ -52,6 +57,7 @@ def set_session_cookie(response, user_id: int) -> None:
         max_age=_cookie_max_age,
         httponly=True,
         samesite="lax",
+        secure=settings.panel_cookie_secure,
     )
 
 
@@ -71,6 +77,62 @@ def session_user_id(request: Request) -> int | None:
         return int(uid) if uid is not None else None
     except (BadSignature, ValueError, TypeError):
         return None
+
+
+# --------------------------------------------------------------------------
+# login guardrails (per-IP rate limiting + lockout for public exposure)
+# --------------------------------------------------------------------------
+
+# Process-local failure log: ip -> sorted list of failure timestamps, plus
+# ip -> lockout expiry. The web service runs as a single replica, so memory
+# is sufficient; restarts clear counters while the audit trail keeps history.
+_login_failures: dict[str, list] = {}
+_login_locked_until: dict[str, object] = {}
+
+
+def _login_now():
+    from datetime import datetime
+
+    return datetime.utcnow()
+
+
+def is_login_locked(ip: str) -> bool:
+    """Whether this IP is currently locked out after repeated failures."""
+    from datetime import timedelta
+
+    expiry = _login_locked_until.get(ip)
+    if expiry is None:
+        return False
+    if _login_now() >= expiry:
+        _login_locked_until.pop(ip, None)
+        return False
+    return True
+
+
+def record_login_failure(ip: str) -> bool:
+    """Record a failed login; return True when this failure triggers lockout.
+
+    Sliding window: only failures inside ``panel_login_window_minutes``
+    count toward ``panel_login_max_attempts``; reaching the cap locks the IP
+    for ``panel_login_lockout_minutes``.
+    """
+    from datetime import timedelta
+
+    now = _login_now()
+    window_start = now - timedelta(minutes=settings.panel_login_window_minutes)
+    recent = [t for t in _login_failures.get(ip, []) if t >= window_start]
+    recent.append(now)
+    _login_failures[ip] = recent
+    if len(recent) >= settings.panel_login_max_attempts:
+        _login_locked_until[ip] = now + timedelta(minutes=settings.panel_login_lockout_minutes)
+        return True
+    return False
+
+
+def clear_login_failures(ip: str) -> None:
+    """Forget failures/lockout for an IP (successful login, or tests)."""
+    _login_failures.pop(ip, None)
+    _login_locked_until.pop(ip, None)
 
 
 async def audit(session, user_id: int | None, action: str, main_id: int | None = None, detail: str | None = None) -> None:

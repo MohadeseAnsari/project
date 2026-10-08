@@ -238,3 +238,91 @@ async def test_panel_regenerate_marks_failed_on_provider_error(session: AsyncSes
     await session.refresh(row)
     assert row.status == "failed"
     assert "provider down" in row.error_message
+
+
+@pytest.fixture
+def _clean_login_guard():
+    """Isolate the process-global login counters between tests.
+
+    httpx's ASGI transport reports the peer as 127.0.0.1, so every test
+    shares one bucket — reset it (plus fallbacks) around each test.
+    """
+    from app.panel.auth import clear_login_failures
+
+    for _ip in ("127.0.0.1", "testclient", "unknown"):
+        clear_login_failures(_ip)
+    yield
+    for _ip in ("127.0.0.1", "testclient", "unknown"):
+        clear_login_failures(_ip)
+
+
+@pytest.mark.asyncio
+async def test_failed_login_is_audited(session: AsyncSession, _clean_login_guard):
+    """Wrong passwords return 401 and leave a login_failed audit row."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog
+
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        response = await client.post(
+            "/login", data={"username": "panel-admin", "password": "wrong"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 401
+    actions = (
+        await session.execute(select(AuditLog.action).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert actions == ["login_failed"]
+
+
+@pytest.mark.asyncio
+async def test_login_locks_out_after_repeated_failures(
+    session: AsyncSession, monkeypatch, _clean_login_guard
+):
+    """Reaching the cap returns 429; a later success still needs the lockout cleared."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "panel_login_max_attempts", 3)
+    monkeypatch.setattr(settings, "panel_login_window_minutes", 10)
+    monkeypatch.setattr(settings, "panel_login_lockout_minutes", 15)
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        assert (await client.post("/login", data={"username": "panel-admin", "password": "bad1"})).status_code == 401
+        assert (await client.post("/login", data={"username": "panel-admin", "password": "bad2"})).status_code == 401
+        locked = await client.post("/login", data={"username": "panel-admin", "password": "bad3"})
+        assert locked.status_code == 429
+        # Even the right password is refused while locked.
+        denied = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            follow_redirects=False,
+        )
+        assert denied.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_session_cookie_flags(session: AsyncSession, monkeypatch, _clean_login_guard):
+    """Cookie is HttpOnly + SameSite=Lax, and Secure follows the TLS setting."""
+    from app.config import settings
+
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        plain = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            follow_redirects=False,
+        )
+        jar = plain.headers.get("set-cookie", "")
+        assert "HttpOnly" in jar
+        assert "SameSite=Lax" in jar or "samesite=lax" in jar.lower()
+        assert "Secure" not in jar
+    from app.panel.auth import clear_login_failures
+
+    for _ip in ("127.0.0.1", "testclient", "unknown"):
+        clear_login_failures(_ip)
+    monkeypatch.setattr(settings, "panel_cookie_secure", True)
+    async with _client() as client:
+        tls = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            follow_redirects=False,
+        )
+        assert "Secure" in tls.headers.get("set-cookie", "")

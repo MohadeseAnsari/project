@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     panel_secret_key: str = "change-me-in-production"
     panel_host: str = "127.0.0.1"
     panel_port: int = 8081
+    # Send the session cookie with the Secure flag only when the panel sits
+    # behind a TLS-terminating reverse proxy; over plain HTTP browsers would
+    # otherwise drop the cookie and nobody could log in.
+    panel_cookie_secure: bool = False
+    # Public-login guardrails: N failures from one IP inside the window locks
+    # that IP out for the lockout duration. Process-local memory (single web
+    # replica); restarts clear the counters, failures stay in the audit trail.
+    panel_login_max_attempts: int = 10
+    panel_login_window_minutes: int = 10
+    panel_login_lockout_minutes: int = 15
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
