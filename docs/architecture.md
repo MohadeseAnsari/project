@@ -59,7 +59,8 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### LLM Generation (PydanticAI + AvalAI)
 - Receives thesis metadata as structured data
 - Returns GeneratedNews(title, lead, body)
-- Prompt stored in database with version tracking
+- Resolves model+prompt per job: per-record override (`main.model_id`/`prompt_id` from `POST /submit`) → active row (`is_active`) → config fallback (`settings.llm_model`, packaged prompt)
+- Per-model `base_url`/`api_key_env` (env var name, never the key) override the provider endpoint/key
 - Model and prompt references recorded on main record
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 
