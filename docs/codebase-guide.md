@@ -372,8 +372,9 @@ windows/panes instead of background shell jobs you cannot reattach to.
 - A field with no route falls back to all active channels: fields discovered at
   runtime have no route row, and silently dropping their articles would be worse
   than publishing them to the current channel set.
-- `awaiting_confirmation` exists in the `deliveries` status enum but is never
-  written: the human confirmation step is planned, and having the value now
-  avoids a schema change when it lands.
+- `awaiting_confirmation` is the gated initial delivery status when
+  `REQUIRE_HUMAN_CONFIRMATION=true` (default): queued by the sender but never
+  claimed until approval flips it to `pending`. With the flag off, queueing
+  writes `pending` directly (pre-gate behaviour).
 - At-least-once sending on crash (possible duplicate post in the channel) —
   the same trade-off as generation, and for the same reason.

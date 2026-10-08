@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # the Worker died mid-call, so it is returned to `pending`.
     sender_lease_minutes: int = 5
 
+    # Human gate for publishing. When True (default), newly queued deliveries
+    # start as `awaiting_confirmation` so an article is never published without
+    # explicit approval; approving flips them to `pending`. When False, queueing
+    # writes `pending` directly (the pre-gate behaviour).
+    require_human_confirmation: bool = True
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

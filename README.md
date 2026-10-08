@@ -105,6 +105,7 @@ Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored.
 | `SENDER_BACKOFF_BASE_SECONDS` | Base for exponential send backoff | No (default: 10) |
 | `SENDER_REQUEST_TIMEOUT_SECONDS` | Per-send HTTP timeout | No (default: 20) |
 | `SENDER_LEASE_MINUTES` | Abandoned-send recovery timeout | No (default: 5) |
+| `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as awaiting_confirmation until approval | No (default: true) |
 | `POSTGRES_PASSWORD` | PostgreSQL admin password (postgres service) | No (default: postgres) |
 | `POSTGRES_DB` | PostgreSQL database name (postgres service) | No (default: irandoc_news) |
 
@@ -193,9 +194,9 @@ main.status = 'review'  →  deliveries row per routed channel  →  send  →  
   attempts that could never succeed.
 - **Crash recovery**: a `sending` row older than `SENDER_LEASE_MINUTES` is
   re-queued, trading a possible duplicate post for never losing an article.
-- **Human confirmation** (planned) will gate on the reserved
-  `awaiting_confirmation` status, which exists in the schema but is never
-  written today.
+- **Human confirmation** gates publishing when `REQUIRE_HUMAN_CONFIRMATION=true`
+  (default): queueing writes `awaiting_confirmation`, and approval flips it to
+  `pending`. With the flag off, queueing writes `pending` directly.
 
 Inspect delivery state:
 

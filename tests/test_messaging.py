@@ -369,7 +369,10 @@ async def test_inactive_channel_is_never_resolved(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession):
+async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession, monkeypatch):
+    # Send-path test: opt out of the human gate (default True) to exercise the
+    # pre-gate pending flow; the gate itself is covered in test_human_gate.py.
+    monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     channel = await _channel(session)
     session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
@@ -480,13 +483,15 @@ async def test_ensure_reaches_articles_beyond_a_saturated_batch(session: AsyncSe
 
 @pytest.mark.asyncio
 async def test_ensure_returns_article_delivered_to_one_channel_but_not_another(
-    session: AsyncSession,
+    session: AsyncSession, monkeypatch,
 ):
     """The undelivered test is per-channel, not per-article.
 
     An article sent to one channel but not another still needs work, so it must
     stay visible to the batch query.
     """
+    # Send-path test: opt out of the human gate to assert on pending rows.
+    monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     first = await _channel(session, "bale", 100)
     second = await _channel(session, "telegram", 200)
@@ -758,7 +763,9 @@ async def test_cancellation_leaves_delivery_for_recovery(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_telegram_channel_uses_telegram_client(session: AsyncSession):
+async def test_telegram_channel_uses_telegram_client(session: AsyncSession, monkeypatch):
+    # Send-path test: opt out of the human gate so the queued row is claimable.
+    monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     telegram = await _channel(session, "telegram", 987)
     session.add(FieldChannelRoute(field_id=field.id, channel_id=telegram.id))
@@ -779,7 +786,9 @@ async def test_telegram_channel_uses_telegram_client(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_processed_article_reaches_every_routed_channel(session: AsyncSession):
+async def test_processed_article_reaches_every_routed_channel(session: AsyncSession, monkeypatch):
+    # Send-path test: opt out of the human gate so queued rows are claimable.
+    monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     bale = await _channel(session, "bale", 100)
     telegram = await _channel(session, "telegram", 200)

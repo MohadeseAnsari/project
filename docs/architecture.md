@@ -36,8 +36,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Waits `SENDER_SEND_DELAY_SECONDS` after every attempt so a channel never sees a burst
 - Retries retryable failures with exponential backoff up to `SENDER_MAX_ATTEMPTS`, then parks the delivery as `failed`; permanent errors (unknown chat, revoked token) fail immediately
 - Recovers abandoned `sending` deliveries after `SENDER_LEASE_MINUTES`
-- `awaiting_confirmation` status is reserved for the planned human confirmation step and is not written yet
+- `awaiting_confirmation` is the gated initial status when
+  `REQUIRE_HUMAN_CONFIRMATION=true` (default): the sender never claims it, and
+  approval flips it to `pending`. With the flag off, queueing writes `pending`
+  directly.
 - Runs as its own compose service so channel rate limits and platform outages never affect generation
+- Human gate (`REQUIRE_HUMAN_CONFIRMATION`, default true): new deliveries queue as
+  `awaiting_confirmation` and only become `pending` on explicit approval; when
+  false they queue as `pending` directly (pre-gate behaviour)
 
 ### Field Classification (Deterministic)
 - Normalizes field names (Unicode NFC, trim, collapse whitespace)
