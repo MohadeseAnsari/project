@@ -1,0 +1,23 @@
+<table>
+  <thead><tr><th>شناسه</th><th>رکورد</th><th>کانال</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>کنش</th></tr></thead>
+  <tbody>
+    {% for d in items %}
+    <tr>
+      <td>{{ d.id }}</td>
+      <td><a href="/records/{{ d.main_id }}">{{ d.main_id }}</a></td>
+      <td>{{ d.channel.username or d.channel_id }} ({{ d.channel.platform }})</td>
+      <td><span class="badge {{ d.status }}">{{ d.status }}</span></td>
+      <td>{{ d.attempts }}</td>
+      <td>{{ d.error_message or '—' }}</td>
+      <td>
+        {% if d.status == 'failed' %}
+        <form class="inline" method="post" action="/deliveries/{{ d.id }}/retry">
+          <button class="btn btn-small" type="submit">تلاش مجدد</button>
+        </form>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p>مجموع {{ total }} — صفحه {{ page }}</p>

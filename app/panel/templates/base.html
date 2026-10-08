@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}پنل بررسی{% endblock %} — ایران‌داک</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div><strong>پنل بررسی ایران‌داک</strong></div>
+  <nav>
+    {% if current_user %}
+      <span>{{ current_user.username }} ({{ current_user.role.name }})</span>
+      <a href="/">داشبورد</a>
+      <a href="/logout">خروج</a>
+    {% endif %}
+  </nav>
+</header>
+<div class="layout">
+  {% if current_user %}
+  <aside class="nav">
+    <a href="/" class="{% if active=='dashboard' %}active{% endif %}">داشبورد</a>
+    <a href="/records" class="{% if active=='records' %}active{% endif %}">رکوردها</a>
+    <a href="/deliveries" class="{% if active=='deliveries' %}active{% endif %}">ارسال‌ها</a>
+    <a href="/submit" class="{% if active=='submit' %}active{% endif %}">ثبت پایان‌نامه</a>
+    <a href="/models" class="{% if active=='models' %}active{% endif %}">مدل‌ها</a>
+    <a href="/prompts" class="{% if active=='prompts' %}active{% endif %}">پرامپت‌ها</a>
+    <a href="/channels" class="{% if active=='channels' %}active{% endif %}">کانال‌ها</a>
+    <a href="/fields" class="{% if active=='fields' %}active{% endif %}">رشته‌ها</a>
+    <a href="/categories" class="{% if active=='categories' %}active{% endif %}">دسته‌ها</a>
+  </aside>
+  {% endif %}
+  <main class="main">
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    {% if ok %}<div class="alert alert-ok">{{ ok }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

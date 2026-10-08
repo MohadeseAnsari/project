@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}داشبورد{% endblock %}
+{% block content %}
+<h2>داشبورد</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>رکوردها بر اساس وضعیت</h3>
+    <table><tbody>
+      {% for status, count in records.items() %}
+      <tr><td><span class="badge {{ status }}">{{ status }}</span></td><td>{{ count }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+  <div class="card">
+    <h3>ارسال‌ها بر اساس وضعیت</h3>
+    <table><tbody>
+      {% for status, count in deliveries.items() %}
+      <tr><td><span class="badge {{ status }}">{{ status }}</span></td><td>{{ count }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+    <p>آخرین ضربان کارگر: {{ heartbeat|jalali if heartbeat else '—' }}</p>
+  </div>
+</div>
+<div class="card">
+  <h3>تازه‌ترین رکوردها</h3>
+  <table>
+    <thead><tr><th>شناسه</th><th>وضعیت</th><th>رشته</th><th>عنوان</th><th>ایجاد</th></tr></thead>
+    <tbody>
+      {% for r in recent %}
+      <tr>
+        <td><a href="/records/{{ r.id }}">{{ r.id }}</a></td>
+        <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+        <td>{{ r.field }}</td>
+        <td>{{ r.title[:60] }}</td>
+        <td>{{ r.created_at|jalali }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

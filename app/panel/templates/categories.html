@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}دسته‌ها{% endblock %}
+{% block content %}
+<h2>دسته‌ها</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>شناسه</th><th>نام</th><th>توضیح</th></tr></thead>
+    <tbody>
+      {% for c in categories %}
+      <tr><td>{{ c.id }}</td><td>{{ c.name }}</td><td>{{ c.description or '—' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

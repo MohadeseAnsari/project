@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}رکوردها{% endblock %}
+{% block content %}
+<h2>رکوردها</h2>
+<form class="filters" hx-get="/records/table" hx-target="#records-table" hx-swap="innerHTML" hx-trigger="change, submit">
+  <select name="status">
+    <option value="">همه وضعیت‌ها</option>
+    {% for s in ["ready","processing","review","failed","rejected"] %}
+    <option value="{{ s }}" {% if status==s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input name="field" placeholder="رشته" value="{{ field or '' }}" />
+  <input name="university" placeholder="دانشگاه" value="{{ university or '' }}" />
+  <input name="q" placeholder="جست‌وجو" value="{{ q or '' }}" />
+  <select name="order">
+    <option value="newest" {% if order=='newest' %}selected{% endif %}>جدیدترین</option>
+    <option value="oldest" {% if order=='oldest' %}selected{% endif %}>قدیمی‌ترین</option>
+  </select>
+  <button class="btn btn-small" type="submit">اعمال</button>
+</form>
+<div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load">
+  در حال بارگذاری…
+</div>
+{% endblock %}

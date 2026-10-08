@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}کانال‌ها{% endblock %}
+{% block content %}
+<h2>کانال‌ها و مسیریابی</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>شناسه</th><th>سکو</th><th>chat_id</th><th>نام کاربری</th><th>عنوان</th><th>فعال</th></tr></thead>
+    <tbody>
+      {% for c in channels %}
+      <tr><td>{{ c.id }}</td><td>{{ c.platform }}</td><td><code class="ltr">{{ c.chat_id }}</code></td><td>{{ c.username or '—' }}</td><td>{{ c.title or '—' }}</td><td>{% if c.is_active %}بله{% else %}خیر{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>مسیر رشته → کانال</h3>
+  <form method="post" action="/channels/route">
+    <div class="grid2">
+      <div><label>field_id</label><input name="field_id" type="number" required /></div>
+      <div><label>channel_id</label><input name="channel_id" type="number" required /></div>
+    </div>
+    <p><button class="btn" type="submit">افزودن مسیر</button></p>
+  </form>
+  <table>
+    <thead><tr><th>رشته</th><th>کانال</th><th>حذف</th></tr></thead>
+    <tbody>
+      {% for r in routes %}
+      <tr><td>{{ r.field_id }} ({{ r.field_name }})</td><td>{{ r.channel_id }}</td>
+        <td><form class="inline" method="post" action="/channels/unroute"><input type="hidden" name="field_id" value="{{ r.field_id }}" /><input type="hidden" name="channel_id" value="{{ r.channel_id }}" /><button class="btn btn-small btn-danger" type="submit">حذف</button></form></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>کانال جدید</h3>
+  <form method="post" action="/channels">
+    <div class="grid2">
+      <div><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
+      <div><label>chat_id</label><input name="chat_id" type="number" required /></div>
+      <div><label>username</label><input name="username" /></div>
+      <div><label>title</label><input name="title" /></div>
+    </div>
+    <p><button class="btn" type="submit">ایجاد کانال</button></p>
+  </form>
+</div>
+{% endblock %}

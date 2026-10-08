@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}ورود{% endblock %}
+{% block content %}
+<div class="login-wrap card">
+  <h2>ورود به پنل بررسی</h2>
+  <form method="post" action="/login">
+    <label for="username">نام کاربری</label>
+    <input id="username" name="username" autocomplete="username" required />
+    <label for="password">گذرواژه</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <p><button class="btn" type="submit">ورود</button></p>
+  </form>
+</div>
+{% endblock %}

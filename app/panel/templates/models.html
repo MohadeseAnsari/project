@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}مدل‌ها{% endblock %}
+{% block content %}
+<h2>مدل‌ها</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>نام</th><th>ارائه‌دهنده</th><th>نسخه</th><th>فعال</th><th>کنش</th></tr></thead>
+    <tbody>
+      {% for m in models %}
+      <tr>
+        <td><code class="ltr">{{ m.name }}</code></td>
+        <td>{{ m.provider }}</td>
+        <td>{{ m.version }}</td>
+        <td>{% if m.is_active %}بله{% else %}خیر{% endif %}</td>
+        <td>
+          {% if not m.is_active %}
+          <form class="inline" method="post" action="/models/{{ m.id }}/activate"><button class="btn btn-small" type="submit">فعال‌سازی</button></form>
+          {% endif %}
+          <form class="inline" method="post" action="/models/{{ m.id }}/test"><button class="btn btn-small btn-ghost" type="submit">تست اتصال</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>مدل جدید</h3>
+  <form method="post" action="/models">
+    <div class="grid2">
+      <div><label>نام</label><input name="name" required /></div>
+      <div><label>ارائه‌دهنده</label><input name="provider" value="openai" required /></div>
+      <div><label>نسخه</label><input name="version" value="latest" required /></div>
+      <div><label>base_url (اختیاری)</label><input name="base_url" /></div>
+      <div><label>api_key_env (نام متغیر محیطی)</label><input name="api_key_env" /></div>
+      <div><label>temperature (اختیاری)</label><input name="temperature" type="number" step="0.1" min="0" max="2" /></div>
+      <div><label>max_output_tokens (اختیاری)</label><input name="max_output_tokens" type="number" min="1" max="32000" /></div>
+    </div>
+    <label>توضیح</label><textarea name="description" rows="2"></textarea>
+    <p><button class="btn" type="submit">ایجاد</button></p>
+  </form>
+</div>
+{% endblock %}

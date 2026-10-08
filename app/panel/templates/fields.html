@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}رشته‌ها{% endblock %}
+{% block content %}
+<h2>رشته‌ها</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>شناسه</th><th>نام</th><th>دسته</th><th>منبع</th></tr></thead>
+    <tbody>
+      {% for f in fields %}
+      <tr><td>{{ f.id }}</td><td>{{ f.name }}</td><td>{{ f.category.name if f.category else '—' }}</td><td>{{ f.source }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

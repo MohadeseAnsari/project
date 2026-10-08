@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}ثبت پایان‌نامه{% endblock %}
+{% block content %}
+<h2>ثبت پایان‌نامه</h2>
+<div class="card">
+  <form method="post" action="/submit">
+    <div class="grid2">
+      <div><label>username</label><input name="username" required /></div>
+      <div><label>field (رشته فارسی)</label><input name="field" required /></div>
+      <div><label>university</label><input name="university" required /></div>
+      <div><label>author</label><input name="author" required /></div>
+      <div><label>supervisor</label><input name="supervisor" required /></div>
+      <div><label>title</label><input name="title" required /></div>
+    </div>
+    <label>abstract</label><textarea name="abstract" rows="3" required></textarea>
+    <label>table_of_contents</label><textarea name="table_of_contents" rows="3" required></textarea>
+    <div class="grid2">
+      <div><label>مدل (اختیاری)</label>
+        <select name="model_id"><option value="">پیش‌فرض فعال</option>
+        {% for m in models %}<option value="{{ m.id }}">{{ m.name }}{% if m.is_active %} (فعال){% endif %}</option>{% endfor %}
+        </select></div>
+      <div><label>پرامپت (اختیاری)</label>
+        <select name="prompt_id"><option value="">پیش‌فرض فعال</option>
+        {% for p in prompts %}<option value="{{ p.id }}">{{ p.version }}{% if p.is_active %} (فعال){% endif %}</option>{% endfor %}
+        </select></div>
+    </div>
+    <p><button class="btn" type="submit">ثبت</button></p>
+  </form>
+</div>
+{% endblock %}

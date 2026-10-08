@@ -1,0 +1,24 @@
+<table>
+  <thead><tr><th>شناسه</th><th>وضعیت</th><th>رشته</th><th>دانشگاه</th><th>عنوان</th><th>ایجاد</th></tr></thead>
+  <tbody>
+    {% for r in items %}
+    <tr>
+      <td><a href="/records/{{ r.id }}">{{ r.id }}</a></td>
+      <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+      <td>{{ r.field }}</td>
+      <td>{{ r.university }}</td>
+      <td>{{ r.title[:70] }}</td>
+      <td>{{ r.created_at|jalali }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p>صفحه {{ page }} از {{ (total // page_size) + (1 if total % page_size else 0) }} — مجموع {{ total }}</p>
+<div>
+  {% if page > 1 %}
+  <button class="btn btn-ghost btn-small" hx-get="/records/table?{{ query }}&page={{ page - 1 }}" hx-target="#records-table">قبلی</button>
+  {% endif %}
+  {% if page * page_size < total %}
+  <button class="btn btn-ghost btn-small" hx-get="/records/table?{{ query }}&page={{ page + 1 }}" hx-target="#records-table">بعدی</button>
+  {% endif %}
+</div>

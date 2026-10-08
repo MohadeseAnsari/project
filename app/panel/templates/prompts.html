@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}پرامپت‌ها{% endblock %}
+{% block content %}
+<h2>پرامپت‌ها (نسخه‌های تغییرناپذیر)</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>نسخه</th><th>فعال</th><th>ایجاد</th><th>کنش</th></tr></thead>
+    <tbody>
+      {% for p in prompts %}
+      <tr>
+        <td><code class="ltr">{{ p.version }}</code></td>
+        <td>{% if p.is_active %}بله{% else %}خیر{% endif %}</td>
+        <td>{{ p.created_at|jalali }}</td>
+        <td>{% if not p.is_active %}
+          <form class="inline" method="post" action="/prompts/{{ p.id }}/activate"><button class="btn btn-small" type="submit">فعال‌سازی</button></form>
+          {% endif %}</td>
+      </tr>
+      <tr><td colspan="4"><pre style="white-space:pre-wrap">{{ p.system_prompt[:500] }}</pre></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>نسخه جدید (سطر جدید + غیرفعال‌سازی قبلی، هرگز ویرایش درجا)</h3>
+  <form method="post" action="/prompts">
+    <label>نسخه</label><input name="version" required />
+    <label>متن سیستمی</label><textarea name="system_prompt" rows="6" required></textarea>
+    <p><button class="btn" type="submit">ایجاد نسخه</button></p>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}بررسی رکورد {{ record.id }}{% endblock %}
+{% block content %}
+<h2>رکورد {{ record.id }} — <span class="badge {{ record.status }}">{{ record.status }}</span></h2>
+<div class="card">
+  <p><strong>رشته:</strong> {{ record.field }} | <strong>دانشگاه:</strong> {{ record.university }}</p>
+  <p><strong>نویسنده:</strong> {{ record.author }} | <strong>استاد راهنما:</strong> {{ record.supervisor }}</p>
+  {% if record.output_json %}
+  <form method="post" action="/records/{{ record.id }}/review">
+    <label for="title">عنوان خبر</label>
+    <input id="title" name="title" value="{{ record.output_json.get('title','') }}" />
+    <label for="lead">لید</label>
+    <textarea id="lead" name="lead" rows="2">{{ record.output_json.get('lead','') }}</textarea>
+    <label for="body">متن</label>
+    <textarea id="body" name="body" rows="8">{{ record.output_json.get('body','') }}</textarea>
+    <p>
+      <button class="btn" name="action" value="approve" type="submit">تأیید و انتشار</button>
+      <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیره پیش‌نویس</button>
+      <button class="btn btn-danger" name="action" value="reject" type="submit">رد</button>
+    </p>
+  </form>
+  {% else %}
+  <p>خروجی هنوز تولید نشده است.</p>
+  {% endif %}
+  {% if record.error_message %}<p><strong>خطا:</strong> {{ record.error_message }}</p>{% endif %}
+</div>
+<div class="card">
+  <h3>وضعیت ارسال‌ها</h3>
+  <table>
+    <thead><tr><th>کانال</th><th>سکو</th><th>وضعیت</th><th>تلاش</th><th>خطا</th></tr></thead>
+    <tbody>
+      {% for d in deliveries %}
+      <tr>
+        <td>{{ d.channel.username or d.channel_id }}</td>
+        <td>{{ d.channel.platform }}</td>
+        <td><span class="badge {{ d.status }}">{{ d.status }}</span></td>
+        <td>{{ d.attempts }}</td>
+        <td>{{ d.error_message or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>تاریخچه</h3>
+  <table>
+    <thead><tr><th>زمان</th><th>کاربر</th><th>کنش</th><th>جزئیات</th></tr></thead>
+    <tbody>
+      {% for h in history %}
+      <tr><td>{{ h.created_at|jalali }}</td><td>{{ h.user.username if h.user else '—' }}</td><td>{{ h.action }}</td><td>{{ h.detail or '—' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
