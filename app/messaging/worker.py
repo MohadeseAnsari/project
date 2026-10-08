@@ -54,6 +54,7 @@ async def run_sender() -> None:
     stop_event = asyncio.Event()
 
     def signal_handler():
+        """Stop after the in-flight send (recovery re-queues it if cut short)."""
         logger.info("Shutdown signal received")
         stop_event.set()
 

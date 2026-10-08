@@ -74,11 +74,11 @@ class Settings(BaseSettings):
 
     # Review panel (server-rendered Jinja2 + HTMX). Credentials come from env
     # only; the first admin is created at runtime, never seeded in migrations.
+    # (The panel's listen address/port live in docker-compose.yml, not here:
+    # a settings field the container never reads would be a lie.)
     panel_admin_username: str = "admin"
     panel_admin_password: str = ""
     panel_secret_key: str = "change-me-in-production"
-    panel_host: str = "127.0.0.1"
-    panel_port: int = 8081
     # Send the session cookie with the Secure flag only when the panel sits
     # behind a TLS-terminating reverse proxy; over plain HTTP browsers would
     # otherwise drop the cookie and nobody could log in.

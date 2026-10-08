@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import jdatetime
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,7 +20,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.connection import async_session, engine, get_session
+from app.db.connection import async_session, engine
 from app.db.models import (
     AuditLog,
     Category,
@@ -37,7 +37,6 @@ from app.db.models import (
 from app.messaging.dispatcher import confirm_deliveries_for_article
 from app.panel.auth import audit, ensure_admin_user, session_user_id
 
-logger = logging.getLogger(__name__)
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
 

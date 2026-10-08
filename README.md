@@ -1,79 +1,142 @@
 # IranDoc News Generation
 
-Automatic journalistic news generation from IranDoc thesis metadata. A thesis
-is submitted as JSON, stored in PostgreSQL as a job, and processed by a
-single persistent Worker that generates a Persian news article (title, lead,
-body) using an LLM.
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688)
+![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791)
+![Docker](https://img.shields.io/badge/docker-compose-ready-2496ED)
+![License](https://img.shields.io/badge/license-internal-lightgrey)
 
-## Architecture
+Automatic journalistic news generation from IranDoc thesis metadata, with a
+human review panel in front of publishing. A thesis is submitted as JSON,
+stored in PostgreSQL as a job, processed by a persistent Worker that generates
+a Persian news article (title, lead, body) with an LLM — then a reviewer
+approves it in a server-rendered panel before a separate sender Worker
+publishes it to Bale/Telegram channels.
 
+```text
+Thesis JSON ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (status='ready')
+                                                      │  FOR UPDATE SKIP LOCKED, FIFO
+Generation Worker ◀──claim────────────────────────────┘
+  │  normalize + rule-based classify (deterministic, never the LLM)
+  │  PydanticAI Agent ──▶ AvalAI ──▶ {title, lead, body}
+  ▼
+PostgreSQL (status='review', output_json) ──▶ sender queues awaiting_confirmation
+                                                      │  human gate (default ON)
+Review panel ◀── reviewer edits + approves ───────────┘──▶ status='pending'
+                                                      │
+Sender Worker ◀──claim── render ──▶ Bale / Telegram ──▶ status='sent'
 ```
-Input JSON
-    ↓
-FastAPI  (authenticate → validate → store)
-    ↓
-PostgreSQL  (main.status = 'ready')   ← PostgreSQL is both storage and queue
-    ↓
-Persistent sequential Worker  (claim → normalize → classify → generate)
-    ↓
-AvalAI / PydanticAI  (LLM news generation — the ONLY use of the LLM)
-    ↓
-PostgreSQL  (main.status = 'review', output_json = {title, lead, body})
-    ↓
-Persistent sender Worker  (processed-but-unsent → render → send → mark sent)
-    ↓
-Bale / Telegram channels  (deliveries.status = 'sent')
-```
 
-- **PostgreSQL** is both the persistent store and the job queue.
-- **One persistent sequential Worker** processes jobs one at a time, oldest
-  first (`ORDER BY created_at`, `FOR UPDATE SKIP LOCKED`).
-- **One persistent sender Worker** publishes finished articles to channels,
-  with a configurable delay between sends. It is a separate process so channel
-  rate limits and platform outages never affect generation.
+- **PostgreSQL is both storage and queue.** No Redis, Celery, Kafka,
+  Kubernetes, or microservices — one modular monolith, four runtime
+  components (`postgres`, `api`, `worker`, `sender`) plus the review panel
+  (`web`, same image, different command).
 - **The LLM is used ONLY for news generation.** Field/category classification
-  is deterministic and rule-based — the LLM never classifies.
-- **No Redis, Celery, Kafka, Kubernetes, or microservices.**
+  is deterministic and rule-based; the LLM never classifies.
+- **Nothing publishes without a human.** Deliveries queue as
+  `awaiting_confirmation` and flip to `pending` only on approval
+  (`REQUIRE_HUMAN_CONFIRMATION`, default `true`).
+- **One system, not two apps.** The panel shares the same database, ORM
+  models, settings, and domain helpers as the workers
+  (see `docs/admin-panel.md` → *Wiring*).
 
-## Project Structure
+## Contents
 
-```
+- [Features](#features)
+- [Project structure](#project-structure)
+- [Requirements](#requirements)
+- [Configuration](#configuration)
+- [Quickstart](#quickstart)
+- [Machine API reference](#machine-api-reference)
+- [Review panel](#review-panel)
+- [Database & migrations](#database--migrations)
+- [Workers](#workers)
+- [Security](#security)
+- [Demo](#demo)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Docs](#docs)
+- [License](#license)
+
+## Features
+
+**Machine API** (shared-secret auth, interactive Swagger at `/docs`):
+
+- `POST /submit` — validate thesis JSON, store a `ready` job (optional
+  per-record `model_id`/`prompt_id` overrides); auth is checked *before*
+  validation, so rejected requests never create rows.
+- `GET /records` — paginated, filterable listing (`page`/`page_size≤100`,
+  `status`/`field`/`university`/`q`/`order`) with `LIMIT/OFFSET + COUNT`.
+- `GET /records/{id}` — status, generated output, thesis metadata, audit FKs,
+  timestamps, and per-channel delivery state.
+- `PATCH /records/{id}` — human decisions (`approve`/`reject`/`save_draft`,
+  only from `review`, else `409`), with optional title/lead/body edits.
+- `GET /deliveries` + `POST /deliveries/{id}/retry` — paginated delivery
+  listing and manual re-queue of `failed` rows (attempts reset).
+- `GET /stats` — record/delivery counts per status plus Worker heartbeat
+  freshness (no per-record timings).
+- `/models` + `/prompts` — list/create/detail, atomic single-active
+  `POST /{id}/activate`, immutable prompt versions (new version = new row),
+  and a real 1-token `POST /models/{id}/test-connection` that never
+  returns or logs a key.
+
+**Review panel** (Persian RTL UI, Jinja2 + locally vendored HTMX, no build
+step, no CDN — see [Review panel](#review-panel)):
+
+- Login with per-IP lockout, argon2 passwords, signed cookies, full audit.
+- Dashboard (KPIs, 7-day chart, health, timeline, channels), records list
+  with live HTMX tables, tabbed review page (edit, raw JSON, metadata,
+  history, delivery preview of exactly what approval will send), deliveries
+  with retry, submit form, models/prompts/channels/fields/categories
+  management, users + roles, and a global audit trail.
+- Three roles: **viewer** (read-only), **editor** (review), **admin** (full).
+
+## Project structure
+
+```text
 project/
 ├── app/
-│   ├── main.py               # FastAPI app, lifespan, OpenAPI customization
-│   ├── config.py             # Settings from environment / .env
+│   ├── main.py               # FastAPI app factory, CORS, OpenAPI body for /submit
+│   ├── config.py             # Typed settings from env/.env (the ONLY config source)
+│   ├── submissions.py        # Shared thesis intake used by API and panel alike
 │   ├── db/
-│   │   ├── connection.py     # Async engine + session factory
-│   │   └── models.py         # SQLAlchemy ORM models
-│   ├── schemas/news.py       # Pydantic request/response contracts
+│   │   ├── connection.py     # Shared async engine + session factory
+│   │   └── models.py         # ORM models mirroring the migrated schema
+│   ├── schemas/news.py       # Pydantic contracts for every API shape
 │   ├── api/
-│   │   ├── routes.py         # /submit, /health, /records/{id}
-│   │   └── limits.py         # Rate limiter (10/min per client)
-│   ├── auth/secret.py        # Constant-time shared-secret verification
+│   │   ├── routes.py         # All machine endpoints (never calls the LLM)
+│   │   └── limits.py         # Rate limiter (10/min per client on /submit)
+│   ├── auth/secret.py        # Constant-time shared-secret check (machines only)
 │   ├── fields/
-│   │   ├── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
-│   │   └── classification.py # Deterministic keyword rules → category
+│   │   ├── normalization.py  # NFC, zero-width removal, whitespace collapse
+│   │   └── classification.py # Priority-ordered keyword rules → category
 │   ├── news/
-│   │   ├── generation.py     # PydanticAI Agent + AvalAI client
-│   │   └── prompts.py        # Versioned system prompt (injection-safe)
-│   ├── worker/worker.py      # Persistent sequential Worker + recovery
-│   └── messaging/
-│       ├── formatting.py     # Article → channel message text
-│       ├── platforms.py      # Bale + Telegram HTTP clients
-│       ├── dispatcher.py     # Delivery queue: enqueue / claim / retry
-│       └── worker.py         # Persistent sender Worker + recovery
-├── migrations/               # SQL migrations (authoritative schema)
+│   │   ├── generation.py     # PydanticAI Agent + shared resolve/probe helpers
+│   │   └── prompts.py        # Packaged fallback system prompt (injection-safe)
+│   ├── worker/worker.py      # Persistent sequential generation Worker + recovery
+│   ├── messaging/
+│   │   ├── formatting.py     # Article → channel message text
+│   │   ├── platforms.py      # Bale + Telegram HTTP clients
+│   │   ├── dispatcher.py     # Delivery queue: enqueue / claim / retry policy
+│   │   └── worker.py         # Persistent sender Worker + recovery
+│   └── panel/                # Server-rendered review UI (same image, `web` service)
+│       ├── app.py            # Panel routes (cookie auth, never the shared secret)
+│       ├── auth.py           # argon2, signed cookies, login lockout, proxy IP
+│       ├── templates/        # Jinja2 pages ported from the approved design
+│       └── static/           # panel.css (byte-identical design), HTMX, Vazirmatn
+├── migrations/               # SQL migrations 001–009 (authoritative schema)
 ├── scripts/
-│   ├── apply_migrations.py    # Ordered, once-only migration runner
-│   ├── seed_fields.py        # Loads data/fields.xlsx into the fields table
+│   ├── apply_migrations.py   # Ordered, once-only runner (`_migrations` table)
+│   ├── seed_fields.py        # Loads data/fields.xlsx (idempotent)
 │   └── manage_channels.py    # Channels + field → channel routes CLI
-├── tests/                    # pytest suite (PostgreSQL-backed)
+├── tests/                    # pytest suite, PostgreSQL-backed (no SQLite)
 ├── data/fields.xlsx          # 533 source field names
-├── docs/                     # architecture.md, erd.md, codebase-guide.md
-├── Dockerfile
-├── docker-compose.yml
+├── docs/                     # architecture, codebase-guide, erd, demo, admin-panel
+├── demo/                     # Static machine-API demo UI (:8080) + fonts
+├── Dockerfile                # python:3.12-slim, non-root user
+├── docker-compose.yml        # postgres, migrate, api, demo, worker, sender, web
 ├── requirements.txt
-└── .env.example              # Placeholder values only — no real secrets
+└── .env.example              # Placeholders only — no real secrets
 ```
 
 ## Requirements
@@ -82,369 +145,246 @@ project/
 - PostgreSQL 16
 - Docker + Docker Compose (for the containerized stack)
 
-## Environment Variables
+## Configuration
 
-Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored.
+Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored;
+nothing secret is ever baked into images or committed.
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DATABASE_URL` | PostgreSQL connection URL | Yes |
-| `SHARED_SECRET` | Authentication secret | Yes |
+| `SHARED_SECRET` | Machine-API authentication secret | Yes |
 | `AVALAI_API_KEY` | AvalAI API key | Yes |
 | `AVALAI_BASE_URL` | AvalAI base URL | Yes |
 | `LLM_MODEL` | Model runtime identifier (`gpt-5.6-luna`) | Yes |
 | `LLM_TIMEOUT_SECONDS` | LLM call timeout | No (default: 120) |
-| `WORKER_POLL_INTERVAL_SECONDS` | Queue poll interval | No (default: 1) |
-| `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Heartbeat interval | No (default: 30) |
+| `WORKER_POLL_INTERVAL_SECONDS` | Generation queue poll interval | No (default: 1) |
+| `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Heartbeat interval (must stay ≪ lease) | No (default: 30) |
 | `WORKER_LEASE_MINUTES` | Stale-job recovery timeout | No (default: 5) |
 | `BALE_BOT_TOKEN` | Bale bot token used by the `sender` service | Yes for sending |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token (unused until a Telegram channel is routed) | No |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (until a Telegram channel is routed) | No |
 | `SENDER_SEND_DELAY_SECONDS` | Delay between two consecutive channel sends | No (default: 5) |
 | `SENDER_POLL_INTERVAL_SECONDS` | Sender idle poll interval | No (default: 2) |
-| `SENDER_MAX_ATTEMPTS` | Send attempts before a delivery is parked as `failed` | No (default: 5) |
+| `SENDER_MAX_ATTEMPTS` | Send attempts before parking as `failed` | No (default: 5) |
 | `SENDER_BACKOFF_BASE_SECONDS` | Base for exponential send backoff | No (default: 10) |
 | `SENDER_REQUEST_TIMEOUT_SECONDS` | Per-send HTTP timeout | No (default: 20) |
 | `SENDER_LEASE_MINUTES` | Abandoned-send recovery timeout | No (default: 5) |
-| `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as awaiting_confirmation until approval | No (default: true) |
+| `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as `awaiting_confirmation` until approval | No (default: true) |
 | `PANEL_ADMIN_USERNAME` | Review panel first admin username | No (default: admin) |
-| `PANEL_ADMIN_PASSWORD` | Review panel first admin password (env only, hashed with argon2) | Yes for panel login |
+| `PANEL_ADMIN_PASSWORD` | Review panel first admin password (env only, argon2-hashed) | Yes for panel login |
 | `PANEL_SECRET_KEY` | Review panel cookie signing key | Yes for panel |
-| `PANEL_PORT` | Published panel port (loopback-only by default; `8081` binds all interfaces) | No (default: 127.0.0.1:8081) |
-| `PANEL_COOKIE_SECURE` | Send session cookie with Secure (enable behind TLS proxy) | No (default: false) |
+| `PANEL_PORT` | Published panel port (loopback-only by default) | No (default: 127.0.0.1:8081) |
+| `PANEL_COOKIE_SECURE` | Send session cookie with `Secure` (enable behind TLS proxy) | No (default: false) |
 | `PANEL_LOGIN_MAX_ATTEMPTS` / `PANEL_LOGIN_WINDOW_MINUTES` / `PANEL_LOGIN_LOCKOUT_MINUTES` | Per-IP login failures in window before lockout | No (defaults: 10/10/15) |
-| `POSTGRES_PASSWORD` | PostgreSQL admin password (postgres service) | No (default: postgres) |
-| `POSTGRES_DB` | PostgreSQL database name (postgres service) | No (default: irandoc_news) |
+| `PANEL_SESSION_HOURS` | Session lifetime in hours (cookie + server check agree) | No (default: 12) |
+| `PANEL_TRUSTED_PROXIES` | Extra trusted proxy peers/networks for `X-Forwarded-*` | No (default: loopback only) |
+| `POSTGRES_PASSWORD` | PostgreSQL admin password (no default — compose refuses without it) | Yes |
+| `POSTGRES_DB` | PostgreSQL database name | No (default: irandoc_news) |
+| `API_HOST` / `API_PORT` | API listen address inside its container | No (defaults: 0.0.0.0/8000) |
+| `DEMO_CORS_ORIGINS` | Browser origins allowed to call the API cross-origin | No (default: local :8080) |
 
-## Running Locally (Docker Compose)
+## Quickstart
 
 ```bash
 cp .env.example .env          # edit with real credentials
 docker compose up -d
 docker compose ps
 curl.exe http://localhost:8000/health
+# → {"status":"ok","database":"connected"}
 ```
 
-Review panel (same image, `web` service): set `PANEL_ADMIN_PASSWORD` +
-`PANEL_SECRET_KEY` in `.env`, then open the panel through your HTTPS reverse
-proxy (it forwards to loopback `127.0.0.1:8081`; plain HTTP on `:8081` is not
-exposed to the internet). Plain HTTP transmits the password unencrypted — TLS
-at the proxy is required, not optional. Emergency public exposure only with
-`PANEL_PORT=8081` and only behind a TLS proxy. See `docs/admin-panel.md` for
-pages, roles, and security notes.
-
-Apply migrations and seed fields (first run only):
+First run only — seed the 533 fields (idempotent):
 
 ```bash
 docker compose exec api python scripts/seed_fields.py
 ```
 
-## Database Migrations
+Submit a thesis (all nine fields required; `model_id`/`prompt_id` optional):
 
-SQL migrations in `migrations/` are the authoritative schema. They are applied
-in filename order and tracked in the `_migrations` table, so each runs exactly
-once:
+```bash
+curl.exe -X POST http://localhost:8000/submit -H "Content-Type: application/json" -d "{
+  \"shared_Secret\": \"REPLACE_WITH_REAL_SECRET\",
+  \"username\": \"researcher1\",
+  \"title\": \"عنوان پایان‌نامه\",
+  \"abstract\": \"چکیده پایان‌نامه\",
+  \"field\": \"پزشکی\",
+  \"university\": \"دانشگاه تهران\",
+  \"table_of_contents\": \"فهرست مطالب\",
+  \"author\": \"نام نویسنده\",
+  \"supervisor\": \"نام استاد راهنما\"
+}"
+# → {"id": 1, "status": "ready"}
+```
 
-1. `001_initial_schema.sql` — tables, constraints, indexes
+Watch the Worker claim it, generate the article, and park it for review;
+approve it in the panel (below) and watch the sender deliver it:
+
+```bash
+docker compose logs --tail=50 worker
+curl.exe "http://localhost:8000/records/1?shared_Secret=REPLACE_WITH_REAL_SECRET"
+```
+
+Panel: set `PANEL_ADMIN_PASSWORD` + `PANEL_SECRET_KEY`, `docker compose up -d
+web`, and open it through your HTTPS reverse proxy (it forwards to loopback
+`127.0.0.1:8081`; plain HTTP on `:8081` is never exposed). Log in, give the
+client their own account from the Users page — never share the admin login.
+
+## Machine API reference
+
+Interactive docs: **http://localhost:8000/docs** (Swagger UI sends real
+requests — no mocks).
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `POST /submit` | `shared_Secret` in body (checked before validation) | Store thesis → `{"id","status":"ready"}`; `400` bad JSON, `401` bad secret, `422` validation/unknown `model_id`/`prompt_id` |
+| `GET /health` | none | `{"status":"ok","database":"connected"}` iff `SELECT 1` succeeds |
+| `GET /records` | `shared_Secret` query | Paginated listing: `page`, `page_size≤100`, `status`, `field`, `university`, `q`, `order=newest\|oldest` → `{items,total,page,page_size}` |
+| `GET /records/{id}` | `shared_Secret` query | Full detail: status, `output_json`, thesis fields, audit FKs, timestamps, deliveries |
+| `PATCH /records/{id}` | `shared_Secret` in body | `{action: approve\|reject\|save_draft, title?,lead?,body?}`; review-only, else `409` |
+| `GET /deliveries` | `shared_Secret` query | Paginated; filters `status`, `platform`, `main_id` |
+| `POST /deliveries/{id}/retry` | `shared_Secret` in body | Re-queue `failed` as `pending` (attempts reset); else `409` |
+| `GET /stats` | `shared_Secret` query | Counts per status + Worker heartbeat freshness |
+| `GET/POST /models`, `GET/PATCH /models/{id}` | `shared_Secret` | Model CRUD (`is_active` only via activate) |
+| `POST /models/{id}/activate` | `shared_Secret` in body | Exactly one active model, atomically |
+| `POST /models/{id}/test-connection` | `shared_Secret` in body | Real 1-token probe → `{ok,model,error}`; key never returned |
+| `GET/POST /prompts`, `GET /prompts/{id}` | `shared_Secret` | Immutable versions: new version = new row, never edited |
+| `POST /prompts/{id}/activate` | `shared_Secret` in body | Exactly one active prompt, atomically |
+
+Contracts are frozen: `POST /submit` keeps its exact field names/casing
+(including `shared_Secret`); `/health` and `/records/{id}` keep their fields.
+New endpoints only add.
+
+## Review panel
+
+Persian RTL UI at the reverse-proxy address → loopback `:8081` → `web`
+service (same image as `api`, different command). Jinja2 + locally vendored
+HTMX (tables re-poll every 15s — no websockets), plain CSS ported
+byte-identical from the approved design, vendored Vazirmatn. Full page/role
+reference: `docs/admin-panel.md`.
+
+| Page | What reviewers do there |
+|---|---|
+| Dashboard | KPIs, 7-day chart, Worker/sender health, recent events, channels |
+| Records | Filterable queue; per-row approve shortcut and review links |
+| Record review | Tabbed: editable text, raw model JSON, input metadata, history, delivery preview of exactly what approval will send; approve / save draft / reject / regenerate-with-model |
+| Deliveries | Filterable send states; retry failed rows |
+| Submit | Same intake as `POST /submit`, with model/prompt override selects |
+| Models / Prompts / Channels | Activate + connection test; immutable prompt versions; routes matrix |
+| Fields / Categories | Reference data with routing and usage |
+| Users / Audit | Admin-only accounts (create, role, activate, password reset), own-password change on Profile, immutable event trail |
+
+Roles: **viewer** (read-only — every mutation is `403`), **editor**
+(review, retry, submit), **admin** (everything, incl. config and users).
+First admin comes from `PANEL_ADMIN_USERNAME`/`PANEL_ADMIN_PASSWORD` at
+startup; every login (including failures, with visitor IP), review, retry,
+and config change is audited.
+
+**Public-exposure hardening:** per-IP login lockout
+(`PANEL_LOGIN_MAX_ATTEMPTS/WINDOW/LOCKOUT`), argon2 passwords, signed
+`HttpOnly` + `SameSite=Lax` cookies (`Secure` when `PANEL_COOKIE_SECURE` or the
+trusted proxy reports `https`), 12h agreed session expiry
+(`PANEL_SESSION_HOURS`), and `X-Forwarded-For/Proto` honored only from the
+local proxy plus `PANEL_TRUSTED_PROXIES` (direct clients' headers are
+ignored). Plain HTTP transmits passwords unencrypted — TLS at the reverse
+proxy is required, not optional.
+
+## Database & migrations
+
+PostgreSQL is the persistent store *and* the job queue. `migrations/*.sql`
+are the authoritative schema, applied in filename order and tracked in
+`_migrations` (each runs exactly once; the `migrate` one-shot service
+no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
+
+1. `001_initial_schema.sql` — `categories`, `fields`, `models`, `prompts`, `main`
 2. `002_seed_categories.sql` — 13 categories + `other`
 3. `003_seed_prompt.sql` — the v1 system prompt
 4. `004_seed_model.sql` — the active model configuration
-5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`,
-   `deliveries`, plus the initial Bale channel and its routes for every field
+5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`, `deliveries` + initial Bale channel and routes
 6. `006_add_rejected_status.sql` — allow `rejected` on `main.status`
 7. `007_model_config_columns.sql` — `models.base_url/api_key_env/temperature/max_output_tokens/description`
 8. `008_panel_auth_audit.sql` — `roles`, `panel_users`, `audit_logs`
 9. `009_seed_viewer_role.sql` — read-only `viewer` role
 
-Migrations run automatically: the one-shot `migrate` service executes
-`scripts/apply_migrations.py` on every `docker compose up`, and both `api` and
-`worker` wait on it via `condition: service_completed_successfully`. Because the
-runner skips already-recorded filenames, it is a no-op on subsequent runs, and a
-failed migration stops `api`/`worker` from starting rather than letting them run
-against a missing schema. No job or field rows are inserted by this step.
+Migrations are additive-only and never edited after applying — schema changes
+always add the next numbered file. Full ER diagram: `docs/erd.md`.
 
-To run it by hand:
+## Workers
 
-```bash
-docker compose exec api python scripts/apply_migrations.py
-```
+**Generation Worker** (`worker`): recovers stale `processing` jobs past
+`WORKER_LEASE_MINUTES`, claims the oldest `ready` row with
+`FOR UPDATE SKIP LOCKED`, resolves field → category deterministically,
+links the effective model/prompt (per-record override → active row →
+config fallback), keeps a heartbeat alive across the bounded LLM call, stores
+`output_json` as `review` — or `failed` with the error text. Generation is
+*not* retried; crashes recover to `ready` (at-least-once).
 
-## Field Seed
-
-Loads the 533 field names from `data/fields.xlsx` into the `fields` table,
-normalized and deterministically classified. Idempotent
-(`ON CONFLICT (normalized_name) DO NOTHING`):
-
-```bash
-docker compose exec api python scripts/seed_fields.py
-```
-
-## Channel Delivery
-
-Once an article reaches `status = 'review'` it is *processed*. The `sender`
-service publishes processed articles to channels:
-
-```
-main.status = 'review'  →  deliveries row per routed channel  →  send  →  deliveries.status = 'sent'
-```
-
-- **What counts as "processed but not sent"** is not a flag — it is the absence
-  of a delivery for a routed channel. Once a field fans out to several
-  channels, an article has one independent send state per destination, each with
-  its own attempt count and error.
-- **Message format** (per channel, `📢` footer names the channel):
-
-  ```
-  📰 *Title*
-
-  📰 Lead
-
-  📄 Body
-
-  📢 @newschanneltest123
-  ```
-
-- **Throttle**: `SENDER_SEND_DELAY_SECONDS` is applied after every send attempt,
-  so a channel never sees a burst.
-- **Retries**: timeouts, rate limits and 5xx responses are retried with
-  exponential backoff up to `SENDER_MAX_ATTEMPTS`, then the delivery is parked
-  in `failed` with its error for manual inspection. A permanent error (unknown
-  chat, revoked token, bad request) fails immediately instead of burning
-  attempts that could never succeed.
-- **Crash recovery**: a `sending` row older than `SENDER_LEASE_MINUTES` is
-  re-queued, trading a possible duplicate post for never losing an article.
-- **Human confirmation** gates publishing when `REQUIRE_HUMAN_CONFIRMATION=true`
-  (default): queueing writes `awaiting_confirmation`, and approval flips it to
-  `pending`. With the flag off, queueing writes `pending` directly.
-
-Inspect delivery state:
-
-```sql
-SELECT d.id, d.status, d.attempts, d.error_message,
-       c.platform, c.chat_id, d.sent_at
-FROM deliveries d JOIN channels c ON c.id = d.channel_id
-ORDER BY d.id DESC LIMIT 20;
-```
-
-### Channels and field → channel routes
-
-Every field currently routes to the one Bale channel. Routes are rows, so
-splitting fields across channels or adding Telegram is a data change:
-
-```bash
-docker compose exec api python scripts/manage_channels.py list
-docker compose exec api python scripts/manage_channels.py add-channel \
-    --platform telegram --chat-id -1001234567890 --username @mychannel
-docker compose exec api python scripts/manage_channels.py route --field-id 12 --channel-id 2
-docker compose exec api python scripts/manage_channels.py unroute --field-id 12 --channel-id 1
-```
-
-A field with no route falls back to all active channels, so fields discovered
-at runtime (unknown fields created by the generation Worker) still publish.
-
-## API / Swagger
-
-Open **http://localhost:8000/docs** — Swagger UI is the real interactive API
-client. For every endpoint you can click **Try it out**, edit the request,
-click **Execute**, and the browser sends a real HTTP request to the running
-server and shows the real response. No mocks, no static responses.
-
-### POST /submit
-
-Request body (all nine fields required):
-
-```json
-{
-  "shared_Secret": "REPLACE_WITH_REAL_SECRET",
-  "username": "researcher1",
-  "title": "عنوان پایان‌نامه",
-  "abstract": "چکیده پایان‌نامه",
-  "field": "پزشکی",
-  "university": "دانشگاه تهران",
-  "table_of_contents": "فهرست مطالب",
-  "author": "نام نویسنده",
-  "supervisor": "نام استاد راهنما"
-}
-```
-
-Response: `{"id": 1, "status": "ready"}`
-
-### GET /health
-
-```bash
-curl.exe http://localhost:8000/health
-```
-
-Returns `{"status": "ok", "database": "connected"}` when the API can reach
-PostgreSQL. It checks API + database connectivity; it does **not** claim to
-monitor the Worker (the Worker is a batch process with no HTTP surface).
-
-### GET /records/{id}
-
-```bash
-curl.exe "http://localhost:8000/records/1?shared_Secret=REPLACE_WITH_REAL_SECRET"
-```
-
-Returns the record's status and, when finished, its generated output.
-
-## Logs
-
-```bash
-docker compose logs --tail=100 api
-docker compose logs --tail=100 worker
-docker compose logs --tail=100 postgres
-```
-
-## PostgreSQL
-
-- **Service / host inside Docker:** `postgres`
-- **Port:** `5432`
-- **Database:** `irandoc_news`
-- **User:** `postgres`
-- **Data volume:** `pg_data` (persists across container recreation)
-
-Inside the containers, the API and Worker reach PostgreSQL at
-`postgres:5432` — never `localhost:5432` (inside a container, `localhost` is the
-container itself). Port 5432 is published to the host only for tools like
-pgAdmin; internal communication does not need it.
+**Sender Worker** (`sender`): turns `review` rows into one `deliveries` row
+per routed channel (`awaiting_confirmation` under the human gate, `pending`
+otherwise, `pending` directly with the gate off), claims the oldest due
+delivery, renders the message, sends via the platform client, waits
+`SENDER_SEND_DELAY_SECONDS`, and retries retryable failures with exponential
+backoff up to `SENDER_MAX_ATTEMPTS` (permanent errors fail immediately).
+Sending *is* retried — a lost article is worse than a duplicate post.
 
 ## Security
 
-- `shared_Secret` comes from the environment only; it is never stored in the
-  database, never logged, and never sent to the LLM.
-- The secret is checked with `hmac.compare_digest` (constant time) **before**
-  thesis-content validation, so an invalid secret never creates a record.
-- `.env` is git-ignored; `.env.example` contains placeholders only.
-- No real API keys, passwords, or secrets are in source code or Git.
+- Machine secret from env only — never stored, logged, or sent to the LLM;
+  checked with `hmac.compare_digest` **before** validation.
+- LLM/bot credentials from env only; `models.api_key_env` stores an env *var
+  name*, never a key; connection probes never return keys; channel rows are
+  destinations, never credentials.
+- Panel passwords are argon2 hashes; sessions are signed, `HttpOnly`,
+  time-boxed cookies; login is lockout-guarded and audited.
+- `.env` is git-ignored; `.env.example` holds placeholders only; no real
+  secrets exist in source or Git history.
+- `postgres` listens on loopback only; the panel binds loopback and is
+  published solely through the TLS reverse proxy.
 
-## Demo / Supervisor Presentation
+## Demo
 
-A reproducible end-to-end demo (Assignment 4):
-
-1. **Start services**
-   ```bash
-   docker compose up -d
-   docker compose ps
-   ```
-2. **Check health** — `curl.exe http://localhost:8000/health` →
-   `{"status":"ok","database":"connected"}`.
-3. **Open Swagger** — http://localhost:8000/docs.
-4. **Submit a valid thesis** (all 9 fields) via `POST /submit` →
-   `{"id": 1, "status": "ready"}`. The record enters the `ready` queue.
-5. **Watch the Worker** — `docker compose logs -f worker`. It claims the job
-   (`processing`), normalizes/classifies the field, calls the LLM, and stores
-   the result.
-6. **See the result** — `GET /records/1?shared_Secret=...` →
-   `status: "review"` with `output_json` containing the generated
-   `title`/`lead`/`body`.
-7. **Unknown field** — submit a thesis with a field not in the Excel dataset.
-   The Worker inserts it into `fields` with `source='runtime'` and a stable
-   normalized identity, classified into a category (or `other`).
-8. **Duplicate unknown field** — submit the same unknown field again. It is
-   reused (no duplicate `fields` row) because matching is on `normalized_name`.
-9. **Failure/recovery** — a job that fails (e.g. LLM error) is marked `failed`
-   with the error message. A job left in `processing` by a crashed Worker is
-   reset to `ready` after `WORKER_LEASE_MINUTES` and reprocessed
-   (at-least-once).
-
-## SQL Demo Commands
-
-The main application table is **`main`** (not "records"). Real columns from the
-current schema:
-
-```sql
--- Recent job records
-SELECT id, status, field, created_at
-FROM main
-ORDER BY id DESC
-LIMIT 10;
-
--- Count jobs by status
-SELECT status, count(*)
-FROM main
-GROUP BY status;
-
--- Recently seeded/registered fields
-SELECT id, name, source
-FROM fields
-ORDER BY id DESC
-LIMIT 10;
-
--- Categories
-SELECT id, name
-FROM categories
-ORDER BY id;
-
--- A finished record with its generated news
-SELECT id, status, field, output_json
-FROM main
-WHERE status = 'review'
-ORDER BY id DESC
-LIMIT 5;
-```
-
-## Assignment 4 Demo Questions
-
-- **What data is accepted and retained?** The nine input fields are validated
-  and stored in `main`; the shared secret is checked but never stored.
-- **Why is the Shared Secret checked before content validation?** So an
-  unauthenticated request never reaches thesis validation and never creates a
-  record — authentication precedes processing protected data.
-- **How are unknown fields registered?** Normalized → exact match → if absent,
-  classified and inserted into `fields` with `source='runtime'`.
-- **How are duplicate unknown fields prevented?** Matching is on the unique
-  `normalized_name`; repeated values reuse the same row.
-- **How are spacing/letter differences handled?** Unicode NFC normalization,
-  zero-width removal, trim, and whitespace collapsing produce a stable
-  identity.
-- **What is the `معماری داخلی` issue?** A broad `معماری` rule must not
-  swallow the specific `معماری داخلی`. Specific keywords are listed before
-  broad ones, so `معماری داخلی` maps to its own rule first.
-- **Why one mapping fix may not be enough.** Fixing a single keyword without
-  checking rule order and substring precedence can misclassify other fields;
-  the fix must be systematic (specific-before-broad across all rules).
-- **Why one persistent sequential Worker?** At this scale PostgreSQL is the
-  queue; a single Worker keeps processing ordered and the architecture simple.
-- **How does queue order work?** `ORDER BY created_at` (oldest first) with
-  `FOR UPDATE SKIP LOCKED` for safe claiming.
-- **What happens when the queue is empty?** The Worker waits
-  `WORKER_POLL_INTERVAL_SECONDS` and keeps looping; it stays alive.
-- **What do the statuses mean?** `ready` (queued) → `processing` (claimed) →
-  `review` (generated) or `failed` (error recorded).
-- **How is stale processing recovered?** Jobs with `heartbeat_at` older than
-  `WORKER_LEASE_MINUTES` are reset to `ready` and reprocessed.
-- **Model failure vs Worker crash.** A model/LLM error → `failed`. A Worker
-  crash mid-job → the job stays `processing` with a stale heartbeat → recovered
-  to `ready`.
-- **What if the model response arrives but the DB save fails?** The job stays
-  `processing`; recovery resets it to `ready` and it is reprocessed.
-- **Why at-least-once?** Crash recovery reprocesses the job, so a duplicate LLM
-  call is possible. Exactly-once would require distributed transactions.
-- **Why local Docker success ≠ VPS success.** Ports, volumes, environment
-  variables, and networking must be verified on the VPS; service names and
-  `localhost` behave differently.
-- **Docker image/container/volume/network.** Images are built from
-  `Dockerfile`; containers run from images; `pg_data` is a named volume for
-  persistence; services communicate on the default bridge network.
-- **Why `localhost` differs inside a container.** Inside a container,
-  `localhost` is that container; services reach each other by service name
-  (`postgres`).
-- **Why PostgreSQL does not need a public port internally.** The API/Worker
-  reach it at `postgres:5432` on the internal network; the published port is
-  only for host tools.
-- **How do secrets reach the app?** Via environment variables from `.env`
-  (git-ignored), never baked into images.
-- **Health vs logs vs metrics.** `/health` checks API + database connectivity;
-  logs give operational visibility; Prometheus/Grafana are not required at
-  this stage.
+A reproducible end-to-end demo lives in `docs/demo-guide.md` (health →
+Swagger → submit → watch Worker → read record → unknown-field and duplicate
+behavior → failure/recovery → SQL inspection), ending with the supervisor
+Q&A (data retention, auth-before-validation, unknown fields, FIFO order,
+statuses, recovery, at-least-once, secrets, Docker networking). The
+junior-developer walkthrough is `docs/codebase-guide.md`.
 
 ## Testing
 
-Tests run against a dedicated PostgreSQL test database (`irandoc_news_test`)
-built from the same migrations — no SQLite, no mocks of the database:
+Against a dedicated PostgreSQL test database built from the same migrations
+— no SQLite, no database mocks; platform HTTP is stubbed so the suite is
+offline (one test file covers the live end-to-end flow with a stubbed LLM):
 
 ```bash
 python -m pytest -q
 ```
+
+159 tests cover auth order and contracts, normalization/classification
+(including `معماری داخلی` vs `معماری`), Worker claim/process/fail/recovery,
+model/prompt resolution priority, the human gate, review actions, delivery
+retry policy, stats, panel pages/roles/lockout, and the full
+panel→worker→approve→sender chain.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `/health` reports `disconnected` | `postgres` container, `DATABASE_URL`, compose network |
+| Jobs stuck in `processing` | Worker logs; `WORKER_LEASE_MINUTES` vs heartbeat interval |
+| Jobs in `failed` | `main.error_message` (LLM/provider errors) |
+| Article never delivered | Still `awaiting_confirmation`? It needs panel approval; `pending` with future `next_attempt_at` is backing off; `failed` has `error_message` |
+| Sends fail immediately | `deliveries.error_message`; `no bot token configured` means the platform token is missing from `sender` |
+| Panel login loops back to `/login` | Cookie has `Secure` but you are on plain HTTP — go through the TLS proxy (or unset `PANEL_COOKIE_SECURE` for loopback-only use) |
+| Panel login `429` | Per-IP lockout tripped — wait out `PANEL_LOGIN_LOCKOUT_MINUTES`, then check the audit trail |
+| Container can't reach DB | Use `postgres:5432`, never `localhost`, inside containers |
+
+## Docs
+
+- `docs/architecture.md` — components, queues, recovery, security model
+- `docs/codebase-guide.md` — junior-developer walkthrough of the whole lifecycle
+- `docs/erd.md` — entity-relationship diagram (Mermaid)
+- `docs/demo-guide.md` — reproducible supervisor demo
+- `docs/admin-panel.md` — panel pages, endpoints used, roles, wiring proof
 
 ## License
 

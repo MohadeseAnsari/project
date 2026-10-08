@@ -273,6 +273,7 @@ async def run_worker() -> None:
     stop_event = asyncio.Event()
 
     def signal_handler():
+        """Stop after the current job (its heartbeat goes stale and recovers)."""
         logger.info("Shutdown signal received")
         stop_event.set()
 
