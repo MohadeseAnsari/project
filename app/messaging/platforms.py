@@ -134,6 +134,7 @@ class BaleClient(PlatformClient):
         return settings.bale_api_base.rstrip("/")
 
     async def send_text(self, chat_id: int, text: str) -> int:
+        """Send plain text (Bale bolds single asterisks with no parse mode)."""
         return await self._post("sendMessage", {"chat_id": chat_id, "text": text})
 
 
@@ -151,6 +152,7 @@ class TelegramClient(PlatformClient):
         return settings.telegram_api_base.rstrip("/")
 
     async def send_text(self, chat_id: int, text: str) -> int:
+        """Send Markdown text (bold title renders bold, matching Bale)."""
         return await self._post(
             "sendMessage",
             {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},

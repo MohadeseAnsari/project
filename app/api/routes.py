@@ -23,14 +23,14 @@ from app.db.connection import get_session
 from app.db.models import Main
 from app.schemas.news import (
     ConnectionTestResponse,
+    DeliveryInfo,
+    DeliveryListResponse,
     ErrorResponse,
     HealthResponse,
     ModelResponse,
     PromptResponse,
     RecordDetailResponse,
     RecordListResponse,
-    RecordResponse,
-    ServiceInfo,
     StatsResponse,
     SubmitResponse,
     ThesisInput,
@@ -394,6 +394,7 @@ async def review_record(
 
 @router.get(
     "/deliveries",
+    response_model=DeliveryListResponse,
     responses={
         401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
         422: {"model": ErrorResponse, "description": "Invalid pagination"},
@@ -473,6 +474,7 @@ async def list_deliveries(
 
 @router.post(
     "/deliveries/{delivery_id}/retry",
+    response_model=DeliveryInfo,
     responses={
         401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
         404: {"model": ErrorResponse, "description": "Delivery not found"},
@@ -702,7 +704,7 @@ async def activate_model(
     return ModelResponse.model_validate(row)
 
 
-@router.post("/models/{model_id}/test-connection")
+@router.post("/models/{model_id}/test-connection", response_model=ConnectionTestResponse)
 async def test_model_connection(
     model_id: int = Path(...),
     payload: dict | None = None,

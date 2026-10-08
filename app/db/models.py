@@ -1,4 +1,10 @@
-from datetime import datetime
+"""SQLAlchemy ORM models mirroring the migrated PostgreSQL schema.
+
+The schema itself is owned by ``migrations/*.sql`` (applied once-only by
+``scripts/apply_migrations.py``); these classes exist so application code can
+query the same tables with the async session. Every table here has a matching
+migration — never add a model without one.
+"""
 
 from sqlalchemy import (
     JSON,

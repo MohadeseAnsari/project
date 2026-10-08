@@ -135,7 +135,11 @@ WHERE status = 'review' ORDER BY id DESC LIMIT 5;
   `FOR UPDATE SKIP LOCKED`.
 - **What happens when the queue is empty?** The Worker waits
   `WORKER_POLL_INTERVAL_SECONDS` and keeps looping; it stays alive.
-- **What do the statuses mean?** `ready` → `processing` → `review` | `failed`.
+- **What do the statuses mean?** `ready` (queued) → `processing` (claimed) →
+  `review` (generated, awaiting a human) | `failed` (error recorded) |
+  `rejected` (human-refused from `review`). Deliveries run a separate
+  lifecycle: `awaiting_confirmation` → `pending` → `sending` →
+  `sent` | `failed`.
 - **How is stale processing recovered?** Jobs with `heartbeat_at` older than
   `WORKER_LEASE_MINUTES` are reset to `ready`.
 - **Model failure vs Worker crash.** A model/LLM error → `failed`. A Worker

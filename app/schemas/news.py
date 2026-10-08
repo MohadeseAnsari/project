@@ -55,6 +55,7 @@ class ThesisInput(BaseModel):
     )
     @classmethod
     def not_whitespace(cls, v: str) -> str:
+        """Reject empty/whitespace-only strings (they pass min_length but carry nothing)."""
         if not v.strip():
             raise ValueError("must not be whitespace-only")
         return v
