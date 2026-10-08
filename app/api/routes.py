@@ -28,6 +28,7 @@ from app.schemas.news import (
     RecordListResponse,
     RecordResponse,
     ServiceInfo,
+    StatsResponse,
     SubmitResponse,
     ThesisInput,
 )
@@ -518,4 +519,41 @@ async def retry_delivery(
         "attempts": delivery.attempts,
         "error_message": delivery.error_message,
         "sent_at": delivery.sent_at,
+    }
+
+
+@router.get(
+    "/stats",
+    response_model=StatsResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+    },
+)
+async def get_stats(
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return record/delivery counts per status plus worker heartbeat freshness.
+
+    Counts come from GROUP BY queries (no row fetching) so the panel can show
+    queue depth at a glance. Freshness is the newest ``main.heartbeat_at`` —
+    the last time the generation Worker touched a job — and nothing else: no
+    per-record processing times are exposed here (the demo must not show them).
+    """
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from sqlalchemy import func, select
+
+    from app.db.models import Delivery
+
+    record_rows = (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
+    delivery_rows = (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
+    last_heartbeat = (
+        await session.execute(select(func.max(Main.heartbeat_at)))
+    ).scalar_one_or_none()
+    return {
+        "records": {status: count for status, count in record_rows},
+        "deliveries": {status: count for status, count in delivery_rows},
+        "worker_last_heartbeat_at": last_heartbeat,
     }

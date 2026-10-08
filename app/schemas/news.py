@@ -149,6 +149,14 @@ class DeliveryRetryRequest(BaseModel):
     shared_Secret: str = Field(description="Authentication secret.")
 
 
+class StatsResponse(BaseModel):
+    """``GET /stats`` payload: counts per status plus worker liveness."""
+
+    records: dict[str, int]
+    deliveries: dict[str, int]
+    worker_last_heartbeat_at: datetime | None = None
+
+
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 
