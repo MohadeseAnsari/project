@@ -46,6 +46,8 @@ class ThesisInput(BaseModel):
     table_of_contents: str = Field(min_length=1, max_length=5000, json_schema_extra={"example": "1. Introduction\n2. Methods\n3. Results"})
     author: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "John Doe"})
     supervisor: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "Dr. Smith"})
+    model_id: int | None = Field(default=None, description="Optional per-record model override (must exist).")
+    prompt_id: int | None = Field(default=None, description="Optional per-record prompt override (must exist).")
 
     @field_validator(
         "username", "title", "abstract", "field",

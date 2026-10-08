@@ -9,7 +9,7 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ## Components
 
 ### API (FastAPI)
-- Receives POST `/submit` with thesis metadata + shared_Secret
+- Receives POST `/submit` with thesis metadata + shared_Secret (plus optional `model_id`/`prompt_id` per-record overrides)
 - Authenticates via constant-time secret comparison BEFORE Pydantic validation
 - Validates input with Pydantic
 - Creates database record with status `ready`

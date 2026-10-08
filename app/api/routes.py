@@ -82,6 +82,12 @@ async def submit(request: Request, session: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=422, detail=str(e))
 
     try:
+        from app.db.models import Model, Prompt
+
+        if data.model_id is not None and not await session.get(Model, data.model_id):
+            raise HTTPException(status_code=422, detail="model_id does not exist")
+        if data.prompt_id is not None and not await session.get(Prompt, data.prompt_id):
+            raise HTTPException(status_code=422, detail="prompt_id does not exist")
         record = Main(
             username=data.username,
             title=data.title,
@@ -92,10 +98,14 @@ async def submit(request: Request, session: AsyncSession = Depends(get_session))
             author=data.author,
             supervisor=data.supervisor,
             status="ready",
+            model_id=data.model_id,
+            prompt_id=data.prompt_id,
         )
         session.add(record)
         await session.commit()
         await session.refresh(record)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Database error during submission: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
