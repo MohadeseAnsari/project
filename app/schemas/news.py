@@ -5,6 +5,8 @@ endpoints. They are used both for runtime validation (where the endpoint
 applies them) and for OpenAPI/Swagger schema generation.
 """
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -99,3 +101,27 @@ class GeneratedNews(BaseModel):
     title: str
     lead: str
     body: str
+
+
+class RecordListItem(BaseModel):
+    """One row of the paginated record listing for the review panel."""
+
+    id: int
+    status: str
+    field: str
+    university: str
+    title: str
+    author: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RecordListResponse(BaseModel):
+    """Paginated ``GET /records`` payload: items plus the total count."""
+
+    items: list[RecordListItem]
+    total: int
+    page: int
+    page_size: int

@@ -16,6 +16,7 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Returns record ID and status
 - GET `/health` — database connectivity check
 - GET `/records/{id}` — retrieve record status/output
+- GET `/records` — paginated listing (page/page_size ≤100, filters status/field/university/q/order) for the review panel
 
 ### Worker (Sequential, Persistent)
 - Polls PostgreSQL for `ready` jobs
