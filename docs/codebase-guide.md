@@ -148,15 +148,22 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   `(platform, chat_id)`. Migration 005 seeds the one Bale channel in use.
   **No credentials here** — bot tokens live in configuration, so a channel row
   is never a secret.
-- **field_channel_routes** — the one-to-many field → channel mapping,
-  `(field_id, channel_id)` primary key, cascading deletes. Every field routes
-  to the single Bale channel today; splitting fields across channels is a row
-  insert, not a code change.
+- **category_channel_routes** — the primary category → channel mapping,
+  `(category_id, channel_id)` primary key, cascading deletes. The sender
+  consults it first; seeded permissively (every category to every active
+  channel) so publishing behavior never changes on deploy — the owner
+  narrows it per category in the panel.
+- **field_channel_routes** — the field → channel exception table,
+  `(field_id, channel_id)` primary key, cascading deletes. Fires only when
+  the article's category has no route; unmapped categories fall back to all
+  active channels rather than dropping the article.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
-  `sent_at`. Unique per `(main_id, channel_id)`, which is what makes queueing
-  idempotent. Indexed on `(status, next_attempt_at)`.
+  `sent_at`, plus `category_id`/`route_source` snapshots of which category
+  and which route level produced the row. Unique per `(main_id, channel_id)`,
+  which is what makes queueing idempotent. Indexed on
+  `(status, next_attempt_at)`.
 
 The schema is created **only** by SQL migrations tracked in the `_migrations`
 table. The test suite runs against a dedicated PostgreSQL test database
