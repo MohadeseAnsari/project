@@ -333,6 +333,7 @@ _ACTION_FA = {
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
+    "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
     "regenerate": "تولید دوباره با مدل",
 }
 
@@ -1197,6 +1198,8 @@ async def user_create(
         return denied
     if role not in ("admin", "editor", "viewer"):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
+    if len(password) < 8:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
     async with async_session() as session:
         role_row = (await session.execute(select(Role).where(Role.name == role))).scalar_one_or_none()
         if not role_row:
@@ -1251,6 +1254,64 @@ async def user_toggle(request: Request, user_id: int):
         await session.commit()
         await audit(session, user.id, "user_toggle", None, f"username={row.username} active={row.is_active}")
     return RedirectResponse(url="/users", status_code=302)
+
+
+@panel_app.post("/users/{user_id}/password")
+async def user_reset_password(request: Request, user_id: int, new_password: str = Form(...)):
+    """Set any user's password (admin only; audited, never stored plaintext)."""
+    from app.panel.auth import hash_password
+
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    if len(new_password) < 8:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
+    async with async_session() as session:
+        row = await session.get(PanelUser, user_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
+        row.password_hash = hash_password(new_password)
+        await session.commit()
+        await audit(session, user.id, "password_reset", None, f"username={row.username}")
+    return RedirectResponse(url="/users", status_code=302)
+
+
+@panel_app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    """Show the logged-in user's own account (every role)."""
+    user = await require_login(request)
+    async with async_session() as session:
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "profile.html",
+        _ctx(request, user, active="", **counts_ctx, target=user))
+
+
+@panel_app.post("/profile/password")
+async def profile_change_password(
+    request: Request, current_password: str = Form(...), new_password: str = Form(...)
+):
+    """Let any user change their own password after proving the current one."""
+    from app.panel.auth import hash_password, verify_password
+
+    user = await require_login(request)
+    async with async_session() as session:
+        row = await session.get(PanelUser, user.id)
+        counts_ctx = await _sidebar_counts(session)
+        if not verify_password(row.password_hash, current_password):
+            return templates.TemplateResponse(request, "profile.html",
+                _ctx(request, user, active="", **counts_ctx, target=user,
+                     error="گذرواژهٔ فعلی نادرست است."), status_code=401)
+        if len(new_password) < 8:
+            return templates.TemplateResponse(request, "profile.html",
+                _ctx(request, user, active="", **counts_ctx, target=user,
+                     error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
+        row.password_hash = hash_password(new_password)
+        await session.commit()
+        await audit(session, user.id, "password_change", None, f"username={row.username}")
+    return templates.TemplateResponse(request, "profile.html",
+        _ctx(request, user, active="", target=user, ok="گذرواژه با موفقیت تغییر کرد."))
 
 
 @panel_app.get("/audit", response_class=HTMLResponse)

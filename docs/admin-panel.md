@@ -56,6 +56,16 @@ Every review/retry/config change is written to `audit_logs` (who, action,
 record, detail) and shown on the record detail page as history and on the
 global `/audit` page.
 
+## Accounts and passwords
+
+- Never share the admin login: each human gets their own account from the
+  Users page (`editor` for reviewers, `viewer` for read-only guests).
+- New passwords (at creation, admin reset, or self-service change on
+  `/profile`) must be at least 8 characters and are stored as argon2 hashes.
+- Handover flow: admin creates the account, the user logs in and changes
+  their password immediately on `/profile`. Deactivate (`toggle`) accounts
+  instead of deleting them, so the audit trail keeps its author names.
+
 ## Pages and the endpoints/logic they use
 
 | Page | Route | Uses |
@@ -71,7 +81,7 @@ global `/audit` page.
 | Channels + routing | `GET /channels`, `POST /channels`, `POST /channels/route`, `POST /channels/unroute` | Destinations (tokens stay in env, never on rows); field→channel routes as row inserts. Admin only for mutations. |
 | Fields | `GET /fields` | Read-only table with category, source, routed channels, plus top-field bars from real record counts. |
 | Categories | `GET /categories` | Cards per category with real field names as chips and field counts; server-side name search. |
-| Users | `GET /users`, `POST /users`, `POST /users/{id}/role`, `POST /users/{id}/toggle` | Console accounts (argon2 hashes, never plaintext); role changes and activate/deactivate; access matrix. Admin only. |
+| Users | `GET /users`, `POST /users`, `POST /users/{id}/role`, `POST /users/{id}/toggle`, `POST /users/{id}/password` | Console accounts (argon2 hashes, never plaintext); role changes, activate/deactivate, and password resets; access matrix. Admin only. Own password via `/profile`. |
 | Audit trail | `GET /audit` | Immutable `audit_logs` table with action/user/record filters and pagination. Admin only. |
 
 Machine API (`POST /submit`, `/health`, `/records/{id}`, `/records`,

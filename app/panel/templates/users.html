@@ -36,6 +36,11 @@
         </select>
         <button class="btn btn-ghost btn-sm" type="submit">ثبت نقش</button>
       </form>
+      <form method="post" action="/users/{{ u.id }}/password" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+        <span style="font-size:12.5px">{{ u.username }}</span>
+        <input type="password" name="new_password" placeholder="گذرواژهٔ تازه (حداقل ۸ نویسه)" required minlength="8" style="max-width:230px">
+        <button class="btn btn-ghost btn-sm" type="submit">ثبت گذرواژه</button>
+      </form>
       {% endfor %}
     </div>
   </div>

@@ -432,3 +432,58 @@ async def test_session_expiry_follows_setting(session: AsyncSession, monkeypatch
             follow_redirects=False,
         )
         assert "Max-Age=3600" in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_admin_reset_password_flow(session: AsyncSession):
+    """Full reset cycle: old stops working, new works, audit records it."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, PanelUser
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        assert (await client.post(f"/users/{editor.id}/password", data={"new_password": "short"}, follow_redirects=False)).status_code == 422
+        assert (await client.post(f"/users/{editor.id}/password", data={"new_password": "freshpass1"}, follow_redirects=False)).status_code == 302
+    actions = (await session.execute(select(AuditLog.action).where(AuditLog.action == "password_reset"))).scalars().all()
+    assert actions == ["password_reset"]
+    async with _client() as client:
+        stale = await client.post("/login", data={"username": "panel-editor", "password": "secret123"}, follow_redirects=False)
+        assert stale.status_code == 401
+        fresh = await client.post("/login", data={"username": "panel-editor", "password": "freshpass1"}, follow_redirects=False)
+        assert fresh.status_code == 302
+        assert (await client.get("/profile")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_user_changes_own_password(session: AsyncSession):
+    """Self-service change: wrong current -> 401, short -> 422, then rotation."""
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        assert (await client.get("/profile")).status_code == 200
+        bad_current = await client.post("/profile/password", data={"current_password": "nope", "new_password": "rotated99"})
+        assert bad_current.status_code == 401
+        too_short = await client.post("/profile/password", data={"current_password": "secret123", "new_password": "short"})
+        assert too_short.status_code == 422
+        rotated = await client.post("/profile/password", data={"current_password": "secret123", "new_password": "rotated99"})
+        assert rotated.status_code == 200
+        assert "با موفقیت" in rotated.text
+    async with _client() as client:
+        assert (await client.post("/login", data={"username": "panel-editor", "password": "secret123"}, follow_redirects=False)).status_code == 401
+        response = await client.post("/login", data={"username": "panel-editor", "password": "rotated99"}, follow_redirects=False)
+        assert response.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_editor_cannot_reset_passwords(session: AsyncSession):
+    """Password resets are admin-only like the rest of user management."""
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        assert (await client.post("/users/1/password", data={"new_password": "hacked123"})).status_code == 403
