@@ -92,7 +92,8 @@ class Prompt(Base):
 class Main(Base):
     """The thesis/news record and job-state queue entry.
 
-    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``.
+    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``,
+    plus ``rejected`` for an explicit human rejection from ``review``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
     ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
     auditability of the classification and generation configuration used.
@@ -101,7 +102,7 @@ class Main(Base):
     __tablename__ = "main"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('ready', 'processing', 'review', 'failed')",
+            "status IN ('ready', 'processing', 'review', 'failed', 'rejected')",
             name="ck_main_status",
         ),
         Index("ix_main_status_created_at", "status", "created_at"),

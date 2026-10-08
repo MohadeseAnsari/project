@@ -138,7 +138,7 @@ PostgreSQL is both the persistent store and the queue. Tables (see
 - **models** — LLM model configuration; `is_active` selects the one in use.
 - **prompts** — versioned system prompts; `is_active` selects the one in use.
 - **main** — the thesis/news record and queue entry: thesis fields, `status`
-  (`ready|processing|review|failed`, CHECK constraint), `field_id` /
+  (`ready|processing|review|failed|rejected`, CHECK constraint), `field_id` /
   `category_id` / `model_id` / `prompt_id` audit FKs, `output_json` (JSONB),
   `error_message`, `claimed_at` / `heartbeat_at` (recovery), `created_at` /
   `updated_at`. Indexed on `(status, created_at)`, `field_id`, `category_id`.
