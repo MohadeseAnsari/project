@@ -195,12 +195,7 @@ async def process_job(session, job: Main) -> None:
         Exception: Any failure (e.g. LLM error) propagates to the caller,
             which marks the job as ``failed``.
     """
-    from app.news.generation import (
-        resolve_api_key,
-        resolve_base_url,
-        resolve_model_name,
-        resolve_system_prompt,
-    )
+    from app.news.generation import resolve_generation_config
 
     logger.info("Processing job id=%s", job.id)
 
@@ -222,22 +217,8 @@ async def process_job(session, job: Main) -> None:
 
     override_model = await session.get(Model, orig_model_id) if orig_model_id else None
     override_prompt = await session.get(Prompt, orig_prompt_id) if orig_prompt_id else None
-    model_name = resolve_model_name(
-        override_model.name if override_model else None,
-        active_model.name if active_model else None,
-    )
-    prompt_text = resolve_system_prompt(
-        override_prompt.system_prompt if override_prompt else None,
-        active_prompt.system_prompt if active_prompt else None,
-    )
-    base_url = resolve_base_url(
-        (override_model.base_url if override_model else None)
-        or (active_model.base_url if active_model else None)
-    )
-    api_key = resolve_api_key(
-        (override_model.api_key_env if override_model else None)
-        or (active_model.api_key_env if active_model else None)
-    )
+    # One shared resolution (also used by the panel regenerate action).
+    config = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
 
     thesis_data = {
         "title": job.title,
@@ -255,13 +236,7 @@ async def process_job(session, job: Main) -> None:
     stop_event = asyncio.Event()
     heartbeat_task = asyncio.create_task(heartbeat_loop(job.id, stop_event))
     try:
-        output = await generate_news(
-            thesis_data,
-            model_name=model_name,
-            system_prompt=prompt_text,
-            base_url=base_url,
-            api_key=api_key,
-        )
+        output = await generate_news(thesis_data, **config)
     finally:
         stop_event.set()
         await heartbeat_task

@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import Category, Field, Main, Model, Prompt
 from app.news.generation import (
+    probe_model_connection,
     resolve_api_key,
     resolve_base_url,
+    resolve_generation_config,
     resolve_model_name,
     resolve_system_prompt,
 )
@@ -37,6 +39,48 @@ def test_resolve_base_url_and_key_fallback(monkeypatch):
     assert resolve_api_key("CUSTOM_TEST_KEY_ENV") == "secret-value"
     # Missing env var falls back without ever returning the var name as a key.
     assert resolve_api_key("DEFINITELY_MISSING_ENV_VAR") == settings.avalai_api_key
+
+
+def test_resolve_generation_config_priority():
+    """The shared worker/panel resolution: override > active > fallback."""
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    override_model = _Row(name="override-model", base_url="https://override/v1", api_key_env=None)
+    override_prompt = _Row(system_prompt="override prompt")
+    active_model = _Row(name="active-model", base_url=None, api_key_env=None)
+    active_prompt = _Row(system_prompt="active prompt")
+
+    full = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
+    assert full["model_name"] == "override-model"
+    assert full["system_prompt"] == "override prompt"
+    assert full["base_url"] == "https://override/v1"
+
+    active_only = resolve_generation_config(None, None, active_model, active_prompt)
+    assert active_only["model_name"] == "active-model"
+    assert active_only["system_prompt"] == "active prompt"
+    assert active_only["base_url"] == settings.avalai_base_url
+
+    empty = resolve_generation_config(None, None, None, None)
+    assert empty["model_name"] == settings.llm_model
+    assert empty["system_prompt"] == SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_probe_model_connection_reports_failure_without_raising():
+    """Shared API/panel probe: missing keys and dead endpoints return, not raise."""
+    ok, error = await probe_model_connection("any-model", None, "")
+    assert ok is False
+    assert error == "no API key configured"
+
+    ok, error = await probe_model_connection(
+        "any-model", "http://127.0.0.1:1/v1", "dummy-key-for-test"
+    )
+    assert ok is False
+    assert error
+    assert "dummy-key-for-test" not in error
 
 
 @pytest.mark.asyncio

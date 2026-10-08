@@ -1,7 +1,10 @@
 """Smoke tests for the server-rendered review panel (templates + one HTMX part)."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.panel.app import panel_app
@@ -156,3 +159,82 @@ async def test_viewer_is_read_only(session: AsyncSession):
         assert (await client.get(f"/records/{row.id}")).status_code == 200
         denied = await client.post(f"/records/{row.id}/review", data={"action": "approve"})
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_panel_submit_creates_ready_job(session: AsyncSession):
+    """Panel submit inserts the same ready row the Worker polls for."""
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        response = await client.post(
+            "/submit",
+            data={
+                "username": "tester", "title": "Panel Thesis", "abstract": "Abstract",
+                "field": "پزشکی", "university": "Tehran University",
+                "table_of_contents": "1. Intro", "author": "Author", "supervisor": "Supervisor",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert response.headers["location"].startswith("/records/")
+    row = (
+        await session.execute(select(Main).where(Main.title == "Panel Thesis"))
+    ).scalar_one()
+    assert row.status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_panel_regenerate_uses_worker_path(session: AsyncSession):
+    """Regenerate re-runs generation and returns the record to review."""
+    from app.db.models import AuditLog, Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="tester", title="Thesis", abstract="Abstract", field="پزشکی",
+        university="Tehran University", author="Author", supervisor="Supervisor",
+        status="failed", error_message="old error",
+        output_json={"title": "Old", "lead": "Old", "body": "Old"},
+    )
+    session.add(row)
+    await session.commit()
+    with patch("app.news.generation.generate_news") as mock_gen:
+        mock_gen.return_value = AsyncMock(title="New", lead="New lead", body="New body")
+        async with _client() as client:
+            await _login(client, "panel-admin")
+            response = await client.post(f"/records/{row.id}/regenerate", follow_redirects=False)
+            assert response.status_code == 302
+    await session.refresh(row)
+    assert row.status == "review"
+    assert row.output_json == {"title": "New", "lead": "New lead", "body": "New body"}
+    assert row.error_message is None
+    audits = (
+        await session.execute(select(AuditLog).where(AuditLog.main_id == row.id))
+    ).scalars().all()
+    assert [a.action for a in audits] == ["regenerate"]
+
+
+@pytest.mark.asyncio
+async def test_panel_regenerate_marks_failed_on_provider_error(session: AsyncSession):
+    """A failed regeneration parks the record as failed with the error text."""
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="tester", title="Thesis", abstract="Abstract", field="پزشکی",
+        university="Tehran University", author="Author", supervisor="Supervisor",
+        status="review", output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    with patch("app.news.generation.generate_news") as mock_gen:
+        mock_gen.side_effect = RuntimeError("provider down")
+        async with _client() as client:
+            await _login(client, "panel-admin")
+            response = await client.post(f"/records/{row.id}/regenerate", follow_redirects=False)
+            assert response.status_code == 302
+    await session.refresh(row)
+    assert row.status == "failed"
+    assert "provider down" in row.error_message

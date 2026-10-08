@@ -61,6 +61,67 @@ def resolve_api_key(api_key_env: str | None) -> str:
     return settings.avalai_api_key
 
 
+def resolve_generation_config(
+    model_override, prompt_override, active_model, active_prompt
+) -> dict[str, Any]:
+    """Resolve one generation call: override > active > config fallback.
+
+    This is the SINGLE shared resolution used by both the generation Worker
+    (``app.worker.worker``) and the panel regenerate action (``app.panel``),
+    so a record is generated with exactly the same model, prompt, endpoint,
+    and key no matter which side triggers it. Row arguments are ``Model`` /
+    ``Prompt`` ORM objects or ``None``; only names/texts are read out, so the
+    caller keeps its own rows for audit FKs.
+    """
+    override_base = getattr(model_override, "base_url", None)
+    active_base = getattr(active_model, "base_url", None)
+    override_env = getattr(model_override, "api_key_env", None)
+    active_env = getattr(active_model, "api_key_env", None)
+    return {
+        "model_name": resolve_model_name(
+            getattr(model_override, "name", None),
+            getattr(active_model, "name", None),
+        ),
+        "system_prompt": resolve_system_prompt(
+            getattr(prompt_override, "system_prompt", None),
+            getattr(active_prompt, "system_prompt", None),
+        ),
+        "base_url": resolve_base_url(override_base or active_base),
+        "api_key": resolve_api_key(override_env or active_env),
+    }
+
+
+async def probe_model_connection(
+    model_name: str, base_url: str | None, api_key: str | None
+) -> tuple[bool, str | None]:
+    """Make a real minimal 1-token provider call; return ``(ok, error)``.
+
+    Shared by the machine API (``POST /models/{id}/test-connection``) and the
+    panel model test button, so both report the same result for the same row.
+    A missing key, DNS failure, auth error, or timeout returns ``(False,
+    error)`` instead of raising, and the key value is never included in the
+    error text or logged anywhere.
+    """
+    effective_base_url = base_url or settings.avalai_base_url
+    effective_key = api_key or ""
+    if not effective_key:
+        return False, "no API key configured"
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=effective_key, base_url=effective_base_url, timeout=15.0)
+        # Minimal probe: 1 token, discarded. Proves auth + route + model name.
+        await client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=1,
+        )
+        return True, None
+    except Exception as e:
+        # Never include the key; provider exception text is safe to surface.
+        return False, str(e)[:500]
+
+
 def _get_client() -> AsyncOpenAI:
     """Return the shared AsyncOpenAI client, creating it on first use.
 

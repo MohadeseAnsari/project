@@ -33,7 +33,7 @@
       <a class="btn btn-ghost btn-sm" href="/records">پاک‌کردن</a>
     </div>
   </form>
-  <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load">
+  <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load, every 15s">
     {% include "records_table.html" %}
   </div>
 </div>

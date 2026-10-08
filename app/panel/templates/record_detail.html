@@ -55,6 +55,15 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if message_preview %}
+    <div class="body">
+      <div class="preview">
+        <h4>پیش‌نمایش پیام {{ preview_channel }}</h4>
+        <p style="white-space:pre-wrap">{{ message_preview }}</p>
+      </div>
+      <div class="hint" style="margin-top:9px">این دقیقاً همان متنی است که با تأیید، به کانال ارسال می‌شود.</div>
+    </div>
+    {% endif %}
     {% else %}
     {% if record.output_json %}
     <form method="post" action="/records/{{ record.id }}/review">
@@ -72,10 +81,23 @@
       </div>
       {% endif %}
     </form>
+    {% if record.status in ('review', 'failed') and record.output_json %}
+    <form method="post" action="/records/{{ record.id }}/regenerate">
+      <div class="body" style="border-top:1px solid var(--line2)">
+        <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
+        <div class="hint" style="margin-top:8px">متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
+      </div>
+    </form>
+    {% endif %}
     {% else %}
     <div class="body">
       <p>خروجی هنوز تولید نشده است.</p>
       {% if record.error_message %}<div class="note" style="margin-top:10px">{{ record.error_message }}</div>{% endif %}
+      {% if record.status == 'failed' %}
+      <form method="post" action="/records/{{ record.id }}/regenerate" style="margin-top:10px">
+        <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
+      </form>
+      {% endif %}
     </div>
     {% endif %}
     {% endif %}

@@ -85,28 +85,24 @@ async def submit(request: Request, session: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=422, detail=str(e))
 
     try:
-        from app.db.models import Model, Prompt
+        from app.submissions import create_thesis_record
 
-        if data.model_id is not None and not await session.get(Model, data.model_id):
-            raise HTTPException(status_code=422, detail="model_id does not exist")
-        if data.prompt_id is not None and not await session.get(Prompt, data.prompt_id):
-            raise HTTPException(status_code=422, detail="prompt_id does not exist")
-        record = Main(
-            username=data.username,
-            title=data.title,
-            abstract=data.abstract,
-            field=data.field,
-            university=data.university,
-            table_of_contents=data.table_of_contents,
-            author=data.author,
-            supervisor=data.supervisor,
-            status="ready",
-            model_id=data.model_id,
-            prompt_id=data.prompt_id,
-        )
-        session.add(record)
-        await session.commit()
-        await session.refresh(record)
+        try:
+            record = await create_thesis_record(
+                session,
+                username=data.username,
+                title=data.title,
+                abstract=data.abstract,
+                field=data.field,
+                university=data.university,
+                table_of_contents=data.table_of_contents,
+                author=data.author,
+                supervisor=data.supervisor,
+                model_id=data.model_id,
+                prompt_id=data.prompt_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -714,39 +710,23 @@ async def test_model_connection(
 ):
     """Make a real minimal provider call for one model (key never returned/logged).
 
-    Uses the model's resolved base_url/key with a 1-token probe. Missing keys,
-    DNS failures, auth errors, and timeouts all return ``ok:false`` with the
-    error text (truncated) instead of raising, so the panel can show the
-    failure without leaking credentials.
+    Uses the shared probe helper, so the machine API and the panel test button
+    report the same result for the same row. Missing keys, DNS failures, auth
+    errors, and timeouts all return ``ok:false`` with the error text
+    (truncated) instead of raising, so the panel can show the failure without
+    leaking credentials.
     """
-    import os
-
     from app.db.models import Model
+    from app.news.generation import probe_model_connection, resolve_api_key
 
     _require_secret(payload)
     row = await session.get(Model, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    from app.config import settings
-
-    base_url = row.base_url or settings.avalai_base_url
-    api_key = (os.environ.get(row.api_key_env) if row.api_key_env else None) or settings.avalai_api_key
-    if not api_key:
-        return {"ok": False, "model": row.name, "error": "no API key configured"}
-    try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
-        # Minimal probe: 1 token, discarded. Proves auth + route + model name.
-        await client.chat.completions.create(
-            model=row.name,
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=1,
-        )
-        return {"ok": True, "model": row.name, "error": None}
-    except Exception as e:
-        # Never include the key; exception text from the provider is safe.
-        return {"ok": False, "model": row.name, "error": str(e)[:500]}
+    ok, error = await probe_model_connection(
+        row.name, row.base_url, resolve_api_key(row.api_key_env)
+    )
+    return {"ok": ok, "model": row.name, "error": error}
 
 
 @router.get("/prompts", response_model=list[PromptResponse])

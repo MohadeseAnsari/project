@@ -300,6 +300,7 @@ _ACTION_FA = {
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
+    "regenerate": "تولید دوباره با مدل",
 }
 
 
@@ -447,14 +448,21 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
             prompt = await session.get(Prompt, record.prompt_id)
             prompt_version = prompt.version if prompt else None
         routed_channels = None
-        if record.field_id:
-            routed = (
-                await session.execute(
-                    select(Channel).join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id).where(
-                        FieldChannelRoute.field_id == record.field_id))
-            ).scalars().all()
-            if routed:
-                routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
+        message_preview = None
+        preview_channel = None
+        # Same route resolution the sender uses (no copy of the query here).
+        from app.messaging.dispatcher import channels_for_article
+        from app.messaging.formatting import render_article
+
+        routed = await channels_for_article(session, record)
+        if routed:
+            routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
+        if tab == "delivery" and record.output_json:
+            # Show exactly what approval would publish (first routed channel).
+            preview_channel = routed[0] if routed else None
+            message_preview = render_article(
+                record.output_json, preview_channel.username if preview_channel else None
+            ) or None
         # History: lifecycle steps from real timestamps, then audit entries.
         history = [
             {"title": "ثبت درخواست", "sub": f"وضعیت: ready · {_jalali(record.created_at)}"},
@@ -480,9 +488,65 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
         _ctx(
             request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
-            routed_channels=routed_channels,
+            routed_channels=routed_channels, message_preview=message_preview,
+            preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )
+
+
+@panel_app.post("/records/{record_id}/regenerate")
+async def record_regenerate(request: Request, record_id: int):
+    """Re-run LLM generation for a ``review``/``failed`` record.
+
+    Uses the exact same resolution and generation path as the Worker
+    (``get_active_*`` + shared ``resolve_generation_config`` +
+    ``generate_news``), so a regenerated article is indistinguishable from one
+    the Worker produced. Success stores the new output and returns the record
+    to ``review``; provider errors mark it ``failed`` with the error text.
+    """
+    from app.news.generation import generate_news, resolve_generation_config
+    from app.worker.worker import get_active_model, get_active_prompt
+
+    user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    async with async_session() as session:
+        record = await session.get(Main, record_id)
+        if not record or record.status not in ("review", "failed"):
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="تولید دوباره فقط برای رکوردهای بررسی‌شده یا ناموفق ممکن است."), status_code=409)
+        active_model = await get_active_model(session)
+        active_prompt = await get_active_prompt(session)
+        # Same gap-fill as the Worker: keep per-record overrides, fill the rest.
+        orig_model_id = record.model_id
+        orig_prompt_id = record.prompt_id
+        if record.model_id is None and active_model:
+            record.model_id = active_model.id
+        if record.prompt_id is None and active_prompt:
+            record.prompt_id = active_prompt.id
+        override_model = await session.get(Model, orig_model_id) if orig_model_id else None
+        override_prompt = await session.get(Prompt, orig_prompt_id) if orig_prompt_id else None
+        config = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
+        thesis = {
+            "title": record.title, "abstract": record.abstract, "field": record.field,
+            "university": record.university, "table_of_contents": record.table_of_contents,
+            "author": record.author, "supervisor": record.supervisor,
+        }
+        try:
+            output = await generate_news(thesis, **config)
+        except Exception as e:
+            record.status = "failed"
+            record.error_message = str(e)[:2000]
+            record.updated_at = datetime.utcnow()
+            await session.commit()
+            await audit(session, user.id, "regenerate", record.id, "تولید دوباره ناموفق ماند")
+            return RedirectResponse(url=f"/records/{record_id}", status_code=302)
+        record.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
+        record.status = "review"
+        record.error_message = None
+        record.updated_at = datetime.utcnow()
+        await session.commit()
+        await audit(session, user.id, "regenerate", record.id, "تولید دوباره با مدل")
+    return RedirectResponse(url=f"/records/{record_id}", status_code=302)
 
 
 @panel_app.post("/records/{record_id}/review")
@@ -924,39 +988,29 @@ async def panel_model_update(
 
 @panel_app.post("/models/{model_id}/test")
 async def panel_model_test(request: Request, model_id: int):
-    """Probe one model with a real 1-token call; the key is never shown."""
-    import os
-
+    """Probe one model with the shared 1-token helper; the key is never shown."""
     user = await require_login(request)
     async with async_session() as session:
         row = await session.get(Model, model_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
-        base_url = row.base_url or settings.avalai_base_url
-        api_key = (os.environ.get(row.api_key_env) if row.api_key_env else None) or settings.avalai_api_key
-        test_result = None
-        error = None
-        ok_msg = None
-        if not api_key:
-            error = "کلید API پیکربندی نشده است."
-        else:
-            try:
-                from openai import AsyncOpenAI
+        from app.news.generation import probe_model_connection, resolve_api_key
 
-                client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
-                await client.chat.completions.create(model=row.name, messages=[{"role": "user", "content": "test"}], max_tokens=1)
-                test_result = {"ok": True, "model": row.name, "error": None}
-                ok_msg = f"اتصال مدل {row.name} موفق بود."
-                await audit(session, user.id, "model_test", None, f"model={row.name} ok=true")
-            except Exception as e:
-                test_result = {"ok": False, "model": row.name, "error": str(e)[:500]}
-                await audit(session, user.id, "model_test", None, f"model={row.name} ok=false")
+        ok, error = await probe_model_connection(
+            row.name, row.base_url, resolve_api_key(row.api_key_env)
+        )
+        test_result = {"ok": ok, "model": row.name, "error": error}
+        ok_msg = f"اتصال مدل {row.name} موفق بود." if ok else None
+        missing_key = error == "no API key configured"
+        await audit(session, user.id, "model_test", None, f"model={row.name} ok={ok}")
         rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
         selected = await session.get(Model, model_id)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "models.html",
         _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
-             test_result=test_result, error=error, ok=ok_msg))
+             test_result=test_result,
+             error="کلید API پیکربندی نشده است." if (not ok and missing_key) else (None if ok else f"اتصال ناموفق: {error}"),
+             ok=ok_msg))
 
 
 @panel_app.get("/prompts", response_class=HTMLResponse)
@@ -1035,30 +1089,33 @@ async def submit_create(
     field: str = Form(...), university: str = Form(...), table_of_contents: str = Form(...),
     author: str = Form(...), supervisor: str = Form(...), model_id: str = Form(""), prompt_id: str = Form(""),
 ):
-    """Create a thesis job from the panel form (overrides validated, stored)."""
+    """Create a thesis job from the panel form (same flow as POST /submit)."""
+    from app.submissions import create_thesis_record
+
     user = await require_login(request)
     if not _can_review(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
-    async with async_session() as session:
-        mid = int(model_id) if model_id.strip().isdigit() else None
-        pid = int(prompt_id) if prompt_id.strip().isdigit() else None
-        if mid is not None and not await session.get(Model, mid):
+    mid = int(model_id) if model_id.strip().isdigit() else None
+    pid = int(prompt_id) if prompt_id.strip().isdigit() else None
+    try:
+        async with async_session() as session:
+            row = await create_thesis_record(
+                session,
+                username=username.strip(), title=title.strip(), abstract=abstract.strip(),
+                field=field.strip(), university=university.strip(),
+                table_of_contents=table_of_contents.strip(),
+                author=author.strip(), supervisor=supervisor.strip(),
+                model_id=mid, prompt_id=pid,
+            )
+            await audit(session, user.id, "submit", row.id, f"field={field}")
+    except ValueError:
+        async with async_session() as session:
             models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
             prompts = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
-            return templates.TemplateResponse(request, "submit.html", _ctx(request, user, active="submit", models=models, prompts=prompts, error="مدل انتخاب‌شده وجود ندارد."), status_code=422)
-        if pid is not None and not await session.get(Prompt, pid):
-            models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-            prompts = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
-            return templates.TemplateResponse(request, "submit.html", _ctx(request, user, active="submit", models=models, prompts=prompts, error="پرامپت انتخاب‌شده وجود ندارد."), status_code=422)
-        row = Main(
-            username=username.strip(), title=title.strip(), abstract=abstract.strip(), field=field.strip(),
-            university=university.strip(), table_of_contents=table_of_contents.strip(),
-            author=author.strip(), supervisor=supervisor.strip(),
-            status="ready", model_id=mid, prompt_id=pid,
-        )
-        session.add(row)
-        await session.commit()
-        await audit(session, user.id, "submit", row.id, f"field={field}")
+        return templates.TemplateResponse(request, "submit.html",
+            _ctx(request, user, active="submit", models=models, prompts=prompts,
+                 error="مدل/پرامپت انتخاب‌شده وجود ندارد."),
+            status_code=422)
     return RedirectResponse(url=f"/records/{row.id}", status_code=302)
 
 

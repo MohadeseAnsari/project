@@ -22,7 +22,7 @@
 
 <div class="card">
   <h3>تحویل‌ها<span class="grow"></span><span class="badge s-off">{{ total|fa }} مورد</span></h3>
-  <div id="deliveries-table" hx-get="/deliveries/table?{{ query }}" hx-trigger="load">
+  <div id="deliveries-table" hx-get="/deliveries/table?{{ query }}" hx-trigger="load, every 15s">
     {% include "deliveries_table.html" %}
   </div>
 </div>
