@@ -20,7 +20,72 @@ logger = logging.getLogger(__name__)
 
 _ph = PasswordHasher()
 _cookie_name = "panel_session"
-_cookie_max_age = 12 * 3600
+
+#: Loopback peers are always the trusted proxy path.
+_LOOPBACK_PEERS = ("127.0.0.1", "::1")
+
+
+def _trusted_proxy_nets():
+    """Parse PANEL_TRUSTED_PROXIES into ipaddress networks (cached per call).
+
+    Plain IPs become /32 (/128) nets so both forms work. A malformed entry
+    is ignored rather than failing open.
+    """
+    import ipaddress
+
+    nets = []
+    for entry in (settings.panel_trusted_proxies or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            continue
+    return tuple(nets)
+
+
+def _peer_is_trusted_proxy(peer: str) -> bool:
+    """Whether this direct peer may supply X-Forwarded-* headers."""
+    if peer in _LOOPBACK_PEERS:
+        return True
+    import ipaddress
+
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in _trusted_proxy_nets())
+
+
+def _session_max_age() -> int:
+    """Session lifetime in seconds (cookie and server-side check agree)."""
+    return int(settings.panel_session_hours * 3600)
+
+
+def client_ip(request: Request) -> str:
+    """Real visitor IP behind the trusted reverse proxy.
+
+    Only a trusted proxy peer (loopback, or a network in
+    ``PANEL_TRUSTED_PROXIES`` such as the compose bridge subnet the proxy
+    arrives on) may supply ``X-Forwarded-For``; anyone else's header is
+    ignored, so a visitor can never spoof the address the login lockout and
+    audit trail record.
+    """
+    peer = request.client.host if request.client else ""
+    if peer and _peer_is_trusted_proxy(peer):
+        first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if first:
+            return first
+    return peer or "unknown"
+
+
+def forwarded_proto(request: Request) -> str:
+    """Edge protocol from the trusted proxy (empty for direct clients)."""
+    peer = request.client.host if request.client else ""
+    if peer and _peer_is_trusted_proxy(peer):
+        return request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    return ""
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -43,21 +108,21 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def set_session_cookie(response, user_id: int) -> None:
-    """Sign the user id into an HttpOnly cookie (12h, Lax, no JS access).
+def set_session_cookie(response, user_id: int, *, secure: bool) -> None:
+    """Sign the user id into an HttpOnly session cookie (no JS access).
 
-    ``Secure`` is sent only when ``PANEL_COOKIE_SECURE`` is on (TLS reverse
-    proxy in front); over plain HTTP browsers would drop a Secure cookie and
-    nobody could log in.
+    The caller passes ``secure=True`` when ``PANEL_COOKIE_SECURE`` is on or
+    the trusted proxy reports ``https``; over plain HTTP browsers would drop
+    a Secure cookie and nobody could log in.
     """
     token = _serializer().dumps({"uid": user_id})
     response.set_cookie(
         _cookie_name,
         token,
-        max_age=_cookie_max_age,
+        max_age=_session_max_age(),
         httponly=True,
         samesite="lax",
-        secure=settings.panel_cookie_secure,
+        secure=secure,
     )
 
 
@@ -72,7 +137,7 @@ def session_user_id(request: Request) -> int | None:
     if not token:
         return None
     try:
-        data = _serializer().loads(token, max_age=_cookie_max_age)
+        data = _serializer().loads(token, max_age=_session_max_age())
         uid = data.get("uid")
         return int(uid) if uid is not None else None
     except (BadSignature, ValueError, TypeError):

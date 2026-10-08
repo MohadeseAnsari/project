@@ -29,13 +29,20 @@ HttpOnly, Lax, Secure behind the proxy) keeps the login.
   exposed to the internet, and plain HTTP transmits the panel password
   unencrypted — TLS at the proxy is required, not optional. Emergency public
   exposure only with `PANEL_PORT=8081` and only behind a TLS proxy.
-- Login is rate-limited per IP with lockout after repeated failures, and
-  failed logins are written to the audit trail. Every other panel route
-  requires login (anonymous browsers redirect to `/login`); there are no
-  debug routes and no unauthenticated listing endpoints.
+- Login is rate-limited per IP with lockout after repeated failures
+  (`PANEL_LOGIN_MAX_ATTEMPTS/WINDOW/LOCKOUT`, defaults 10/10min/15min), and
+  failed logins are written to the audit trail with the visitor IP. Sessions
+  last `PANEL_SESSION_HOURS` (default 12), enforced on the cookie and
+  server-side alike. Every other panel route requires login (anonymous
+  browsers redirect to `/login`); there are no debug routes and no
+  unauthenticated listing endpoints.
 - The app trusts `X-Forwarded-For` / `X-Forwarded-Proto` only from the local
-  proxy (loopback peer); direct clients' headers are ignored, so the lockout,
-  audit IPs, and Secure-cookie logic always see the real visitor.
+  proxy: loopback peers always, plus networks in `PANEL_TRUSTED_PROXIES`
+  (set to the compose bridge subnet, since inside Docker the host proxy
+  arrives as the bridge gateway, not 127.0.0.1). Direct clients' headers are
+  ignored, so the lockout, audit IPs, and Secure-cookie logic always see the
+  real visitor. The `Secure` cookie flag is sent when `PANEL_COOKIE_SECURE`
+  is on or the trusted proxy reports `https`.
 
 ## Roles
 

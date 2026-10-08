@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     panel_login_max_attempts: int = 10
     panel_login_window_minutes: int = 10
     panel_login_lockout_minutes: int = 15
+    # Session lifetime in hours (cookie Max-Age and server-side expiry agree).
+    panel_session_hours: int = 12
+    # Extra trusted proxy peers/networks for X-Forwarded-* headers, beyond
+    # loopback. Needed because inside Docker the host proxy arrives as the
+    # bridge gateway, not 127.0.0.1 — set this to the compose bridge subnet
+    # (e.g. "172.19.0.0/16"). Only the proxy may use these addresses: anyone
+    # on them can set the visitor IP the lockout and audit trail record.
+    panel_trusted_proxies: str = ""
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000

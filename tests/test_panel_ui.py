@@ -326,3 +326,109 @@ async def test_session_cookie_flags(session: AsyncSession, monkeypatch, _clean_l
             follow_redirects=False,
         )
         assert "Secure" in tls.headers.get("set-cookie", "")
+
+
+def _scope_request(client: tuple | None, headers: list[tuple[bytes, bytes]] | None = None):
+    """Build a bare Starlette request to unit-test proxy header handling."""
+    from starlette.requests import Request as StarletteRequest
+
+    return StarletteRequest(
+        {"type": "http", "method": "GET", "headers": headers or [], "client": client}
+    )
+
+
+def test_client_ip_trusts_proxy_only():
+    """X-Forwarded-For counts only from the loopback proxy, never spoofed."""
+    from app.panel.auth import client_ip, forwarded_proto
+
+    via_proxy = _scope_request(("127.0.0.1", 123), [(b"x-forwarded-for", b"9.9.9.9, 10.0.0.1")])
+    assert client_ip(via_proxy) == "9.9.9.9"
+    direct = _scope_request(("203.0.113.7", 123), [(b"x-forwarded-for", b"9.9.9.9")])
+    assert client_ip(direct) == "203.0.113.7"
+    assert client_ip(_scope_request(("127.0.0.1", 123))) == "127.0.0.1"
+    assert client_ip(_scope_request(None)) == "unknown"
+
+    proto = _scope_request(("127.0.0.1", 123), [(b"x-forwarded-proto", b"https")])
+    assert forwarded_proto(proto) == "https"
+    assert forwarded_proto(direct) == ""
+
+
+def test_client_ip_trusts_configured_bridge_network(monkeypatch):
+    """Inside Docker the proxy arrives as the bridge gateway, not loopback."""
+    from app.config import settings
+    from app.panel.auth import client_ip, forwarded_proto
+
+    monkeypatch.setattr(settings, "panel_trusted_proxies", "172.19.0.0/16")
+    via_gateway = _scope_request(("172.19.0.1", 5000), [(b"x-forwarded-for", b"9.9.9.9")])
+    assert client_ip(via_gateway) == "9.9.9.9"
+    gateway_proto = _scope_request(
+        ("172.19.0.1", 5000), [(b"x-forwarded-proto", b"https")]
+    )
+    assert forwarded_proto(gateway_proto) == "https"
+    # Malformed entries fail closed (ignored, no trust granted).
+    monkeypatch.setattr(settings, "panel_trusted_proxies", "not-an-ip")
+    assert client_ip(via_gateway) == "172.19.0.1"
+
+
+@pytest.mark.asyncio
+async def test_lockout_uses_forwarded_ip(session: AsyncSession, monkeypatch, _clean_login_guard):
+    """Behind the proxy, each visitor is bucketed by their own address."""
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db.models import AuditLog
+
+    monkeypatch.setattr(settings, "panel_login_max_attempts", 2)
+    monkeypatch.setattr(settings, "panel_login_window_minutes", 10)
+    monkeypatch.setattr(settings, "panel_login_lockout_minutes", 15)
+    await _user(session, "panel-admin")
+    attacker = {"X-Forwarded-For": "9.9.9.9"}
+    async with _client() as client:
+        assert (await client.post("/login", data={"username": "panel-admin", "password": "nope1"}, headers=attacker)).status_code == 401
+        assert (await client.post("/login", data={"username": "panel-admin", "password": "nope2"}, headers=attacker)).status_code == 429
+        # Attacker's lockout does not touch the direct peer's bucket.
+        good = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            follow_redirects=False,
+        )
+        assert good.status_code == 302
+        still_locked = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            headers=attacker, follow_redirects=False,
+        )
+        assert still_locked.status_code == 429
+    details = (
+        await session.execute(select(AuditLog.detail).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert details and all("ip=9.9.9.9" in d for d in details)
+
+
+@pytest.mark.asyncio
+async def test_secure_cookie_from_forwarded_proto(session: AsyncSession, monkeypatch, _clean_login_guard):
+    """The edge's https proto sets Secure even with the setting off."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "panel_cookie_secure", False)
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        response = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            headers={"X-Forwarded-Proto": "https"}, follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert "Secure" in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_session_expiry_follows_setting(session: AsyncSession, monkeypatch, _clean_login_guard):
+    """Cookie Max-Age tracks PANEL_SESSION_HOURS (expiry is not hardcoded)."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "panel_session_hours", 1)
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        response = await client.post(
+            "/login", data={"username": "panel-admin", "password": "secret123"},
+            follow_redirects=False,
+        )
+        assert "Max-Age=3600" in response.headers.get("set-cookie", "")

@@ -181,16 +181,18 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     the cap locks the IP (429). Passwords are verified with argon2, which
     compares in a way that does not bail out early on the first wrong byte.
     """
+    from app.config import settings as _settings
     from app.panel.auth import (
         clear_login_failures,
-        hash_password,  # noqa: F401 (kept for symmetry with verify import)
+        client_ip,
+        forwarded_proto,
         is_login_locked,
         record_login_failure,
         set_session_cookie,
         verify_password,
     )
 
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     if is_login_locked(ip):
         return templates.TemplateResponse(request, "login.html",
             _ctx(request, None, error="تلاش‌های ناموفق زیاد بود؛ لطفاً چند دقیقه بعد دوباره تلاش کنید."),
@@ -201,7 +203,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
             await session.execute(select(PanelUser).where(PanelUser.username == username))
         ).scalar_one_or_none()
         if not row or not row.is_active or not verify_password(row.password_hash, password):
-            await audit(session, row.id if row else None, "login_failed", None, f"username={username}")
+            await audit(session, row.id if row else None, "login_failed", None, f"username={username} ip={ip}")
             just_locked = record_login_failure(ip)
             if just_locked:
                 return templates.TemplateResponse(request, "login.html",
@@ -210,9 +212,14 @@ async def login_submit(request: Request, username: str = Form(...), password: st
             return templates.TemplateResponse(request, "login.html", _ctx(request, None, error="نام کاربری یا گذرواژه نادرست است."), status_code=401
             )
         clear_login_failures(ip)
-        await audit(session, row.id, "login", None, f"username={username}")
+        await audit(session, row.id, "login", None, f"username={username} ip={ip}")
         response = RedirectResponse(url="/", status_code=302)
-        set_session_cookie(response, row.id)
+        # HTTPS is guaranteed at the edge: Secure when configured or when the
+        # trusted proxy reports https (direct plain-HTTP logins keep working).
+        set_session_cookie(
+            response, row.id,
+            secure=bool(_settings.panel_cookie_secure or forwarded_proto(request) == "https"),
+        )
         return response
 
 
