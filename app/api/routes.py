@@ -292,6 +292,7 @@ async def _record_detail_payload(session: AsyncSession, record: Main) -> dict:
             {
                 "id": delivery.id,
                 "channel_id": delivery.channel_id,
+                "main_id": delivery.main_id,
                 "platform": channel.platform,
                 "username": channel.username,
                 "status": delivery.status,
@@ -379,3 +380,142 @@ async def review_record(
         await session.refresh(record)
 
     return await _record_detail_payload(session, record)
+
+
+@router.get(
+    "/deliveries",
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        422: {"model": ErrorResponse, "description": "Invalid pagination"},
+    },
+)
+async def list_deliveries(
+    shared_Secret: str = Query("", description="Authentication secret."),
+    page: int = Query(1, ge=1, description="1-based page number."),
+    page_size: int = Query(20, ge=1, le=100, description="Rows per page (max 100)."),
+    status: str | None = Query(None, description="Exact delivery status filter."),
+    platform: str | None = Query(None, description="Channel platform filter (bale|telegram)."),
+    main_id: int | None = Query(None, description="Article id filter."),
+    session: AsyncSession = Depends(get_session),
+):
+    """List deliveries with SQL LIMIT/OFFSET pagination for the review panel.
+
+    Filtering happens inside the query so ``total`` reflects the filtered set.
+    ``platform`` filters on the joined channel row because a delivery alone does
+    not carry its platform.
+    """
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from sqlalchemy import func, select
+
+    from app.db.models import Channel, Delivery
+
+    filters = []
+    if status:
+        filters.append(Delivery.status == status)
+    if main_id is not None:
+        filters.append(Delivery.main_id == main_id)
+
+    base = select(func.count()).select_from(Delivery)
+    if platform:
+        base = base.join(Channel, Channel.id == Delivery.channel_id).where(
+            Channel.platform == platform
+        )
+    if filters:
+        base = base.where(*filters)
+    total = (await session.execute(base)).scalar_one()
+
+    query = (
+        select(Delivery, Channel)
+        .join(Channel, Channel.id == Delivery.channel_id)
+        .order_by(Delivery.id.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    if status:
+        query = query.where(Delivery.status == status)
+    if platform:
+        query = query.where(Channel.platform == platform)
+    if main_id is not None:
+        query = query.where(Delivery.main_id == main_id)
+    rows = (await session.execute(query)).all()
+    return {
+        "items": [
+            {
+                "id": delivery.id,
+                "channel_id": delivery.channel_id,
+                "main_id": delivery.main_id,
+                "platform": channel.platform,
+                "username": channel.username,
+                "status": delivery.status,
+                "attempts": delivery.attempts,
+                "error_message": delivery.error_message,
+                "sent_at": delivery.sent_at,
+            }
+            for delivery, channel in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.post(
+    "/deliveries/{delivery_id}/retry",
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Delivery not found"},
+        409: {"model": ErrorResponse, "description": "Delivery is not retryable"},
+    },
+)
+async def retry_delivery(
+    delivery_id: int = Path(..., description="The delivery identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-queue a ``failed`` delivery as ``pending`` for the review panel.
+
+    Only ``failed`` rows are retryable (409 otherwise) so a send in flight or
+    an already-sent article is never duplicated by a retry click. Attempts are
+    reset to 0 (owner-approved) so the sender's bounded retry budget restarts.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.db.models import Channel, Delivery
+
+    body = payload or {}
+    secret = body.get("shared_Secret")
+    if not secret or not verify_secret(secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    result = await session.execute(select(Delivery).where(Delivery.id == delivery_id))
+    delivery = result.scalar_one_or_none()
+    if not delivery:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status != "failed":
+        raise HTTPException(status_code=409, detail="Delivery is not retryable")
+
+    delivery.status = "pending"
+    delivery.attempts = 0
+    delivery.claimed_at = None
+    delivery.error_message = None
+    delivery.next_attempt_at = datetime.utcnow()
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(delivery)
+
+    channel = await session.get(Channel, delivery.channel_id)
+    return {
+        "id": delivery.id,
+        "channel_id": delivery.channel_id,
+        "main_id": delivery.main_id,
+        "platform": channel.platform if channel else None,
+        "username": channel.username if channel else None,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "error_message": delivery.error_message,
+        "sent_at": delivery.sent_at,
+    }

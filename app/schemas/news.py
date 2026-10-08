@@ -87,6 +87,7 @@ class DeliveryInfo(BaseModel):
 
     id: int
     channel_id: int
+    main_id: int | None = None
     platform: str | None = None
     username: str | None = None
     status: str
@@ -131,6 +132,21 @@ class ReviewActionRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     lead: str | None = Field(default=None, min_length=1)
     body: str | None = Field(default=None, min_length=1)
+
+
+class DeliveryListResponse(BaseModel):
+    """Paginated ``GET /deliveries`` payload for the review panel."""
+
+    items: list[DeliveryInfo]
+    total: int
+    page: int
+    page_size: int
+
+
+class DeliveryRetryRequest(BaseModel):
+    """Request body for ``POST /deliveries/{id}/retry``."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
 
 
 class ServiceInfo(BaseModel):
