@@ -117,6 +117,22 @@ class RecordDetailResponse(RecordResponse):
     deliveries: list[DeliveryInfo] = Field(default_factory=list)
 
 
+class ReviewActionRequest(BaseModel):
+    """Request body for ``PATCH /records/{id}`` — a human review decision.
+
+    ``shared_Secret`` keeps machine-call auth consistent with ``POST /submit``.
+    ``action`` is the decision; optional ``title``/``lead``/``body`` edit the
+    stored ``output_json`` before the transition (used by save_draft and to fix
+    typos during approve/reject).
+    """
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    action: str = Field(description="One of approve, reject, save_draft.")
+    title: str | None = Field(default=None, min_length=1)
+    lead: str | None = Field(default=None, min_length=1)
+    body: str | None = Field(default=None, min_length=1)
+
+
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 

@@ -257,25 +257,21 @@ async def get_record(
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+    return await _record_detail_payload(session, record)
+
+
+async def _record_detail_payload(session: AsyncSession, record: Main) -> dict:
+    """Build the extended record payload (shared by GET and PATCH)."""
+    from sqlalchemy import select
+
+    from app.db.models import Channel, Delivery
+
     deliveries_result = await session.execute(
         select(Delivery, Channel)
         .join(Channel, Channel.id == Delivery.channel_id)
         .where(Delivery.main_id == record.id)
         .order_by(Delivery.id)
     )
-    deliveries = [
-        {
-            "id": delivery.id,
-            "channel_id": delivery.channel_id,
-            "platform": channel.platform,
-            "username": channel.username,
-            "status": delivery.status,
-            "attempts": delivery.attempts,
-            "error_message": delivery.error_message,
-            "sent_at": delivery.sent_at,
-        }
-        for delivery, channel in deliveries_result.all()
-    ]
     return {
         "id": record.id,
         "status": record.status,
@@ -292,5 +288,94 @@ async def get_record(
         "category_id": record.category_id,
         "model_id": record.model_id,
         "prompt_id": record.prompt_id,
-        "deliveries": deliveries,
+        "deliveries": [
+            {
+                "id": delivery.id,
+                "channel_id": delivery.channel_id,
+                "platform": channel.platform,
+                "username": channel.username,
+                "status": delivery.status,
+                "attempts": delivery.attempts,
+                "error_message": delivery.error_message,
+                "sent_at": delivery.sent_at,
+            }
+            for delivery, channel in deliveries_result.all()
+        ],
     }
+
+
+@router.patch(
+    "/records/{record_id}",
+    response_model=RecordDetailResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        409: {"model": ErrorResponse, "description": "Record is not in review state"},
+        422: {"model": ErrorResponse, "description": "Invalid action or edit"},
+    },
+)
+async def review_record(
+    record_id: int = Path(..., description="The record identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Apply a human review decision to a ``review`` record.
+
+    Only ``review`` rows may transition (409 otherwise) so an already-decided
+    or still-processing job is never overwritten. ``approve`` flips gated
+    ``awaiting_confirmation`` deliveries to ``pending``; ``reject`` moves the
+    record to ``rejected`` (gated deliveries stay gated and are therefore never
+    sent); ``save_draft`` only edits the stored ``output_json``. Optional
+    ``title``/``lead``/``body`` edit the output before the transition.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.messaging.dispatcher import confirm_deliveries_for_article
+    from app.schemas.news import ReviewActionRequest
+
+    body = payload or {}
+    secret = body.get("shared_Secret")
+    if not secret or not verify_secret(secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        data = ReviewActionRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if data.action not in ("approve", "reject", "save_draft"):
+        raise HTTPException(status_code=422, detail="action must be approve, reject or save_draft")
+
+    result = await session.execute(select(Main).where(Main.id == record_id))
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    if record.status != "review":
+        raise HTTPException(status_code=409, detail="Record is not in review state")
+
+    if data.title is not None or data.lead is not None or data.body is not None:
+        current = dict(record.output_json or {})
+        if data.title is not None:
+            current["title"] = data.title
+        if data.lead is not None:
+            current["lead"] = data.lead
+        if data.body is not None:
+            current["body"] = data.body
+        record.output_json = current
+
+    if data.action == "approve":
+        record.updated_at = datetime.utcnow()
+        await session.commit()
+        await confirm_deliveries_for_article(session, record.id)
+        await session.refresh(record)
+    elif data.action == "reject":
+        record.status = "rejected"
+        record.updated_at = datetime.utcnow()
+        await session.commit()
+        await session.refresh(record)
+    else:  # save_draft
+        record.updated_at = datetime.utcnow()
+        await session.commit()
+        await session.refresh(record)
+
+    return await _record_detail_payload(session, record)
