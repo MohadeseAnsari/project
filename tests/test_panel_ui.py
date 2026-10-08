@@ -42,10 +42,10 @@ async def test_login_template_is_persian_rtl_with_local_htmx():
     assert response.status_code == 200
     html = response.text
     assert 'dir="rtl"' in html
-    assert "ورود به پنل بررسی" in html
+    assert "ورود به کنسول ایران‌داک" in html
     assert "/static/htmx.min.js" in html
     assert "unpkg.com" not in html
-    assert "/static/style.css" in html
+    assert "/static/panel.css" in html
 
 
 @pytest.mark.asyncio

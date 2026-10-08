@@ -54,7 +54,29 @@ def _jalali(value) -> str:
     return str(value)
 
 
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _fa(value) -> str:
+    """Render numbers with Persian digits to match the approved design."""
+    if value is None:
+        return "—"
+    return str(value).translate(_FA_DIGITS)
+
+
+_ROLE_FA = {"admin": "ادمین", "editor": "بازبین", "viewer": "بیننده"}
+
+
+def _role_fa(user) -> str:
+    """Persian display name for a panel role (design reference wording)."""
+    if user is None or not getattr(user, "role", None):
+        return "—"
+    return _ROLE_FA.get(user.role.name, user.role.name)
+
+
 templates.env.filters["jalali"] = _jalali
+templates.env.filters["fa"] = _fa
+templates.env.globals["role_fa"] = _role_fa
 
 
 @asynccontextmanager
@@ -104,9 +126,24 @@ async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
 
 
 def _ctx(request: Request, user: PanelUser | None, **extra):
-    base = {"request": request, "current_user": user, "active": "", "error": None, "ok": None}
+    base = {
+        "request": request, "current_user": user, "active": "",
+        "error": None, "ok": None, "review_count": None, "gated_count": None,
+    }
     base.update(extra)
     return base
+
+
+async def _sidebar_counts(session: AsyncSession) -> dict:
+    """Sidebar badges: records awaiting review + deliveries needing attention."""
+    review_total = (
+        await session.execute(select(func.count()).select_from(Main).where(Main.status == "review"))
+    ).scalar_one()
+    gated_total = (
+        await session.execute(
+            select(func.count()).select_from(Delivery).where(Delivery.status.in_(["failed", "awaiting_confirmation"])))
+    ).scalar_one()
+    return {"review_count": review_total or None, "gated_count": gated_total or None}
 
 
 def _is_admin(user: PanelUser) -> bool:
@@ -162,22 +199,109 @@ async def logout():
 
 @panel_app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """Show record/delivery counts plus the newest records (no timings)."""
+    """Show KPIs, a 7-day chart, health, recent events, and channel state."""
+    from datetime import timedelta
+
     user = await require_login(request)
     async with async_session() as session:
-        record_rows = (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
-        delivery_rows = (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
+        counts = dict(
+            (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
+        )
+        delivery_counts = dict(
+            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
+        )
+        kpi_review = counts.get("review", 0)
+        kpi_queued = counts.get("ready", 0) + counts.get("processing", 0)
+        kpi_sent = delivery_counts.get("sent", 0)
+        kpi_failed = counts.get("failed", 0) + delivery_counts.get("failed", 0)
+
+        # Real 7-day series: records created per day, heights normalized.
+        today = datetime.utcnow().date()
+        days = [today - timedelta(days=i) for i in range(6, -1, -1)]
+        per_day = []
+        peak = 0
+        for day in days:
+            start = datetime(day.year, day.month, day.day)
+            end = start + timedelta(days=1)
+            n = (
+                await session.execute(
+                    select(func.count()).select_from(Main).where(Main.created_at >= start, Main.created_at < end))
+            ).scalar_one()
+            per_day.append((day, n))
+            peak = max(peak, n)
+        chart = [
+            {
+                "label": jdatetime.date.fromgregorian(date=d).strftime("%A"),
+                "pct": int(round(n / peak * 100)) if peak else 0,
+            }
+            for d, n in per_day
+        ]
+
         heartbeat = (await session.execute(select(func.max(Main.heartbeat_at)))).scalar_one_or_none()
-        recent = (
-            await session.execute(select(Main).order_by(Main.id.desc()).limit(10))
+        worker_fresh = bool(
+            heartbeat and (datetime.utcnow() - heartbeat).total_seconds() < settings.worker_lease_minutes * 60
+        )
+        pending_deliveries = delivery_counts.get("pending", 0)
+
+        # Timeline: latest human/system events from the audit trail.
+        audits = (
+            await session.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(4))
         ).scalars().all()
+        timeline = []
+        for a in audits:
+            actor = None
+            if a.user_id:
+                actor = await session.get(PanelUser, a.user_id)
+            timeline.append(
+                {
+                    "icon": {"approve": "✓", "reject": "!", "retry": "➤", "login": "◕"}.get(a.action, "•"),
+                    "color": {"approve": "green", "reject": "red", "retry": "amber", "login": "violet"}.get(a.action, "blue"),
+                    "title": _audit_title(a),
+                    "sub": f"{actor.username if actor else 'سیستم'} · {_jalali(a.created_at)}",
+                }
+            )
+
+        channels = (await session.execute(select(Channel).order_by(Channel.id))).scalars().all()
+        for c in channels:
+            c.route_count = (
+                await session.execute(
+                    select(func.count()).select_from(FieldChannelRoute).where(FieldChannelRoute.channel_id == c.id))
+            ).scalar_one()
+
+        failed_note = None
+        if delivery_counts.get("failed", 0):
+            failed_note = f"{_fa(delivery_counts['failed'])} تحویل ناموفق در صف اقدام دستی است؛ از صفحهٔ ارسال‌ها «تلاش مجدد» را بزنید."
+
+        counts_ctx = await _sidebar_counts(session)
+        now_label = jdatetime.datetime.now().strftime("%H:%M")
     return templates.TemplateResponse(request, "dashboard.html",
         _ctx(
-            request, user, active="dashboard",
-            records=dict(record_rows), deliveries=dict(delivery_rows),
-            heartbeat=heartbeat, recent=recent,
+            request, user, active="dashboard", **counts_ctx,
+            kpi_review=kpi_review, kpi_queued=kpi_queued, kpi_sent=kpi_sent, kpi_failed=kpi_failed,
+            chart=chart, worker_fresh=worker_fresh, pending_deliveries=pending_deliveries,
+            timeline=timeline, channels=channels, failed_note=failed_note, now_label=now_label,
         ),
     )
+
+
+_ACTION_FA = {
+    "login": "ورود به کنسول", "approve": "تأیید و انتشار", "reject": "رد خبر",
+    "save_draft": "ذخیرهٔ پیش‌نویس", "retry": "تلاش مجدد ارسال",
+    "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
+    "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
+    "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
+    "route": "افزودن مسیر", "unroute": "حذف مسیر",
+}
+
+
+def _audit_title(entry: AuditLog) -> str:
+    """Persian one-line summary of an audit entry for timelines and tables."""
+    action = _ACTION_FA.get(entry.action, entry.action)
+    if entry.main_id:
+        return f"{action} — رکورد {entry.main_id}"
+    if entry.detail:
+        return f"{action} — {entry.detail}"
+    return action
 
 
 # --------------------------------------------------------------------------

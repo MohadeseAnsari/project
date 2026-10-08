@@ -1,42 +1,42 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}پنل بررسی{% endblock %} — ایران‌داک</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <script src="/static/htmx.min.js" defer></script>
-</head>
+<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css"></head>
 <body>
-<header class="topbar">
-  <div><strong>پنل بررسی ایران‌داک</strong></div>
-  <nav>
+{% block layout %}
+<div class="grid">
+  <aside>
+    <div class="brand"><div class="logo">ا</div><div><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
+    <nav>
+      <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
+      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if review_count %}<span class="cnt">{{ review_count|fa }}</span>{% endif %}</a>
+      <a href="/deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
+      <div class="sep">تنظیمات</div>
+      <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها</a>
+      <a href="/categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>
+      <a href="/channels" class="{% if active=='channels' %}on{% endif %}"><span class="ic">⇄</span>کانال‌ها و مسیرها</a>
+      <a href="/prompts" class="{% if active=='prompts' %}on{% endif %}"><span class="ic">✎</span>پرامپت‌ها</a>
+      <a href="/models" class="{% if active=='models' %}on{% endif %}"><span class="ic">⚙</span>مدل‌ها</a>
+      <div class="sep">مدیریت</div>
+      <a href="/users" class="{% if active=='users' %}on{% endif %}"><span class="ic">◕</span>کاربران و نقش‌ها</a>
+      <a href="/audit" class="{% if active=='audit' %}on{% endif %}"><span class="ic">⌘</span>رویدادها</a>
+    </nav>
     {% if current_user %}
-      <span>{{ current_user.username }} ({{ current_user.role.name }})</span>
-      <a href="/">داشبورد</a>
-      <a href="/logout">خروج</a>
+    <div class="side-foot"><div class="avatar">{{ current_user.username[:1] }}</div><div><b style="font-size:12.5px">{{ current_user.username }}</b><small>{{ role_fa(current_user) }}</small></div></div>
     {% endif %}
-  </nav>
-</header>
-<div class="layout">
-  {% if current_user %}
-  <aside class="nav">
-    <a href="/" class="{% if active=='dashboard' %}active{% endif %}">داشبورد</a>
-    <a href="/records" class="{% if active=='records' %}active{% endif %}">رکوردها</a>
-    <a href="/deliveries" class="{% if active=='deliveries' %}active{% endif %}">ارسال‌ها</a>
-    <a href="/submit" class="{% if active=='submit' %}active{% endif %}">ثبت پایان‌نامه</a>
-    <a href="/models" class="{% if active=='models' %}active{% endif %}">مدل‌ها</a>
-    <a href="/prompts" class="{% if active=='prompts' %}active{% endif %}">پرامپت‌ها</a>
-    <a href="/channels" class="{% if active=='channels' %}active{% endif %}">کانال‌ها</a>
-    <a href="/fields" class="{% if active=='fields' %}active{% endif %}">رشته‌ها</a>
-    <a href="/categories" class="{% if active=='categories' %}active{% endif %}">دسته‌ها</a>
   </aside>
-  {% endif %}
-  <main class="main">
-    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
-    {% if ok %}<div class="alert alert-ok">{{ ok }}</div>{% endif %}
-    {% block content %}{% endblock %}
+  <main>
+    <header class="top">
+      <div><h1>{% block h1 %}{% endblock %}</h1><div class="crumb">{% block crumb %}کنسول{% endblock %}</div></div>
+      <div class="grow"></div>
+      {% block top_actions %}{% endblock %}
+    </header>
+    <div class="wrap">
+      {% if error %}<div class="note">{{ error }}</div>{% endif %}
+      {% if ok %}<div class="ok-note">{{ ok }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </div>
   </main>
 </div>
-</body>
-</html>
+{% endblock %}
+<script src="/static/htmx.min.js" defer></script>
+</body></html>
