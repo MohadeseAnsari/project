@@ -121,9 +121,12 @@ docker compose ps
 curl.exe http://localhost:8000/health
 ```
 
-Review panel (same image, `web` service, loopback-only): set
-`PANEL_ADMIN_PASSWORD` + `PANEL_SECRET_KEY` in `.env`, then open
-**http://127.0.0.1:8081/login**. See `docs/admin-panel.md` for pages and roles.
+Review panel (same image, `web` service): set `PANEL_ADMIN_PASSWORD` +
+`PANEL_SECRET_KEY` in `.env`, then open **http://YOUR_HOST:8081/login**
+(`PANEL_PORT`, default `8081`, binds all interfaces). Plain HTTP transmits
+the password unencrypted — put TLS in front (reverse proxy) before exposing
+it; to revert to loopback-only access set `PANEL_PORT=127.0.0.1:8081`. See
+`docs/admin-panel.md` for pages, roles, and security notes.
 
 Apply migrations and seed fields (first run only):
 

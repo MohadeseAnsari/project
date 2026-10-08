@@ -124,13 +124,15 @@ services:
     restart: unless-stopped
 
   # Server-rendered review panel (Jinja2 + locally vendored HTMX, no build
-  # step). Same image as `api` with a different command; loopback-only port so
-  # the human UI is never exposed beyond the host without an SSH tunnel.
+  # step). Same image as `api` with a different command. Owner decision: the
+  # panel is reachable from the internet, so the published port binds 0.0.0.0
+  # by default. PANEL_PORT is the single knob: keep `8081` for public access,
+  # or set `127.0.0.1:8081` to revert to loopback-only (SSH tunnel) access.
   web:
     build: .
     command: uvicorn app.panel.app:panel_app --host 0.0.0.0 --port 8081
     ports:
-      - "127.0.0.1:8081:8081"
+      - "${PANEL_PORT:-8081}:8081"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       PANEL_ADMIN_USERNAME: ${PANEL_ADMIN_USERNAME:-admin}

@@ -2,9 +2,10 @@
 
 Server-rendered human review UI for the IranDoc News Generation service.
 Same Docker image as the API with a different command (`web` compose service,
-loopback-only `127.0.0.1:8081`). Jinja2 + locally vendored HTMX
+published port `PANEL_PORT`, default `8081`). Jinja2 + locally vendored HTMX
 (`app/panel/static/htmx.min.js`, no CDN), plain CSS
-(`app/panel/static/style.css`), Vazirmatn fonts vendored from `demo/fonts/`.
+(`app/panel/static/panel.css`, byte-identical port of the approved design),
+Vazirmatn fonts vendored from `demo/fonts/`.
 All pages are Persian, `dir="rtl"`. No Node, no build step.
 
 ## Access
@@ -14,10 +15,28 @@ cp .env.example .env   # set PANEL_ADMIN_PASSWORD + PANEL_SECRET_KEY
 docker compose up -d web
 ```
 
-Open **http://127.0.0.1:8081/login**. The first admin
-(`PANEL_ADMIN_USERNAME`, default `admin`) is created at startup from env vars
-when no users exist; the password is stored as an argon2 hash, never plaintext.
-A signed `panel_session` cookie (12h, HttpOnly, Lax) keeps the login.
+Open **http://YOUR_HOST:8081/login** (`PANEL_PORT`, default `8081`, binds all
+interfaces). The first admin (`PANEL_ADMIN_USERNAME`, default `admin`) is
+created at startup from env vars when no users exist; the password is stored
+as an argon2 hash, never plaintext. A signed `panel_session` cookie (12h,
+HttpOnly, Lax) keeps the login.
+
+## Security notes (public exposure)
+
+- Plain HTTP transmits the panel password unencrypted. The recommended next
+  step is TLS via a reverse proxy (terminate HTTPS there, forward to the
+  `web` service), then set `PANEL_COOKIE_SECURE=true` so the session cookie
+  is sent with the `Secure` flag.
+- Login is rate-limited per IP with lockout after repeated failures, and
+  failed logins are written to the audit trail. Every other panel route
+  requires login (anonymous browsers redirect to `/login`); there are no
+  debug routes and no unauthenticated listing endpoints.
+- To revert to loopback-only access (SSH tunnel), change exactly one value:
+
+```bash
+PANEL_PORT=127.0.0.1:8081
+docker compose up -d web
+```
 
 ## Roles
 
