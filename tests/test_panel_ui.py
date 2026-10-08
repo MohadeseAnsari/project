@@ -435,6 +435,58 @@ async def test_session_expiry_follows_setting(session: AsyncSession, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_all_panel_pages_render(session: AsyncSession):
+    """Every GET page returns 200 with its Persian title (template smoke)."""
+    from app.db.models import Category, Channel, Delivery, Main
+
+    await _user(session, "panel-admin")
+    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
+    session.add(cat)
+    await session.commit()
+    channel = Channel(platform="bale", chat_id=72001, username="@c", is_active=True)
+    session.add(channel)
+    await session.commit()
+    row = Main(
+        username="t", title="T", abstract="A", field="f", university="U",
+        author="A", supervisor="S", status="review",
+        field_id=None, category_id=cat.id,
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    session.add(Delivery(main_id=row.id, channel_id=channel.id, category_id=cat.id,
+                         route_source="fallback", status="pending"))
+    await session.commit()
+    pages = {
+        "/": "داشبورد",
+        "/records": "رکوردها و بازبینی",
+        "/deliveries": "ارسال‌ها و تحویل",
+        "/fields": "رشته‌ها",
+        "/categories": "دسته‌ها",
+        "/channels": "کانال‌ها و مسیرها",
+        "/models": "مدل‌ها",
+        "/prompts": "پرامپت‌ها",
+        "/submit": "ثبت پایان‌نامه",
+        "/users": "کاربران و نقش‌ها",
+        "/audit": "رویدادها",
+        "/routing": "پیش‌نمایش مسیریابی",
+        "/profile": "حساب من",
+    }
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        for path, title in pages.items():
+            response = await client.get(path)
+            assert response.status_code == 200, path
+            assert title in response.text, path
+        detail = await client.get(f"/records/{row.id}")
+        assert detail.status_code == 200
+        assert "دستهٔ ثبت‌شده" in detail.text
+        assert "دستهٔ کنونی رشته" in detail.text
+        delivery_tab = await client.get(f"/records/{row.id}", params={"tab": "delivery"})
+        assert "پیش‌نمایش پیام" in delivery_tab.text
+
+
+@pytest.mark.asyncio
 async def test_admin_reset_password_flow(session: AsyncSession):
     """Full reset cycle: old stops working, new works, audit records it."""
     from sqlalchemy import select

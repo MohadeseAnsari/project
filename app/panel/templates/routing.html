@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}پیش‌نمایش مسیریابی{% endblock %}
+{% block h1 %}پیش‌نمایش مسیریابی{% endblock %}
+{% block crumb %}کنسول › کانال‌ها › پیش‌نمایش مسیر{% endblock %}
+{% block content %}
+<div class="card">
+  <form method="get" action="/routing">
+    <div class="filters">
+      <input type="text" name="field" placeholder="نام رشته، مثلاً هوش مصنوعی…" value="{{ field or '' }}">
+      <input type="text" name="record_id" placeholder="شناسهٔ رکورد…" value="{{ record_id or '' }}">
+      <button class="btn btn-primary btn-sm" type="submit">پیش‌نمایش</button>
+    </div>
+    <div class="hint">فقط یکی را پر کنید: نام رشته، یا شناسهٔ رکورد.</div>
+  </form>
+</div>
+
+{% if preview %}
+<div class="card">
+  <h3>زنجیرهٔ مسیریابی<span class="grow"></span><span class="badge s-sent">زنده از پایگاه‌داده</span></h3>
+  <div class="body">
+    <dl class="kv">
+      <dt>ورودی</dt><dd>{{ preview.input }}{% if preview.record_id %} (رکورد {{ preview.record_id|fa }}){% endif %}</dd>
+      <dt>دسته</dt><dd>{{ preview.category }}</dd>
+      <dt>کلیدواژه</dt><dd>{{ preview.matched_keyword or '—' }}</dd>
+    </dl>
+  </div>
+  <table>
+    <thead><tr><th>کانال</th><th>سکو</th><th>سطح مسیر</th></tr></thead>
+    <tbody>
+      {% for c in preview.channels %}
+      <tr><td class="title">{{ c.username or c.title or c.platform }}</td><td>{{ c.platform }}</td>
+        <td>{% if c.via == 'category' %}<span class="badge s-sent">دسته</span>
+          {% elif c.via == 'field' %}<span class="badge s-ready">رشته (استثنا)</span>
+          {% else %}<span class="badge s-off">پشتیبان</span>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="body" style="border-top:1px solid var(--line2)">
+    <div class="hint">همین زنجیره را فرستنده استفاده می‌کند: دسته، بعد استثنای رشته، بعد همهٔ کانال‌های فعال.</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -118,6 +118,10 @@ returns a record's status and (when finished) its output.
    - links the active `model_id`/`prompt_id` (auditability);
    - starts a heartbeat task, calls the LLM, stores
      `output_json={title, lead, body}`, sets `review`.
+   - `category_id` is a snapshot: re-classifying the field later (new
+     keywords, `scripts/reclassify_fields.py --apply`) never rewrites
+     `main` rows, so history stays stable. The record page shows both the
+     stored category and the field's current one when they differ.
 4. **Fail** — any exception → `fail_job` sets `failed` with the error text
    (truncated to 2000 chars). There is **no automatic retry counter**; failed
    jobs stay failed.

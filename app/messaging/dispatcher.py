@@ -46,6 +46,90 @@ def _backoff_delay(attempts: int) -> float:
     return settings.sender_backoff_base_seconds * (2 ** max(0, attempts - 1))
 
 
+async def preview_routing(
+    session, *, field: str | None = None, record_id: int | None = None
+) -> dict:
+    """Preview the routing chain for a raw field name or an existing record.
+
+    Shared by the machine preview endpoint and the panel routing page, so
+    both show the same answer: the resolved category, the matched keyword,
+    and the channels (with route level) the sender would use right now.
+    For records the category/keyword are the stored snapshot (what the
+    Worker used); channels are resolved live because routes may have
+    changed since processing.
+
+    Raises:
+        ValueError: exactly one of ``field``/``record_id`` must be given.
+        LookupError: unknown record id.
+    """
+    from app.db.models import Category, Field
+    from app.fields.classification import classify_with_reason
+    from app.fields.normalization import normalize_field
+
+    if (field is None) == (record_id is None):
+        raise ValueError("pass exactly one of field or record_id")
+
+    if record_id is not None:
+        result = await session.execute(select(Main).where(Main.id == record_id))
+        record = result.scalar_one_or_none()
+        if record is None:
+            raise LookupError(f"record {record_id} not found")
+        category_name = None
+        if record.category_id is not None:
+            category = await session.get(Category, record.category_id)
+            category_name = category.name if category else None
+        keyword = None
+        if record.field_id is not None:
+            field_row = await session.get(Field, record.field_id)
+            if field_row is not None:
+                keyword = field_row.matched_keyword
+        if keyword is None:
+            _, keyword, _ = classify_with_reason(normalize_field(record.field))
+        pairs = await resolve_channels(session, record.category_id, record.field_id)
+        return {
+            "input": record.field,
+            "record_id": record.id,
+            "category": category_name or "other",
+            "matched_keyword": keyword,
+            "channels": [
+                {
+                    "id": channel.id,
+                    "platform": channel.platform,
+                    "username": channel.username,
+                    "title": channel.title,
+                    "via": source,
+                }
+                for channel, source in pairs
+            ],
+        }
+
+    assert field is not None
+    norm = normalize_field(field)
+    category_name, keyword, _ = classify_with_reason(norm)
+    category_id = None
+    if category_name != "other":
+        result = await session.execute(
+            select(Category).where(Category.name == category_name)
+        )
+        category = result.scalar_one_or_none()
+        category_id = category.id if category else None
+    pairs = await resolve_channels(session, category_id, None)
+    return {
+        "input": field,
+        "record_id": None,
+        "category": category_name,
+        "matched_keyword": keyword,
+        "channels": [
+            {
+                "id": channel.id,
+                "platform": channel.platform,
+                "username": channel.username,
+                "title": channel.title,
+                "via": source,
+            }
+            for channel, source in pairs
+        ],
+    }
 async def channels_for_article(session, article: Main) -> list[Channel]:
     """Return the active channels this article must be published to.
 
@@ -62,6 +146,45 @@ async def channels_for_article(session, article: Main) -> list[Channel]:
     return [channel for channel, _ in await channels_for_article_with_source(session, article)]
 
 
+async def resolve_channels(
+    session, category_id: int | None, field_id: int | None
+) -> list[tuple[Channel, str]]:
+    """Resolve ``(channel, route_source)`` for a category/field pair.
+
+    The neutral core shared by the sender (via articles), the routing
+    preview, and the panel: one chain, three levels (``category`` | ``field``
+    | ``fallback``), so every surface agrees on where an article will go.
+    """
+    if category_id is not None:
+        result = await session.execute(
+            select(Channel)
+            .join(CategoryChannelRoute, CategoryChannelRoute.channel_id == Channel.id)
+            .where(CategoryChannelRoute.category_id == category_id)
+            .where(Channel.is_active.is_(True))
+            .order_by(Channel.id)
+        )
+        routed = list(result.scalars().all())
+        if routed:
+            return [(channel, "category") for channel in routed]
+
+    if field_id is not None:
+        result = await session.execute(
+            select(Channel)
+            .join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id)
+            .where(FieldChannelRoute.field_id == field_id)
+            .where(Channel.is_active.is_(True))
+            .order_by(Channel.id)
+        )
+        routed = list(result.scalars().all())
+        if routed:
+            return [(channel, "field") for channel in routed]
+
+    result = await session.execute(
+        select(Channel).where(Channel.is_active.is_(True)).order_by(Channel.id)
+    )
+    return [(channel, "fallback") for channel in list(result.scalars().all())]
+
+
 async def channels_for_article_with_source(
     session, article: Main
 ) -> list[tuple[Channel, str]]:
@@ -71,40 +194,7 @@ async def channels_for_article_with_source(
     level produced each channel (``category`` | ``field`` | ``fallback``) so
     the delivery row can snapshot its provenance at queue time.
     """
-    if article.category_id is not None:
-        result = await session.execute(
-            select(Channel)
-            .join(CategoryChannelRoute, CategoryChannelRoute.channel_id == Channel.id)
-            .where(CategoryChannelRoute.category_id == article.category_id)
-            .where(Channel.is_active.is_(True))
-            .order_by(Channel.id)
-        )
-        routed = list(result.scalars().all())
-        if routed:
-            return [(channel, "category") for channel in routed]
-
-    routed = await _field_routed_channels(session, article)
-    if routed:
-        return [(channel, "field") for channel in routed]
-
-    result = await session.execute(
-        select(Channel).where(Channel.is_active.is_(True)).order_by(Channel.id)
-    )
-    return [(channel, "fallback") for channel in list(result.scalars().all())]
-
-
-async def _field_routed_channels(session, article: Main) -> list[Channel]:
-    """Active channels from the article's field routes (exception table)."""
-    if article.field_id is None:
-        return []
-    result = await session.execute(
-        select(Channel)
-        .join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id)
-        .where(FieldChannelRoute.field_id == article.field_id)
-        .where(Channel.is_active.is_(True))
-        .order_by(Channel.id)
-    )
-    return list(result.scalars().all())
+    return await resolve_channels(session, article.category_id, article.field_id)
 
 
 def _has_undelivered_channel():

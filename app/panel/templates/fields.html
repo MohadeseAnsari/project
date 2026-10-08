@@ -7,11 +7,11 @@
   <div class="card">
     <h3>رشته‌های تعریف‌شده<span class="grow"></span><span class="badge s-off">{{ total|fa }} رشته</span></h3>
     <table>
-      <thead><tr><th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:150px">دسته</th><th style="width:110px">کانال مسیرشده</th></tr></thead>
+      <thead><tr><th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:150px">دسته</th><th style="width:130px">کلیدواژه</th><th style="width:110px">کانال مسیرشده</th></tr></thead>
       <tbody>
         {% for f in fields %}
         <tr><td class="num">{{ f.id|fa }}</td><td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
-          <td>{{ f.category_name or '—' }}</td><td>{{ f.channel_names or 'بدون کانال' }}</td></tr>
+          <td>{{ f.category_name or '—' }}</td><td>{{ f.matched_keyword or '—' }}</td><td>{{ f.channel_names or 'بدون کانال' }}</td></tr>
         {% endfor %}
       </tbody>
     </table>

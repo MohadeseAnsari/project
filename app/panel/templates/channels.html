@@ -41,7 +41,34 @@
 </div>
 
 <div class="card">
-  <h3>مسیر رشته ← کانال<span class="grow"></span><span class="badge s-off">هر خبر فقط به کانال‌های مسیرشده می‌رود</span></h3>
+  <h3>مسیر دسته ← کانال<span class="grow"></span><span class="badge s-sent">نگاشت اصلی فرستنده</span></h3>
+  <table class="matrix">
+    <thead><tr><th>دسته</th>{% for c in channels %}<th>{{ c.title or c.username or c.platform }}</th>{% endfor %}<th>وضعیت مسیر</th></tr></thead>
+    <tbody>
+      {% for row in cat_routes %}
+      <tr><td class="title">{{ row.category_name }}</td>
+        {% for c in channels %}<td>{% if c.id in row.channel_ids %}<span class="tick">✓</span>{% else %}<span class="cross">—</span>{% endif %}</td>{% endfor %}
+        <td>{% if row.channel_ids %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">بدون مسیر</span>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="body" style="border-top:1px solid var(--line2)">
+    <form method="post" action="/channels/category-route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field" style="margin:0"><label>category_id</label><input type="number" name="category_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <button class="btn btn-primary btn-sm" type="submit">افزودن مسیر</button>
+    </form>
+    <form method="post" action="/channels/category-unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+      <div class="field" style="margin:0"><label>category_id</label><input type="number" name="category_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <button class="btn btn-ghost btn-sm" type="submit">حذف مسیر</button>
+    </form>
+    <div class="hint" style="margin-top:9px">فرستنده اول مسیر دسته را می‌خواند؛ مسیر رشته فقط استثناست. <a href="/routing">پیش‌نمایش مسیریابی</a></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>مسیر رشته ← کانال<span class="grow"></span><span class="badge s-off">استثنای سطح رشته</span></h3>
   <table class="matrix">
     <thead><tr><th>رشته</th>{% for c in channels %}<th>{{ c.title or c.username or c.platform }}</th>{% endfor %}<th>وضعیت مسیر</th></tr></thead>
     <tbody>

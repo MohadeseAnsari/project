@@ -160,6 +160,26 @@ class StatsResponse(BaseModel):
     worker_last_heartbeat_at: datetime | None = None
 
 
+class PreviewChannel(BaseModel):
+    """One destination a field/record resolves to, with the route level."""
+
+    id: int
+    platform: str
+    username: str | None = None
+    title: str | None = None
+    via: str = Field(description="Which route level produced it: category, field, or fallback.")
+
+
+class RoutingPreviewResponse(BaseModel):
+    """``GET /routing/preview`` payload: the auditable routing chain."""
+
+    input: str = Field(description="The raw field name or record reference previewed.")
+    record_id: int | None = None
+    category: str
+    matched_keyword: str | None = None
+    channels: list[PreviewChannel]
+
+
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 

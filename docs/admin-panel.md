@@ -73,13 +73,13 @@ global `/audit` page.
 | Login | `GET /login`, `POST /login` | `panel_users` + argon2 verify; sets signed cookie; audits `login` |
 | Dashboard | `GET /` | Same `GROUP BY` counts as `GET /stats` (records/deliveries per status) + `MAX(main.heartbeat_at)` + 10 newest records. Shows no timings. |
 | Records list | `GET /records`, `GET /records/table` (HTMX) | SQL `LIMIT/OFFSET + COUNT` with `status/field/university/q/order` filters (same semantics as `GET /records` API) |
-| Record review | `GET /records/{id}`, `POST /records/{id}/review` | Editable `title/lead/body` (`output_json`); `approve` flips `awaiting_confirmation→pending` via `confirm_deliveries_for_article`; `reject` → `rejected`; `save_draft` edits only. Only from `review` (else 409 page). Audited. |
+| Record review | `GET /records/{id}`, `POST /records/{id}/review` | Editable `title/lead/body` (`output_json`); `approve` flips `awaiting_confirmation→pending` via `confirm_deliveries_for_article`; `reject` → `rejected`; `save_draft` edits only. Only from `review` (else 409 page). Shows the stored category vs the field's current one (records keep the processing-time snapshot). Audited. |
 | Deliveries | `GET /deliveries`, `GET /deliveries/table` (HTMX), `POST /deliveries/{id}/retry` | Filters `status/platform/main_id`; retry only `failed` (else 409), resets `attempts=0`. Audited. |
 | Submit form | `GET /submit`, `POST /submit` | Creates `main(status='ready')` with validated optional `model_id`/`prompt_id` (same rules as `POST /submit` API). Audited. |
 | Models | `GET /models`, `POST /models`, `POST /models/{id}/activate`, `POST /models/{id}/test` | List/create/detail; single-active activate (atomic); 1-token real connection probe (key never returned/logged). Admin only for mutations. |
 | Prompts | `GET /prompts`, `POST /prompts`, `POST /prompts/{id}/activate` | Immutable versions: new version = new row + activate previous off; never edited in place. Admin only for mutations. |
 | Channels + routing | `GET /channels`, `POST /channels`, `POST /channels/route`, `POST /channels/unroute` | Destinations (tokens stay in env, never on rows); field→channel routes as row inserts. Admin only for mutations. |
-| Fields | `GET /fields` | Read-only table with category, source, routed channels, plus top-field bars from real record counts. |
+| Fields | `GET /fields` | Read-only table with category, matched keyword (the WHY), source, routed channels, plus top-field bars from real record counts. Re-classify spreadsheet rows with `scripts/reclassify_fields.py` (dry-run diff first, `--apply` to persist; `main` rows keep their snapshots). |
 | Categories | `GET /categories` | Cards per category with real field names as chips and field counts; server-side name search. |
 | Users | `GET /users`, `POST /users`, `POST /users/{id}/role`, `POST /users/{id}/toggle`, `POST /users/{id}/password` | Console accounts (argon2 hashes, never plaintext); role changes, activate/deactivate, and password resets; access matrix. Admin only. Own password via `/profile`. |
 | Audit trail | `GET /audit` | Immutable `audit_logs` table with action/user/record filters and pagination. Admin only. |

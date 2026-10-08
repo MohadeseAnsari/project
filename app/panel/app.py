@@ -24,6 +24,7 @@ from app.db.connection import async_session, engine
 from app.db.models import (
     AuditLog,
     Category,
+    CategoryChannelRoute,
     Channel,
     Delivery,
     Field,
@@ -472,6 +473,10 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
         ).scalars().all()
         for d in deliveries:
             d.channel = await session.get(Channel, d.channel_id)
+            d.category_name = None
+            if d.category_id is not None:
+                d_category = await session.get(Category, d.category_id)
+                d.category_name = d_category.name if d_category else None
         model_name = None
         if record.model_id:
             model = await session.get(Model, record.model_id)
@@ -480,6 +485,22 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
         if record.prompt_id:
             prompt = await session.get(Prompt, record.prompt_id)
             prompt_version = prompt.version if prompt else None
+        # Snapshot (what the Worker stored at processing time) vs current
+        # field category (what a reclassification would give today). The
+        # record keeps the snapshot; the panel shows both when they differ.
+        snapshot_category = None
+        if record.category_id is not None:
+            snapshot = await session.get(Category, record.category_id)
+            snapshot_category = snapshot.name if snapshot else None
+        current_category = None
+        field_keyword = None
+        if record.field_id is not None:
+            field_row = await session.get(Field, record.field_id)
+            if field_row is not None:
+                field_keyword = field_row.matched_keyword
+                if field_row.category_id is not None:
+                    current = await session.get(Category, field_row.category_id)
+                    current_category = current.name if current else None
         routed_channels = None
         message_preview = None
         preview_channel = None
@@ -522,6 +543,8 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
             request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
             routed_channels=routed_channels, message_preview=message_preview,
+            snapshot_category=snapshot_category, current_category=current_category,
+            field_keyword=field_keyword,
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )
@@ -653,14 +676,7 @@ async def deliveries_page(request: Request, status: str = "", platform: str = ""
         if mid is not None:
             query = query.where(Delivery.main_id == mid)
         pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size))).all()
-        items = [
-            {
-                "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
-                "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
-                "channel_name": c.username or c.title or c.platform,
-            }
-            for d, c, m in pairs
-        ]
+        items = await _delivery_items(session, pairs)
         last_failed = (
             await session.execute(select(Delivery).where(Delivery.status == "failed").order_by(Delivery.id.desc()).limit(1))
         ).scalar_one_or_none()
@@ -675,6 +691,35 @@ async def deliveries_page(request: Request, status: str = "", platform: str = ""
             backoff_base=settings.sender_backoff_base_seconds,
         )
     )
+
+
+async def _delivery_items(session, pairs) -> list[dict]:
+    """Shape delivery rows for list templates, with routing provenance.
+
+    One shared builder for the full page and the HTMX partial so both show
+    the same columns: destination, article, status, and which category and
+    route level produced the row (pre-provenance rows show "—").
+    """
+    items = [
+        {
+            "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
+            "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
+            "channel_name": c.username or c.title or c.platform,
+            "category_id": d.category_id, "route_source": d.route_source,
+            "category_name": "—",
+        }
+        for d, c, m in pairs
+    ]
+    ids = [item["category_id"] for item in items if item["category_id"]]
+    if ids:
+        cats = (
+            await session.execute(select(Category).where(Category.id.in_(ids)))
+        ).scalars().all()
+        names = {c.id: c.name for c in cats}
+        for item in items:
+            if item["category_id"]:
+                item["category_name"] = names.get(item["category_id"], "—")
+    return items
 
 
 @panel_app.get("/deliveries/table", response_class=HTMLResponse)
@@ -704,14 +749,7 @@ async def deliveries_table(request: Request, status: str = "", platform: str = "
         if mid is not None:
             query = query.where(Delivery.main_id == mid)
         pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size).offset((page - 1) * page_size))).all()
-        items = [
-            {
-                "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
-                "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
-                "channel_name": c.username or c.title or c.platform,
-            }
-            for d, c, m in pairs
-        ]
+        items = await _delivery_items(session, pairs)
     from urllib.parse import urlencode
 
     query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
@@ -764,6 +802,7 @@ async def fields_page(request: Request):
                 {
                     "id": f.id, "name": f.name, "source": f.source,
                     "category_name": cat.name if cat else None,
+                    "matched_keyword": f.matched_keyword,
                     "channel_names": "، ".join(c.username or c.title or c.platform for c in routed) or None,
                 }
             )
@@ -830,10 +869,111 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
                 ).scalars().all()
             )
             matrix.append({"field_name": f.name, "channel_ids": ids})
+        categories = (await session.execute(select(Category).order_by(Category.id))).scalars().all()
+        cat_routes = []
+        for cat in categories:
+            ids = set(
+                (await session.execute(
+                    select(CategoryChannelRoute.channel_id).where(CategoryChannelRoute.category_id == cat.id))
+                ).scalars().all()
+            )
+            cat_routes.append({"category_id": cat.id, "category_name": cat.name, "channel_ids": ids})
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             matrix=matrix, show_new=bool(new)))
+             matrix=matrix, cat_routes=cat_routes, show_new=bool(new)))
+
+
+
+@panel_app.post("/channels/route")
+async def channel_route(request: Request, field_id: int = Form(...), channel_id: int = Form(...)):
+    """Route one field to one channel (admin only; row insert, no code change)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        session.add(FieldChannelRoute(field_id=field_id, channel_id=channel_id))
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+        await audit(session, user.id, "route", None, f"field={field_id} channel={channel_id}")
+    return RedirectResponse(url="/channels", status_code=302)
+
+
+@panel_app.post("/channels/unroute")
+async def channel_unroute(request: Request, field_id: int = Form(...), channel_id: int = Form(...)):
+    """Remove one field→channel route (admin only)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        row = await session.get(FieldChannelRoute, (field_id, channel_id))
+        if row:
+            await session.delete(row)
+            await session.commit()
+        await audit(session, user.id, "unroute", None, f"field={field_id} channel={channel_id}")
+    return RedirectResponse(url="/channels", status_code=302)
+
+
+@panel_app.post("/channels/category-route")
+async def channel_category_route(request: Request, category_id: int = Form(...), channel_id: int = Form(...)):
+    """Route one category to one channel (admin only; the primary mapping)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        session.add(CategoryChannelRoute(category_id=category_id, channel_id=channel_id))
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+        await audit(session, user.id, "route", None, f"category={category_id} channel={channel_id}")
+    return RedirectResponse(url="/channels", status_code=302)
+
+
+@panel_app.post("/channels/category-unroute")
+async def channel_category_unroute(request: Request, category_id: int = Form(...), channel_id: int = Form(...)):
+    """Remove one category→channel route (admin only)."""
+    user = await require_login(request)
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    async with async_session() as session:
+        row = await session.get(CategoryChannelRoute, (category_id, channel_id))
+        if row:
+            await session.delete(row)
+            await session.commit()
+        await audit(session, user.id, "unroute", None, f"category={category_id} channel={channel_id}")
+    return RedirectResponse(url="/channels", status_code=302)
+
+
+@panel_app.get("/routing", response_class=HTMLResponse)
+async def routing_page(request: Request, field: str = "", record_id: str = ""):
+    """Show the auditable routing chain for a field name or a record."""
+    from app.messaging.dispatcher import preview_routing
+
+    user = await require_login(request)
+    preview = None
+    error = None
+    if field.strip() or record_id.strip():
+        try:
+            async with async_session() as session:
+                preview = await preview_routing(
+                    session,
+                    field=field.strip() or None,
+                    record_id=int(record_id.strip()) if record_id.strip().isdigit() else None,
+                )
+        except ValueError:
+            error = "فقط یکی از نام رشته یا شناسهٔ رکورد را وارد کنید."
+            preview = None
+        except LookupError:
+            error = "رکورد یافت نشد."
+            preview = None
+    async with async_session() as session:
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "routing.html",
+        _ctx(request, user, active="routing", **counts_ctx, field=field, record_id=record_id,
+             preview=preview, error=error))
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
@@ -890,35 +1030,6 @@ async def channel_create(
     return RedirectResponse(url="/channels", status_code=302)
 
 
-@panel_app.post("/channels/route")
-async def channel_route(request: Request, field_id: int = Form(...), channel_id: int = Form(...)):
-    """Route one field to one channel (admin only; row insert, no code change)."""
-    user = await require_login(request)
-    if not _is_admin(user):
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-    async with async_session() as session:
-        session.add(FieldChannelRoute(field_id=field_id, channel_id=channel_id))
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-        await audit(session, user.id, "route", None, f"field={field_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
-
-
-@panel_app.post("/channels/unroute")
-async def channel_unroute(request: Request, field_id: int = Form(...), channel_id: int = Form(...)):
-    """Remove one field→channel route (admin only)."""
-    user = await require_login(request)
-    if not _is_admin(user):
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-    async with async_session() as session:
-        row = await session.get(FieldChannelRoute, (field_id, channel_id))
-        if row:
-            await session.delete(row)
-            await session.commit()
-        await audit(session, user.id, "unroute", None, f"field={field_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
 
 
 # --------------------------------------------------------------------------
