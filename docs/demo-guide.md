@@ -10,7 +10,10 @@ docker compose up -d
 docker compose ps
 ```
 
-Expected: `postgres`, `api`, and `worker` containers running.
+Expected: `postgres`, `api`, `worker`, `sender`, and `web` containers running.
+The review panel (`web`, same image, loopback-only) is at
+**http://127.0.0.1:8081/login** — see `docs/admin-panel.md`. It shows counts;
+the client demo below must not show processing times or record counts.
 
 ## 2. Check API/database health
 

@@ -106,6 +106,9 @@ Copy `.env.example` to `.env` and fill in real values. `.env` is git-ignored.
 | `SENDER_REQUEST_TIMEOUT_SECONDS` | Per-send HTTP timeout | No (default: 20) |
 | `SENDER_LEASE_MINUTES` | Abandoned-send recovery timeout | No (default: 5) |
 | `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as awaiting_confirmation until approval | No (default: true) |
+| `PANEL_ADMIN_USERNAME` | Review panel first admin username | No (default: admin) |
+| `PANEL_ADMIN_PASSWORD` | Review panel first admin password (env only, hashed with argon2) | Yes for panel login |
+| `PANEL_SECRET_KEY` | Review panel cookie signing key | Yes for panel |
 | `POSTGRES_PASSWORD` | PostgreSQL admin password (postgres service) | No (default: postgres) |
 | `POSTGRES_DB` | PostgreSQL database name (postgres service) | No (default: irandoc_news) |
 
@@ -117,6 +120,10 @@ docker compose up -d
 docker compose ps
 curl.exe http://localhost:8000/health
 ```
+
+Review panel (same image, `web` service, loopback-only): set
+`PANEL_ADMIN_PASSWORD` + `PANEL_SECRET_KEY` in `.env`, then open
+**http://127.0.0.1:8081/login**. See `docs/admin-panel.md` for pages and roles.
 
 Apply migrations and seed fields (first run only):
 
@@ -136,6 +143,9 @@ once:
 4. `004_seed_model.sql` — the active model configuration
 5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`,
    `deliveries`, plus the initial Bale channel and its routes for every field
+6. `006_add_rejected_status.sql` — allow `rejected` on `main.status`
+7. `007_model_config_columns.sql` — `models.base_url/api_key_env/temperature/max_output_tokens/description`
+8. `008_panel_auth_audit.sql` — `roles`, `panel_users`, `audit_logs`
 
 Migrations run automatically: the one-shot `migrate` service executes
 `scripts/apply_migrations.py` on every `docker compose up`, and both `api` and

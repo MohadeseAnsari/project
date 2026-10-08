@@ -123,5 +123,28 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # Server-rendered review panel (Jinja2 + locally vendored HTMX, no build
+  # step). Same image as `api` with a different command; loopback-only port so
+  # the human UI is never exposed beyond the host without an SSH tunnel.
+  web:
+    build: .
+    command: uvicorn app.panel.app:panel_app --host 0.0.0.0 --port 8081
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      PANEL_ADMIN_USERNAME: ${PANEL_ADMIN_USERNAME:-admin}
+      PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:-}
+      PANEL_SECRET_KEY: ${PANEL_SECRET_KEY:-change-me-in-production}
+      AVALAI_API_KEY: ${AVALAI_API_KEY:-}
+      AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   pg_data:
