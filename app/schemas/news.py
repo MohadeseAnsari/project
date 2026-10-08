@@ -202,3 +202,84 @@ class RecordListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ModelResponse(BaseModel):
+    """One model row (never includes a key value, only the env var name)."""
+
+    id: int
+    name: str
+    provider: str
+    version: str
+    is_active: bool
+    base_url: str | None = None
+    api_key_env: str | None = None
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+    description: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ModelCreateRequest(BaseModel):
+    """Body for ``POST /models`` (creation only; activation via activate)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    name: str = Field(min_length=1, max_length=100)
+    provider: str = Field(min_length=1, max_length=50)
+    version: str = Field(min_length=1, max_length=50)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key_env: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
+    description: str | None = None
+    is_active: bool = False
+
+
+class ModelUpdateRequest(BaseModel):
+    """Body for ``PATCH /models/{id}`` (is_active only via activate)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    provider: str | None = Field(default=None, min_length=1, max_length=50)
+    version: str | None = Field(default=None, min_length=1, max_length=50)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key_env: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
+    description: str | None = None
+
+
+class PromptResponse(BaseModel):
+    """One prompt version (immutable: new version = new row)."""
+
+    id: int
+    version: str
+    system_prompt: str
+    is_active: bool
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class PromptCreateRequest(BaseModel):
+    """Body for ``POST /prompts`` (new row; never edits in place)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    version: str = Field(min_length=1, max_length=50)
+    system_prompt: str = Field(min_length=1)
+    is_active: bool = False
+
+
+class SecretBody(BaseModel):
+    """Body carrying only the shared secret (activate/retry/test-connection)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+
+
+class ConnectionTestResponse(BaseModel):
+    """Result of ``POST /models/{id}/test-connection`` (key never included)."""
+
+    ok: bool
+    model: str
+    error: str | None = None

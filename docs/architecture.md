@@ -61,6 +61,7 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Returns GeneratedNews(title, lead, body)
 - Resolves model+prompt per job: per-record override (`main.model_id`/`prompt_id` from `POST /submit`) → active row (`is_active`) → config fallback (`settings.llm_model`, packaged prompt)
 - Per-model `base_url`/`api_key_env` (env var name, never the key) override the provider endpoint/key
+- Models/prompts managed via `/models` + `/prompts` (list/create/detail, single-active `POST /{id}/activate`); prompts immutable (new version = new row, never edit); `POST /models/{id}/test-connection` probes with a 1-token call without returning the key
 - Model and prompt references recorded on main record
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 

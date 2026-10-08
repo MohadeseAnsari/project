@@ -22,8 +22,11 @@ from app.auth.secret import verify_secret
 from app.db.connection import get_session
 from app.db.models import Main
 from app.schemas.news import (
+    ConnectionTestResponse,
     ErrorResponse,
     HealthResponse,
+    ModelResponse,
+    PromptResponse,
     RecordDetailResponse,
     RecordListResponse,
     RecordResponse,
@@ -567,3 +570,267 @@ async def get_stats(
         "deliveries": {status: count for status, count in delivery_rows},
         "worker_last_heartbeat_at": last_heartbeat,
     }
+
+
+def _require_secret(body: dict | None) -> None:
+    """Reject missing/invalid shared secrets for body-authenticated calls."""
+    secret = (body or {}).get("shared_Secret")
+    if not secret or not verify_secret(secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@router.get("/models", response_model=list[ModelResponse])
+async def list_models(
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """List model configurations (key values never included)."""
+    from sqlalchemy import select
+
+    from app.db.models import Model
+    from app.schemas.news import ModelResponse
+
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
+    return [ModelResponse.model_validate(r) for r in rows]
+
+
+@router.post("/models", response_model=ModelResponse, status_code=201)
+async def create_model(
+    payload: dict | None = None, session: AsyncSession = Depends(get_session)
+):
+    """Create a model row (inactive by default; use activate for single-active)."""
+    from sqlalchemy import select, update
+
+    from app.db.models import Model
+    from app.schemas.news import ModelCreateRequest, ModelResponse
+
+    _require_secret(payload)
+    try:
+        data = ModelCreateRequest(**(payload or {}))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    existing = await session.execute(select(Model).where(Model.name == data.name))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=422, detail="model name already exists")
+    row = Model(
+        name=data.name,
+        provider=data.provider,
+        version=data.version,
+        base_url=data.base_url,
+        api_key_env=data.api_key_env,
+        temperature=data.temperature,
+        max_output_tokens=data.max_output_tokens,
+        description=data.description,
+        is_active=False,
+    )
+    session.add(row)
+    await session.flush()
+    if data.is_active:
+        await session.execute(update(Model).where(Model.id != row.id).values(is_active=False))
+        row.is_active = True
+    await session.commit()
+    await session.refresh(row)
+    return ModelResponse.model_validate(row)
+
+
+@router.get("/models/{model_id}", response_model=ModelResponse)
+async def get_model(
+    model_id: int = Path(...),
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Retrieve one model configuration."""
+    from app.db.models import Model
+    from app.schemas.news import ModelResponse
+
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    row = await session.get(Model, model_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return ModelResponse.model_validate(row)
+
+
+@router.patch("/models/{model_id}", response_model=ModelResponse)
+async def update_model(
+    model_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update a model row (is_active only via activate, never here)."""
+    from app.db.models import Model
+    from app.schemas.news import ModelResponse, ModelUpdateRequest
+
+    _require_secret(payload)
+    body = dict(payload or {})
+    if "is_active" in body:
+        raise HTTPException(status_code=422, detail="use POST /models/{id}/activate")
+    try:
+        data = ModelUpdateRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    row = await session.get(Model, model_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Model not found")
+    for field in ("provider", "version", "base_url", "api_key_env", "temperature", "max_output_tokens", "description"):
+        value = getattr(data, field)
+        if value is not None:
+            setattr(row, field, value)
+    await session.commit()
+    await session.refresh(row)
+    return ModelResponse.model_validate(row)
+
+
+@router.post("/models/{model_id}/activate", response_model=ModelResponse)
+async def activate_model(
+    model_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Activate one model atomically (exactly one active row afterwards)."""
+    from sqlalchemy import update
+
+    from app.db.models import Model
+    from app.schemas.news import ModelResponse
+
+    _require_secret(payload)
+    row = await session.get(Model, model_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Model not found")
+    await session.execute(update(Model).where(Model.id != row.id).values(is_active=False))
+    row.is_active = True
+    await session.commit()
+    await session.refresh(row)
+    return ModelResponse.model_validate(row)
+
+
+@router.post("/models/{model_id}/test-connection")
+async def test_model_connection(
+    model_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Make a real minimal provider call for one model (key never returned/logged).
+
+    Uses the model's resolved base_url/key with a 1-token probe. Missing keys,
+    DNS failures, auth errors, and timeouts all return ``ok:false`` with the
+    error text (truncated) instead of raising, so the panel can show the
+    failure without leaking credentials.
+    """
+    import os
+
+    from app.db.models import Model
+
+    _require_secret(payload)
+    row = await session.get(Model, model_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Model not found")
+    from app.config import settings
+
+    base_url = row.base_url or settings.avalai_base_url
+    api_key = (os.environ.get(row.api_key_env) if row.api_key_env else None) or settings.avalai_api_key
+    if not api_key:
+        return {"ok": False, "model": row.name, "error": "no API key configured"}
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
+        # Minimal probe: 1 token, discarded. Proves auth + route + model name.
+        await client.chat.completions.create(
+            model=row.name,
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=1,
+        )
+        return {"ok": True, "model": row.name, "error": None}
+    except Exception as e:
+        # Never include the key; exception text from the provider is safe.
+        return {"ok": False, "model": row.name, "error": str(e)[:500]}
+
+
+@router.get("/prompts", response_model=list[PromptResponse])
+async def list_prompts(
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """List prompt versions (newest last; immutable rows)."""
+    from sqlalchemy import select
+
+    from app.db.models import Prompt
+    from app.schemas.news import PromptResponse
+
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+    return [PromptResponse.model_validate(r) for r in rows]
+
+
+@router.post("/prompts", response_model=PromptResponse, status_code=201)
+async def create_prompt(
+    payload: dict | None = None, session: AsyncSession = Depends(get_session)
+):
+    """Create a new prompt version (never edits in place; activate to release)."""
+    from sqlalchemy import select, update
+
+    from app.db.models import Prompt
+    from app.schemas.news import PromptCreateRequest, PromptResponse
+
+    _require_secret(payload)
+    try:
+        data = PromptCreateRequest(**(payload or {}))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    existing = await session.execute(select(Prompt).where(Prompt.version == data.version))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=422, detail="prompt version already exists")
+    row = Prompt(version=data.version, system_prompt=data.system_prompt, is_active=False)
+    session.add(row)
+    await session.flush()
+    if data.is_active:
+        await session.execute(update(Prompt).where(Prompt.id != row.id).values(is_active=False))
+        row.is_active = True
+    await session.commit()
+    await session.refresh(row)
+    return PromptResponse.model_validate(row)
+
+
+@router.get("/prompts/{prompt_id}", response_model=PromptResponse)
+async def get_prompt(
+    prompt_id: int = Path(...),
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Retrieve one prompt version."""
+    from app.db.models import Prompt
+    from app.schemas.news import PromptResponse
+
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    row = await session.get(Prompt, prompt_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return PromptResponse.model_validate(row)
+
+
+@router.post("/prompts/{prompt_id}/activate", response_model=PromptResponse)
+async def activate_prompt(
+    prompt_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Activate one prompt version atomically (exactly one active row)."""
+    from sqlalchemy import update
+
+    from app.db.models import Prompt
+    from app.schemas.news import PromptResponse
+
+    _require_secret(payload)
+    row = await session.get(Prompt, prompt_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    await session.execute(update(Prompt).where(Prompt.id != row.id).values(is_active=False))
+    row.is_active = True
+    await session.commit()
+    await session.refresh(row)
+    return PromptResponse.model_validate(row)
