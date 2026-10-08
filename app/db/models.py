@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -61,7 +62,11 @@ class Field(Base):
 
 
 class Model(Base):
-    """LLM model configuration; ``is_active`` marks the model the Worker uses."""
+    """LLM model configuration; ``is_active`` marks the model the Worker uses.
+
+    ``base_url`` overrides the provider endpoint per model; ``api_key_env`` is
+    the ENVIRONMENT VARIABLE NAME holding the key (never the key itself).
+    """
 
     __tablename__ = "models"
 
@@ -70,6 +75,11 @@ class Model(Base):
     provider = Column(String(50), nullable=False)
     version = Column(String(50), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    base_url = Column(String(500), nullable=True)
+    api_key_env = Column(String(100), nullable=True)
+    temperature = Column(Float, nullable=True)
+    max_output_tokens = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     main_records = relationship("Main", back_populates="model")

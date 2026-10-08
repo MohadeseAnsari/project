@@ -34,6 +34,11 @@ erDiagram
         VARCHAR provider
         VARCHAR version
         BOOLEAN is_active
+        VARCHAR base_url
+        VARCHAR api_key_env
+        FLOAT temperature
+        INTEGER max_output_tokens
+        TEXT description
         TIMESTAMP created_at
     }
 
