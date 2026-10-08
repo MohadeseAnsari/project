@@ -10,7 +10,10 @@ def test_architecture_interior():
 
 
 def test_architecture_energy():
-    assert classify_field("معماری و انرژی") == "مهندسی و فناوری"
+    # Owner-reviewed conflict fixture: an architecture program routes to هنر
+    # (bare "انرژی" alone still routes to مهندسی). Updated from the old
+    # first-match-wins expectation along with the classifier rewrite.
+    assert classify_field("معماری و انرژی") == "هنر و معماری"
 
 
 def test_engineering_architecture():

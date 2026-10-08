@@ -118,6 +118,10 @@ returns a record's status and (when finished) its output.
    - links the active `model_id`/`prompt_id` (auditability);
    - starts a heartbeat task, calls the LLM, stores
      `output_json={title, lead, body}`, sets `review`.
+   - `category_id` is a snapshot: re-classifying the field later (new
+     keywords, `scripts/reclassify_fields.py --apply`) never rewrites
+     `main` rows, so history stays stable. The record page shows both the
+     stored category and the field's current one when they differ.
 4. **Fail** — any exception → `fail_job` sets `failed` with the error text
    (truncated to 2000 chars). There is **no automatic retry counter**; failed
    jobs stay failed.
@@ -148,15 +152,22 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   `(platform, chat_id)`. Migration 005 seeds the one Bale channel in use.
   **No credentials here** — bot tokens live in configuration, so a channel row
   is never a secret.
-- **field_channel_routes** — the one-to-many field → channel mapping,
-  `(field_id, channel_id)` primary key, cascading deletes. Every field routes
-  to the single Bale channel today; splitting fields across channels is a row
-  insert, not a code change.
+- **category_channel_routes** — the primary category → channel mapping,
+  `(category_id, channel_id)` primary key, cascading deletes. The sender
+  consults it first; seeded permissively (every category to every active
+  channel) so publishing behavior never changes on deploy — the owner
+  narrows it per category in the panel.
+- **field_channel_routes** — the field → channel exception table,
+  `(field_id, channel_id)` primary key, cascading deletes. Fires only when
+  the article's category has no route; unmapped categories fall back to all
+  active channels rather than dropping the article.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
-  `sent_at`. Unique per `(main_id, channel_id)`, which is what makes queueing
-  idempotent. Indexed on `(status, next_attempt_at)`.
+  `sent_at`, plus `category_id`/`route_source` snapshots of which category
+  and which route level produced the row. Unique per `(main_id, channel_id)`,
+  which is what makes queueing idempotent. Indexed on
+  `(status, next_attempt_at)`.
 
 The schema is created **only** by SQL migrations tracked in the `_migrations`
 table. The test suite runs against a dedicated PostgreSQL test database
@@ -197,12 +208,15 @@ it. Re-running the seed script is idempotent
 ## 8. Classification
 
 `app/fields/classification.py` — deterministic, rule-based, **never the LLM**.
-Priority-ordered keyword rules map a normalized field to a category. Within
-each category, specific keywords are listed before broad ones, so
-`معماری داخلی` matches its specific rule and is **not** swallowed by the
-broad `معماری` rule. Unmatched fields fall back to the `other` category.
-Unknown incoming fields are inserted with `source='runtime'` and the
-deterministically classified category.
+Token-aware longest-match rules map a normalized field to a category:
+multi-token phrases match exactly, ≤4-char keywords match whole tokens only,
+longer keywords may substring-match at lower score, and the longest match
+wins (category order breaks ties only). `معماری داخلی` matches its specific
+rule and is **not** swallowed by the broad `معماری` rule; `مو` can never fire
+inside `موزه`. `classify_with_reason` returns `(category, matched_keyword,
+rule)` so every decision is explainable. Unmatched fields fall back to the
+`other` category. Unknown incoming fields are inserted with
+`source='runtime'` and the deterministically classified category.
 
 ## 9. LLM generation
 

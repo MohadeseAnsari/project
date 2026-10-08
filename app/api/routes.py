@@ -31,6 +31,7 @@ from app.schemas.news import (
     PromptResponse,
     RecordDetailResponse,
     RecordListResponse,
+    RoutingPreviewResponse,
     StatsResponse,
     SubmitResponse,
     ThesisInput,
@@ -568,6 +569,41 @@ async def get_stats(
         "deliveries": {status: count for status, count in delivery_rows},
         "worker_last_heartbeat_at": last_heartbeat,
     }
+
+
+@router.get(
+    "/routing/preview",
+    response_model=RoutingPreviewResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        422: {"model": ErrorResponse, "description": "Pass exactly one of field or record_id"},
+    },
+)
+async def routing_preview(
+    shared_Secret: str = Query("", description="Authentication secret."),
+    field: str | None = Query(None, description="Raw field name to resolve."),
+    record_id: int | None = Query(None, description="Existing record to resolve."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Preview the routing chain: category, matched keyword, destination channels.
+
+    Read-only audit surface for the client: given a raw field name (or an
+    existing record), show which category it resolves to, which keyword
+    decided it, and which channels the sender would use right now (with the
+    route level of each). Uses the same resolver as the sender and the panel.
+    """
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from app.messaging.dispatcher import preview_routing
+
+    try:
+        return await preview_routing(session, field=field, record_id=record_id)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 def _require_secret(body: dict | None) -> None:

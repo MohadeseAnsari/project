@@ -29,7 +29,7 @@ from sqlalchemy import select, text, update
 from app.config import settings
 from app.db.connection import async_session
 from app.db.models import Category, Field, Main, Model, Prompt
-from app.fields.classification import classify_field
+from app.fields.classification import classify_with_reason
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
 
@@ -112,7 +112,7 @@ async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category
         )
         return field, cat_result.scalar_one()
 
-    cat_name = classify_field(norm)
+    cat_name, matched_keyword, _ = classify_with_reason(norm)
     cat_result = await session.execute(
         select(Category).where(Category.name == cat_name)
     )
@@ -128,10 +128,14 @@ async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category
         normalized_name=norm,
         category_id=category.id,
         source="runtime",
+        matched_keyword=matched_keyword,
     )
     session.add(field)
     await session.commit()
-    logger.info("Created new field id=%s name=%s category=%s", field.id, norm, cat_name)
+    logger.info(
+        "Created new field id=%s name=%s category=%s keyword=%s",
+        field.id, norm, cat_name, matched_keyword,
+    )
     return field, category
 
 

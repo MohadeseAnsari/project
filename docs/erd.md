@@ -9,8 +9,11 @@ erDiagram
     prompts ||--o{ main : "generated_with"
     fields ||--o{ field_channel_routes : "routed_by"
     channels ||--o{ field_channel_routes : "receives"
+    categories ||--o{ category_channel_routes : "routed_to"
+    channels ||--o{ category_channel_routes : "receives"
     channels ||--o{ deliveries : "target_of"
     main ||--o{ deliveries : "published_as"
+    categories ||--o{ deliveries : "explains"
     roles ||--o{ panel_users : "grants"
     panel_users ||--o{ audit_logs : "performed_by"
     main ||--o{ audit_logs : "acted_on"
@@ -28,6 +31,7 @@ erDiagram
         VARCHAR normalized_name UK
         INTEGER category_id FK
         VARCHAR source
+        VARCHAR matched_keyword
         TIMESTAMP created_at
     }
 
@@ -117,10 +121,18 @@ erDiagram
         TIMESTAMP created_at
     }
 
+    category_channel_routes {
+        INTEGER category_id PK,FK
+        INTEGER channel_id PK,FK
+        TIMESTAMP created_at
+    }
+
     deliveries {
         SERIAL id PK
         INTEGER main_id FK
         INTEGER channel_id FK
+        INTEGER category_id FK
+        VARCHAR route_source
         VARCHAR status
         INTEGER attempts
         BIGINT platform_message_id
@@ -135,6 +147,15 @@ erDiagram
 
 `main.status` is the generation lifecycle: `ready`, `processing`, `review`,
 `failed`, plus `rejected` (explicit human rejection from `review` via
-`PATCH /records/{id}`). `deliveries.status` is the separate publishing lifecycle: `pending`,
-`sending`, `sent`, `failed`, `awaiting_confirmation` (reserved for the planned
-human confirmation step, never written today).
+`PATCH /records/{id}`). `deliveries.status` is the separate publishing lifecycle:
+`pending`, `sending`, `sent`, `failed`, `awaiting_confirmation` (gated initial
+status while `REQUIRE_HUMAN_CONFIRMATION` is on; approval flips it to `pending`).
+
+An article reaches a channel through field → category → channels:
+`category_channel_routes` is the primary mapping the sender consults first,
+`field_channel_routes` stays as the field-level exception table for categories
+without a route, and unmapped categories fall back to all active channels.
+Each delivery snapshots `category_id` + `route_source`
+(`category` | `field` | `fallback`) at queue time, so a send stays explainable
+after later route edits. `fields.matched_keyword` records which keyword
+produced the field's category, for the same reason.

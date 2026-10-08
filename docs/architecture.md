@@ -33,7 +33,10 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### Sender Worker (Channel Delivery)
 - Polls for processed articles (`main.status = 'review'`) that have no delivery for a routed channel
 - Creates one `deliveries` row per (article, channel) — the unit of work
-- Resolves channels via `field_channel_routes` (field → channel, one-to-many); falls back to all active channels when a field has no route
+- Resolves channels through the category chain: `category_channel_routes`
+  first, then `field_channel_routes` (field-level exceptions), then all
+  active channels as fallback; each delivery snapshots `category_id` +
+  `route_source` so sends stay explainable
 - Renders the message (`app/messaging/formatting.py`): emoji-headed title in bold, lead, body, and the destination channel handle
 - Claims one due delivery at a time with `FOR UPDATE SKIP LOCKED`
 - Sends through the platform client for the channel (`Bale`, `Telegram`) using the bot token from configuration
@@ -52,8 +55,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### Field Classification (Deterministic)
 - Normalizes field names (Unicode NFC, trim, collapse whitespace)
 - Looks up exact normalized match in database
-- Falls back to priority-ordered keyword rules (specific before broad)
-- Unknown fields → `other` category
+- Falls back to token-aware longest-match keyword rules: multi-token
+  phrases match exactly, ≤4-char keywords match whole tokens only (so `مو`
+  never fires inside `موزه`), longer keywords may substring-match at lower
+  score; the longest match wins and category order breaks ties only
+- Negative keywords veto genuine collisions (documented in code)
+- Every decision returns `(category, matched_keyword, rule)` — the panel
+  shows WHY, and `fields.matched_keyword` stores it
+- Unknown fields → `other` category (reviewed names only; see report)
 - No LLM involvement
 
 ### LLM Generation (PydanticAI + AvalAI)

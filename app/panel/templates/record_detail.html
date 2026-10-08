@@ -46,10 +46,11 @@
     </div>
     {% elif tab == 'delivery' %}
     <table>
-      <thead><tr><th>کانال</th><th>وضعیت</th><th>تلاش</th><th>شناسهٔ پیام</th></tr></thead>
+      <thead><tr><th>کانال</th><th>دسته / مسیر</th><th>وضعیت</th><th>تلاش</th><th>شناسهٔ پیام</th></tr></thead>
       <tbody>
         {% for d in deliveries %}
         <tr><td class="title">{{ d.channel.username or d.channel.title or d.channel.platform }}</td>
+          <td><small>{{ d.category_name or '—' }}{% if d.route_source %} · {{ d.route_source }}{% endif %}</small></td>
           <td><span class="badge {% if d.status=='sent' %}s-sent{% elif d.status=='failed' %}s-failed{% elif d.status=='pending' %}s-ready{% else %}s-off{% endif %}">{{ d.status }}</span></td>
           <td class="num">{{ d.attempts|fa }}</td><td class="num">{{ d.platform_message_id or '—' }}</td></tr>
         {% endfor %}
@@ -108,7 +109,9 @@
       <h3>متادیتای پایان‌نامه</h3>
       <div class="body">
         <dl class="kv">
-          <dt>رشته</dt><dd>{{ record.field }}</dd>
+          <dt>رشته</dt><dd>{{ record.field }}{% if field_keyword %} <span class="chip">کلیدواژه: {{ field_keyword }}</span>{% endif %}</dd>
+          <dt>دستهٔ ثبت‌شده</dt><dd>{{ snapshot_category or '—' }}</dd>
+          <dt>دستهٔ کنونی رشته</dt><dd>{{ current_category or '—' }}</dd>
           <dt>دانشگاه</dt><dd>{{ record.university }}</dd>
           <dt>نویسنده</dt><dd>{{ record.author }}</dd>
           <dt>استاد راهنما</dt><dd>{{ record.supervisor }}</dd>
@@ -116,6 +119,9 @@
           <dt>تاریخ ثبت</dt><dd>{{ record.created_at|jalali }}</dd>
           <dt>کانال مسیرشده</dt><dd>{{ routed_channels or '—' }}</dd>
         </dl>
+        {% if snapshot_category and current_category and snapshot_category != current_category %}
+        <div class="note" style="margin-top:10px">دستهٔ رشته از زمان پردازش تغییر کرده است؛ رکورد، دستهٔ ثبت‌شده را نگه می‌دارد.</div>
+        {% endif %}
         <div class="hint" style="margin-top:10px">عنوان پایان‌نامه: «{{ record.title }}»</div>
       </div>
     </div>
