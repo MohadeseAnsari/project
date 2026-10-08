@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}داشبورد{% endblock %}
+{% block h1 %}داشبورد{% endblock %}
+{% block crumb %}کنسول › نمای کلی سامانه{% endblock %}
+{% block top_actions %}
+<span class="pill"><span class="dot"></span> API ok · DB connected</span><span class="pill">آخرین به‌روزرسانی: {{ now_label }}</span>
+<a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
+{% endblock %}
+{% block content %}
+<div class="kpis">
+  <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی انسانی</div></div></div>
+  <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف / در حال پردازش</div></div></div>
+  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده در کانال‌ها</div></div></div>
+  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق — نیازمند بررسی</div></div></div>
+</div>
+
+<div class="side3">
+  <div class="card">
+    <h3>خبرهای تولیدشده در ۷ روز گذشته</h3>
+    <div class="body">
+      <div class="chart">
+        {% for day in chart %}
+        <div style="height:{{ day.pct }}%"><span>{{ day.label }}</span></div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>سلامت سامانه</h3>
+    <div class="body" style="display:flex;flex-direction:column;gap:11px">
+      <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">API</b><span class="grow"></span><span class="badge s-sent">ok</span></div>
+      <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">پایگاه‌داده</b><span class="grow"></span><span class="badge s-sent">connected</span></div>
+      <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if not worker_fresh %} a{% endif %}"></span><b style="font-size:13px">worker تولید</b><span class="grow"></span><span class="badge {% if worker_fresh %}s-sent{% else %}s-ready{% endif %}">{{ 'ضربان تازه' if worker_fresh else 'بدون ضربان اخیر' }}</span></div>
+      <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if pending_deliveries %} a{% endif %}"></span><b style="font-size:13px">worker ارسال</b><span class="grow"></span><span class="badge {% if pending_deliveries %}s-ready{% else %}s-sent{% endif %}">{{ ('صف ' ~ pending_deliveries ~ ' مورد') if pending_deliveries else 'صف خالی' }}</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="two">
+  <div class="card">
+    <h3>آخرین رویدادها</h3>
+    <div class="body">
+      <div class="timeline">
+        {% for e in timeline %}
+        <div class="tl"><div class="bullet" style="background:var(--{{ e.color }}-soft);color:var(--{{ e.color }})">{{ e.icon }}</div><div class="line"><b>{{ e.title }}</b><small>{{ e.sub }}</small></div></div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>وضعیت کانال‌ها و مسیرها</h3>
+    <div class="body">
+      <table>
+        <thead><tr><th>کانال</th><th>رشته‌های مسیرشده</th><th>حالت</th></tr></thead>
+        <tbody>
+          {% for c in channels %}
+          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.route_count|fa }} رشته</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if failed_note %}<div class="note" style="margin-top:12px">{{ failed_note }}</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

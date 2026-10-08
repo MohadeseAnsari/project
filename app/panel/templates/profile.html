@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}حساب من{% endblock %}
+{% block h1 %}حساب من{% endblock %}
+{% block crumb %}کنسول › حساب کاربری{% endblock %}
+{% block content %}
+<div class="two">
+  <div class="card">
+    <h3>مشخصات</h3>
+    <div class="body">
+      <dl class="kv">
+        <dt>نام کاربری</dt><dd>{{ target.username }}</dd>
+        <dt>نقش</dt><dd>{{ role_fa(target) }}</dd>
+        <dt>وضعیت</dt><dd>{% if target.is_active %}فعال{% else %}غیرفعال{% endif %}</dd>
+        <dt>ایجاد</dt><dd>{{ target.created_at|jalali }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>تغییر گذرواژه</h3>
+    <div class="body">
+      <form method="post" action="/profile/password">
+        <div class="field"><label>گذرواژهٔ فعلی</label><input type="password" name="current_password" autocomplete="current-password" required></div>
+        <div class="field"><label>گذرواژهٔ تازه (حداقل ۸ نویسه)</label><input type="password" name="new_password" autocomplete="new-password" required minlength="8"></div>
+        <button class="btn btn-primary" type="submit">ثبت گذرواژهٔ تازه</button>
+        <div class="hint">گذرواژه فقط هش‌شده (argon2) ذخیره می‌شود.</div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

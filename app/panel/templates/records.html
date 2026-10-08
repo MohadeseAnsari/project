@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}رکوردها و بازبینی{% endblock %}
+{% block h1 %}رکوردها و بازبینی{% endblock %}
+{% block crumb %}کنسول › رکوردها › در انتظار بازبینی{% endblock %}
+{% block top_actions %}
+<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>
+<a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
+{% endblock %}
+{% block content %}
+<div class="kpis">
+  <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی</div></div></div>
+  <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف پردازش</div></div></div>
+  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده</div></div></div>
+  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق</div></div></div>
+</div>
+
+<div class="card">
+  <form hx-get="/records/table" hx-target="#records-table" hx-swap="innerHTML" hx-trigger="submit">
+    <div class="filters">
+      <div class="seg">
+        <a href="/records?status=review" style="text-decoration:none;color:inherit"><span class="{% if status=='review' %}on{% endif %}">در انتظار بازبینی</span></a>
+        <a href="/records" style="text-decoration:none;color:inherit"><span class="{% if not status %}on{% endif %}">همه</span></a>
+        <a href="/deliveries?status=sent" style="text-decoration:none;color:inherit"><span>منتشرشده</span></a>
+        <a href="/records?status=failed" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
+        <a href="/records?status=ready" style="text-decoration:none;color:inherit"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
+      </div>
+      <select name="field"><option value="">همهٔ رشته‌ها</option>{% for f in field_options %}<option value="{{ f }}" {% if field==f %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
+      <select name="university"><option value="">همهٔ دانشگاه‌ها</option>{% for u in university_options %}<option value="{{ u }}" {% if university==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>
+      <input type="text" name="q" placeholder="جست‌وجو در عنوان، نویسنده، استاد یا شناسه…" value="{{ q or '' }}">
+      <input type="hidden" name="status" value="{{ status or '' }}">
+      <input type="hidden" name="order" value="{{ order }}">
+      <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>
+      <a class="btn btn-ghost btn-sm" href="/records">پاک‌کردن</a>
+    </div>
+  </form>
+  <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load, every 15s">
+    {% include "records_table.html" %}
+  </div>
+</div>
+{% endblock %}

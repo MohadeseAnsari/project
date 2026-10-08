@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}مدل‌ها{% endblock %}
+{% block h1 %}مدل‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › مدل‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>مدل‌های تعریف‌شده<span class="grow"></span><span class="badge s-off">یک مدل فعال در هر زمان</span></h3>
+  <table>
+    <thead><tr><th style="width:60px">شناسه</th><th>نام</th><th style="width:170px">ارائه‌دهنده / نقطهٔ اتصال</th><th style="width:150px">مدل پایه</th><th style="width:130px">وضعیت</th><th style="width:210px">عملیات</th></tr></thead>
+    <tbody>
+      {% for m in models %}
+      <tr><td class="num">{{ m.id|fa }}</td><td class="title">{{ m.description or m.name }}{% if m.description %}<span class="sub"><span class="num">{{ m.name }}</span></span>{% endif %}</td>
+        <td style="direction:ltr;text-align:left">{{ m.base_url or m.provider }}</td><td style="direction:ltr;text-align:left">{{ m.name }}</td>
+        <td>{% if m.is_active %}<span class="badge s-sent">✓ فعال</span>{% else %}<span class="badge s-ready">آمادهٔ فعال‌سازی</span>{% endif %}</td>
+        <td>
+          <form method="post" action="/models/{{ m.id }}/test" style="display:inline"><button class="rowbtn" type="submit">تست اتصال</button></form>
+          {% if m.is_active %}
+          <a class="rowbtn" href="/models?model_id={{ m.id }}" style="text-decoration:none">ویرایش</a>
+          {% else %}
+          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline"><button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
+          {% endif %}
+        </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="two">
+  <div class="card"><h3>تنظیمات مدل فعال</h3><div class="body">
+    {% if selected %}
+    <form method="post" action="/models/{{ selected.id }}">
+      <div class="field"><label>نام مدل</label><input type="text" value="{{ selected.description or selected.name }}" disabled><div class="hint">نام نمایشی از توضیحات می‌آید؛ شناسهٔ مدل (<span class="num">{{ selected.name }}</span>) ثابت است.</div></div>
+      <div class="field"><label>مدل پایه</label><input type="text" value="{{ selected.name }}" style="direction:ltr;text-align:left" disabled></div>
+      <div class="field"><label>نقطهٔ اتصال (base URL)</label><input type="text" name="base_url" value="{{ selected.base_url or '' }}" style="direction:ltr;text-align:left"></div>
+      <div class="field"><label>نام متغیر کلید (api_key_env)</label><input type="text" name="api_key_env" value="{{ selected.api_key_env or '' }}" style="direction:ltr;text-align:left"><div class="hint">فقط نام متغیر محیطی ذخیره می‌شود؛ کلید در پاسخ API هرگز بازگردانده نمی‌شود.</div></div>
+      <div class="two" style="gap:10px">
+        <div class="field"><label>دما (temperature)</label><input type="number" name="temperature" step="0.1" value="{{ selected.temperature if selected.temperature is not none else '' }}"></div>
+        <div class="field"><label>سقف توکن خروجی</label><input type="number" name="max_output_tokens" value="{{ selected.max_output_tokens or '' }}"></div>
+      </div>
+      <div class="field"><label>توضیح</label><input type="text" name="description" value="{{ selected.description or '' }}"></div>
+      <button class="btn btn-primary" type="submit">ذخیره</button>
+    </form>
+    {% else %}
+    <p>مدلی تعریف نشده است.</p>
+    {% endif %}
+  </div></div>
+
+  <div class="card"><h3>آزمون اتصال</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+    {% if selected %}
+    {% if test_result %}
+      {% if test_result.ok %}<div class="ok-note">اتصال موفق — پاسخ مدل دریافت شد و قالب JSON معتبر بود.</div>
+      {% else %}<div class="note">اتصال ناموفق: {{ test_result.error }}</div>{% endif %}
+      <div class="code">model: {{ test_result.model }}<br>ok: {{ test_result.ok }}</div>
+    {% else %}
+      <div class="hint">این تست فقط اتصال و قالب خروجی را می‌سنجد؛ آزمون کیفیت متن، کار بازبین انسانی است.</div>
+    {% endif %}
+    <form method="post" action="/models/{{ selected.id }}/test"><button class="btn btn-soft" type="submit">اجرای آزمون</button></form>
+    {% else %}
+    <p>مدلی برای آزمون وجود ندارد.</p>
+    {% endif %}
+  </div></div>
+</div>
+
+<div class="card">
+  <h3>مدل تازه</h3>
+  <div class="body">
+    <form method="post" action="/models">
+      <div class="two" style="gap:10px">
+        <div class="field"><label>نام (شناسهٔ مدل)</label><input type="text" name="name" required style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>ارائه‌دهنده</label><input type="text" name="provider" value="openai" required></div>
+        <div class="field"><label>نسخه</label><input type="text" name="version" value="latest" required></div>
+        <div class="field"><label>نقطهٔ اتصال (اختیاری)</label><input type="text" name="base_url" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>نام متغیر کلید (اختیاری)</label><input type="text" name="api_key_env" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>توضیح</label><input type="text" name="description"></div>
+      </div>
+      <button class="btn btn-primary" type="submit">ایجاد مدل</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

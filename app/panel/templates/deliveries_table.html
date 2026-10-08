@@ -1,0 +1,33 @@
+<table>
+  <thead>
+    <tr><th style="width:66px">شناسه</th><th>رکورد و خبر</th><th style="width:92px">کانال</th><th style="width:96px">تلاش</th>
+    <th style="width:150px">شناسهٔ پیام کانال</th><th style="width:158px">وضعیت</th><th style="width:150px">عملیات</th></tr>
+  </thead>
+  <tbody>
+    {% for d in items %}
+    <tr><td class="num">{{ d.id|fa }}</td>
+      <td class="title">{{ d.title }}<span class="sub">رکورد {{ d.main_id|fa }} · {{ d.field }}</span></td>
+      <td>{{ d.channel_name }}</td><td class="num">{{ d.attempts|fa if d.attempts else '—' }}</td>
+      <td class="num">{{ d.platform_message_id or '—' }}</td>
+      <td>
+        {% if d.status == 'sent' %}<span class="badge s-sent">✓ تحویل شد</span>
+        {% elif d.status == 'failed' %}<span class="badge s-failed">! ناموفق</span>
+        {% elif d.status == 'pending' %}<span class="badge s-ready">… در صف ارسال</span>
+        {% elif d.status == 'sending' %}<span class="badge s-processing">… در حال ارسال</span>
+        {% else %}<span class="badge s-off">در انتظار تأیید</span>{% endif %}
+      </td>
+      <td>
+        {% if d.status == 'failed' %}
+        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline"><button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
+        {% else %}
+        <a class="rowbtn" href="/records/{{ d.main_id }}" style="text-decoration:none">مشاهدهٔ خبر</a>
+        {% endif %}
+      </td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="foot">{{ last_error or '' }}<div class="pager">
+  {% if page > 1 %}<a href="#" hx-get="/deliveries/table?{{ query }}&page={{ page - 1 }}&page_size={{ page_size }}" hx-target="#deliveries-table">قبلی</a>{% endif %}
+  <b>{{ page|fa }}</b>
+  {% if page * page_size < total %}<a href="#" hx-get="/deliveries/table?{{ query }}&page={{ page + 1 }}&page_size={{ page_size }}" hx-target="#deliveries-table">بعدی</a>{% endif %}
+</div></div>

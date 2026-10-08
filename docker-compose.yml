@@ -56,6 +56,7 @@ services:
       # Browser origins allowed to call the API (the demo UI is served from :8080).
       # Add the host you will present from, e.g. "http://example.com:8080".
       DEMO_CORS_ORIGINS: ${DEMO_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      REQUIRE_HUMAN_CONFIRMATION: ${REQUIRE_HUMAN_CONFIRMATION:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +113,7 @@ services:
       SENDER_BACKOFF_BASE_SECONDS: ${SENDER_BACKOFF_BASE_SECONDS:-10}
       SENDER_REQUEST_TIMEOUT_SECONDS: ${SENDER_REQUEST_TIMEOUT_SECONDS:-20}
       SENDER_LEASE_MINUTES: ${SENDER_LEASE_MINUTES:-5}
+      REQUIRE_HUMAN_CONFIRMATION: ${REQUIRE_HUMAN_CONFIRMATION:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,6 +121,37 @@ services:
         condition: service_completed_successfully
       worker:
         condition: service_started
+    restart: unless-stopped
+
+  # Server-rendered review panel (Jinja2 + locally vendored HTMX, no build
+  # step). Same image as `api` with a different command. Deployed
+  # loopback-only: the ONLY public door is the HTTPS reverse proxy forwarding
+  # to it. PANEL_PORT is the single knob: `127.0.0.1:8081` (default, private);
+  # `8081` binds all interfaces (public emergency use, only behind TLS).
+  web:
+    build: .
+    command: uvicorn app.panel.app:panel_app --host 0.0.0.0 --port 8081
+    ports:
+      - "${PANEL_PORT:-8081}:8081"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
+      PANEL_ADMIN_USERNAME: ${PANEL_ADMIN_USERNAME:-admin}
+      PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:-}
+      PANEL_SECRET_KEY: ${PANEL_SECRET_KEY:-change-me-in-production}
+      PANEL_COOKIE_SECURE: ${PANEL_COOKIE_SECURE:-false}
+      PANEL_SESSION_HOURS: ${PANEL_SESSION_HOURS:-12}
+      PANEL_TRUSTED_PROXIES: ${PANEL_TRUSTED_PROXIES:-}
+      PANEL_LOGIN_MAX_ATTEMPTS: ${PANEL_LOGIN_MAX_ATTEMPTS:-10}
+      PANEL_LOGIN_WINDOW_MINUTES: ${PANEL_LOGIN_WINDOW_MINUTES:-10}
+      PANEL_LOGIN_LOCKOUT_MINUTES: ${PANEL_LOGIN_LOCKOUT_MINUTES:-15}
+      AVALAI_API_KEY: ${AVALAI_API_KEY:-}
+      AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:

@@ -186,10 +186,17 @@ async def process_job(session, job: Main) -> None:
     classification is durable even if generation fails), then commits the
     generated output and moves the job to ``review``.
 
+    Model/prompt resolution is override > active > config fallback: a
+    per-record ``model_id``/``prompt_id`` from ``POST /submit`` is kept and
+    used for generation; otherwise the active row is linked; otherwise the
+    configured model and packaged prompt are used.
+
     Raises:
         Exception: Any failure (e.g. LLM error) propagates to the caller,
             which marks the job as ``failed``.
     """
+    from app.news.generation import resolve_generation_config
+
     logger.info("Processing job id=%s", job.id)
 
     field_obj, category_obj = await resolve_field(session, job.field)
@@ -198,12 +205,20 @@ async def process_job(session, job: Main) -> None:
     if category_obj:
         job.category_id = category_obj.id
 
-    model = await get_active_model(session)
-    prompt = await get_active_prompt(session)
-    if model:
-        job.model_id = model.id
-    if prompt:
-        job.prompt_id = prompt.id
+    active_model = await get_active_model(session)
+    active_prompt = await get_active_prompt(session)
+    # Keep per-record overrides from /submit; only fill gaps from active rows.
+    orig_model_id = job.model_id
+    orig_prompt_id = job.prompt_id
+    if job.model_id is None and active_model:
+        job.model_id = active_model.id
+    if job.prompt_id is None and active_prompt:
+        job.prompt_id = active_prompt.id
+
+    override_model = await session.get(Model, orig_model_id) if orig_model_id else None
+    override_prompt = await session.get(Prompt, orig_prompt_id) if orig_prompt_id else None
+    # One shared resolution (also used by the panel regenerate action).
+    config = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
 
     thesis_data = {
         "title": job.title,
@@ -221,7 +236,7 @@ async def process_job(session, job: Main) -> None:
     stop_event = asyncio.Event()
     heartbeat_task = asyncio.create_task(heartbeat_loop(job.id, stop_event))
     try:
-        output = await generate_news(thesis_data)
+        output = await generate_news(thesis_data, **config)
     finally:
         stop_event.set()
         await heartbeat_task

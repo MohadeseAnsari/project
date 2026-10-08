@@ -138,7 +138,7 @@ PostgreSQL is both the persistent store and the queue. Tables (see
 - **models** — LLM model configuration; `is_active` selects the one in use.
 - **prompts** — versioned system prompts; `is_active` selects the one in use.
 - **main** — the thesis/news record and queue entry: thesis fields, `status`
-  (`ready|processing|review|failed`, CHECK constraint), `field_id` /
+  (`ready|processing|review|failed|rejected`, CHECK constraint), `field_id` /
   `category_id` / `model_id` / `prompt_id` audit FKs, `output_json` (JSONB),
   `error_message`, `claimed_at` / `heartbeat_at` (recovery), `created_at` /
   `updated_at`. Indexed on `(status, created_at)`, `field_id`, `category_id`.
@@ -372,8 +372,9 @@ windows/panes instead of background shell jobs you cannot reattach to.
 - A field with no route falls back to all active channels: fields discovered at
   runtime have no route row, and silently dropping their articles would be worse
   than publishing them to the current channel set.
-- `awaiting_confirmation` exists in the `deliveries` status enum but is never
-  written: the human confirmation step is planned, and having the value now
-  avoids a schema change when it lands.
+- `awaiting_confirmation` is the gated initial delivery status when
+  `REQUIRE_HUMAN_CONFIRMATION=true` (default): queued by the sender but never
+  claimed until approval flips it to `pending`. With the flag off, queueing
+  writes `pending` directly (pre-gate behaviour).
 - At-least-once sending on crash (possible duplicate post in the channel) —
   the same trade-off as generation, and for the same reason.

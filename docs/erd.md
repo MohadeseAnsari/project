@@ -11,6 +11,9 @@ erDiagram
     channels ||--o{ field_channel_routes : "receives"
     channels ||--o{ deliveries : "target_of"
     main ||--o{ deliveries : "published_as"
+    roles ||--o{ panel_users : "grants"
+    panel_users ||--o{ audit_logs : "performed_by"
+    main ||--o{ audit_logs : "acted_on"
 
     categories {
         SERIAL id PK
@@ -34,6 +37,11 @@ erDiagram
         VARCHAR provider
         VARCHAR version
         BOOLEAN is_active
+        VARCHAR base_url
+        VARCHAR api_key_env
+        FLOAT temperature
+        INTEGER max_output_tokens
+        TEXT description
         TIMESTAMP created_at
     }
 
@@ -66,6 +74,31 @@ erDiagram
         TIMESTAMP heartbeat_at
         TIMESTAMP created_at
         TIMESTAMP updated_at
+    }
+
+    roles {
+        SERIAL id PK
+        VARCHAR name UK
+        TEXT description
+        TIMESTAMP created_at
+    }
+
+    panel_users {
+        SERIAL id PK
+        VARCHAR username UK
+        TEXT password_hash
+        INTEGER role_id FK
+        BOOLEAN is_active
+        TIMESTAMP created_at
+    }
+
+    audit_logs {
+        SERIAL id PK
+        INTEGER user_id FK
+        VARCHAR action
+        INTEGER main_id FK
+        TEXT detail
+        TIMESTAMP created_at
     }
 
     channels {
@@ -101,6 +134,7 @@ erDiagram
 ```
 
 `main.status` is the generation lifecycle: `ready`, `processing`, `review`,
-`failed`. `deliveries.status` is the separate publishing lifecycle: `pending`,
+`failed`, plus `rejected` (explicit human rejection from `review` via
+`PATCH /records/{id}`). `deliveries.status` is the separate publishing lifecycle: `pending`,
 `sending`, `sent`, `failed`, `awaiting_confirmation` (reserved for the planned
 human confirmation step, never written today).

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}ثبت پایان‌نامهٔ تازه{% endblock %}
+{% block h1 %}ثبت پایان‌نامهٔ تازه{% endblock %}
+{% block crumb %}کنسول › ثبت ورودی{% endblock %}
+{% block content %}
+<div class="side3">
+  <div class="card">
+    <h3>متادیتای پایان‌نامه</h3>
+    <div class="body">
+      <form method="post" action="/submit">
+        <div class="two" style="gap:12px">
+          <div class="field"><label>عنوان پایان‌نامه</label><input type="text" name="title" required></div>
+          <div class="field"><label>نویسنده</label><input type="text" name="author" required></div>
+          <div class="field"><label>استاد راهنما</label><input type="text" name="supervisor" required></div>
+          <div class="field"><label>دانشگاه</label><input type="text" name="university" required></div>
+          <div class="field"><label>رشته</label><input type="text" name="field" required><div class="hint">نام رشته به‌صورت خودکار نرمال و دسته‌بندی می‌شود.</div></div>
+          <div class="field"><label>نام کاربری ثبت‌کننده</label><input type="text" name="username" required></div>
+          <div class="field"><label>مدل (اختیاری)</label><select name="model_id"><option value="">پیش‌فرض فعال</option>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}{% if m.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
+          <div class="field"><label>پرامپت (اختیاری)</label><select name="prompt_id"><option value="">پیش‌فرض فعال</option>{% for p in prompts %}<option value="{{ p.id }}">{{ p.version }}{% if p.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
+        </div>
+        <div class="field"><label>چکیده</label><textarea name="abstract" rows="5" required></textarea></div>
+        <div class="field"><label>فهرست مطالب (اختیاری)</label><textarea name="table_of_contents" rows="2" placeholder="فصل‌ها، هر خط یک عنوان…"></textarea></div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn btn-primary" type="submit">ثبت و تولید خبر</button></div>
+        <div class="hint">متن خروجی پیش از انتشار به کانال، در صفحهٔ بازبینی برای تأیید انسانی نمایش داده می‌شود.</div>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="card"><h3>پیش‌نمایش خروجی</h3><div class="body">
+      <div class="preview">
+        <h4>پیش‌نمایش پس از تولید نمایش داده می‌شود</h4>
+        <p>پس از ثبت، worker خبر را تولید می‌کند و برای بازبینی انسانی در صف قرار می‌گیرد.</p>
+      </div>
+    </div></div>
+    <div class="card"><h3>پس از ثبت چه می‌شود؟</h3><div class="body">
+      <div class="timeline">
+        <div class="tl"><div class="bullet" style="background:var(--amber-soft);color:var(--amber)">۱</div><div class="line"><b>رکورد در پایگاه‌داده ثبت می‌شود</b><small>وضعیت ready — در صف</small></div></div>
+        <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">۲</div><div class="line"><b>worker آن را برمی‌دارد</b><small>وضعیت processing</small></div></div>
+        <div class="tl"><div class="bullet" style="background:var(--violet-soft);color:var(--violet)">۳</div><div class="line"><b>خبر تولید و ذخیره می‌شود</b><small>وضعیت review — منتظر شما</small></div></div>
+        <div class="tl"><div class="bullet" style="background:var(--green-soft);color:var(--green)">۴</div><div class="line"><b>با تأیید شما منتشر می‌شود</b><small>ارسال به کانال‌های مسیرشده</small></div></div>
+      </div>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

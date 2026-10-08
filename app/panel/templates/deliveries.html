@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}ارسال‌ها و تحویل{% endblock %}
+{% block h1 %}ارسال‌ها و تحویل{% endblock %}
+{% block crumb %}کنسول › ارسال‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <form hx-get="/deliveries/table" hx-target="#deliveries-table" hx-swap="innerHTML" hx-trigger="submit">
+    <div class="filters">
+      <div class="seg">
+        <a href="/deliveries" style="text-decoration:none;color:inherit"><span class="{% if not status %}on{% endif %}">همه</span></a>
+        <a href="/deliveries?status=sent" style="text-decoration:none;color:inherit"><span class="{% if status=='sent' %}on{% endif %}">موفق</span></a>
+        <a href="/deliveries?status=failed" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
+        <a href="/deliveries?status=awaiting_confirmation" style="text-decoration:none;color:inherit"><span class="{% if status=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
+      </div>
+      <select name="platform"><option value="">همهٔ کانال‌ها</option><option value="bale" {% if platform=='bale' %}selected{% endif %}>بله</option><option value="telegram" {% if platform=='telegram' %}selected{% endif %}>تلگرام</option></select>
+      <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ main_id or '' }}">
+      <input type="hidden" name="status" value="{{ status or '' }}">
+      <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>تحویل‌ها<span class="grow"></span><span class="badge s-off">{{ total|fa }} مورد</span></h3>
+  <div id="deliveries-table" hx-get="/deliveries/table?{{ query }}" hx-trigger="load, every 15s">
+    {% include "deliveries_table.html" %}
+  </div>
+</div>
+
+<div class="two">
+  <div class="card"><h3>سیاست تلاش دوباره</h3><div class="body">
+    <dl class="kv"><dt>سقف تلاش</dt><dd>{{ max_attempts|fa }} بار</dd><dt>فاصلهٔ پایه</dt><dd>{{ backoff_base|fa }} ثانیه</dd><dt>عقب‌افتادگی</dt><dd>نمایی با دو برابر شدن فاصله</dd><dt>پس از سقف</dt><dd>وضعیت failed می‌ماند و منتظر اقدام دستی</dd></dl>
+  </div></div>
+  <div class="card"><h3>دروازهٔ تأیید انسانی</h3><div class="body" style="display:flex;flex-direction:column;gap:10px">
+    <div class="note">تحویل‌های «در انتظار تأیید» فقط با تأیید خبر در صفحهٔ بازبینی به صف ارسال می‌روند؛ خبرِ تأییدنشده هیچ‌وقت به کانال نمی‌رسد.</div>
+    <div class="note">خبر منتشرشده هیچ‌وقت حذف نمی‌شود؛ فقط وضعیت تحویل تغییر می‌کند تا ردپای ارسال باقی بماند.</div>
+  </div></div>
+</div>
+{% endblock %}

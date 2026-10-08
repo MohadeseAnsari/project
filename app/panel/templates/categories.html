@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › دسته‌ها{% endblock %}
+{% block content %}
+<div class="card">
+  <form method="get" action="/categories">
+    <div class="filters">
+      <input type="text" name="q" placeholder="جست‌وجو در نام دسته…" value="{{ q or '' }}">
+      <button class="btn btn-primary btn-sm" type="submit">جست‌وجو</button>
+      <span class="grow"></span>
+      <span class="pill">{{ total|fa }} دسته</span>
+    </div>
+  </form>
+</div>
+
+<div class="two">
+  {% for c in categories %}
+  <div class="card"><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+    <div class="body"><div class="chips">
+      {% for f in c.field_names %}<span class="chip">{{ f }}</span>{% endfor %}
+    </div>
+    {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
+    <div class="hint" style="margin-top:10px">دستهٔ برنده به مسیر کانال همان رشته وصل می‌شود.</div></div></div>
+  {% endfor %}
+</div>
+{% endblock %}

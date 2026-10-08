@@ -5,6 +5,8 @@ endpoints. They are used both for runtime validation (where the endpoint
 applies them) and for OpenAPI/Swagger schema generation.
 """
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -44,6 +46,8 @@ class ThesisInput(BaseModel):
     table_of_contents: str = Field(min_length=1, max_length=5000, json_schema_extra={"example": "1. Introduction\n2. Methods\n3. Results"})
     author: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "John Doe"})
     supervisor: str = Field(min_length=1, max_length=255, json_schema_extra={"example": "Dr. Smith"})
+    model_id: int | None = Field(default=None, description="Optional per-record model override (must exist).")
+    prompt_id: int | None = Field(default=None, description="Optional per-record prompt override (must exist).")
 
     @field_validator(
         "username", "title", "abstract", "field",
@@ -80,6 +84,81 @@ class RecordResponse(BaseModel):
     error_message: str | None = Field(default=None)
 
 
+class DeliveryInfo(BaseModel):
+    """One delivery row with its channel destination for record detail."""
+
+    id: int
+    channel_id: int
+    main_id: int | None = None
+    platform: str | None = None
+    username: str | None = None
+    status: str
+    attempts: int
+    error_message: str | None = None
+    sent_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RecordDetailResponse(RecordResponse):
+    """Extended ``GET /records/{id}`` payload for the review panel.
+
+    Keeps every ``RecordResponse`` field unchanged and adds thesis metadata,
+    audit FKs, timestamps, and per-channel delivery state (the channel routes).
+    """
+
+    author: str | None = None
+    supervisor: str | None = None
+    university: str | None = None
+    table_of_contents: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    field_id: int | None = None
+    category_id: int | None = None
+    model_id: int | None = None
+    prompt_id: int | None = None
+    deliveries: list[DeliveryInfo] = Field(default_factory=list)
+
+
+class ReviewActionRequest(BaseModel):
+    """Request body for ``PATCH /records/{id}`` — a human review decision.
+
+    ``shared_Secret`` keeps machine-call auth consistent with ``POST /submit``.
+    ``action`` is the decision; optional ``title``/``lead``/``body`` edit the
+    stored ``output_json`` before the transition (used by save_draft and to fix
+    typos during approve/reject).
+    """
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    action: str = Field(description="One of approve, reject, save_draft.")
+    title: str | None = Field(default=None, min_length=1)
+    lead: str | None = Field(default=None, min_length=1)
+    body: str | None = Field(default=None, min_length=1)
+
+
+class DeliveryListResponse(BaseModel):
+    """Paginated ``GET /deliveries`` payload for the review panel."""
+
+    items: list[DeliveryInfo]
+    total: int
+    page: int
+    page_size: int
+
+
+class DeliveryRetryRequest(BaseModel):
+    """Request body for ``POST /deliveries/{id}/retry``."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+
+
+class StatsResponse(BaseModel):
+    """``GET /stats`` payload: counts per status plus worker liveness."""
+
+    records: dict[str, int]
+    deliveries: dict[str, int]
+    worker_last_heartbeat_at: datetime | None = None
+
+
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 
@@ -99,3 +178,108 @@ class GeneratedNews(BaseModel):
     title: str
     lead: str
     body: str
+
+
+class RecordListItem(BaseModel):
+    """One row of the paginated record listing for the review panel."""
+
+    id: int
+    status: str
+    field: str
+    university: str
+    title: str
+    author: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RecordListResponse(BaseModel):
+    """Paginated ``GET /records`` payload: items plus the total count."""
+
+    items: list[RecordListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class ModelResponse(BaseModel):
+    """One model row (never includes a key value, only the env var name)."""
+
+    id: int
+    name: str
+    provider: str
+    version: str
+    is_active: bool
+    base_url: str | None = None
+    api_key_env: str | None = None
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+    description: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ModelCreateRequest(BaseModel):
+    """Body for ``POST /models`` (creation only; activation via activate)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    name: str = Field(min_length=1, max_length=100)
+    provider: str = Field(min_length=1, max_length=50)
+    version: str = Field(min_length=1, max_length=50)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key_env: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
+    description: str | None = None
+    is_active: bool = False
+
+
+class ModelUpdateRequest(BaseModel):
+    """Body for ``PATCH /models/{id}`` (is_active only via activate)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    provider: str | None = Field(default=None, min_length=1, max_length=50)
+    version: str | None = Field(default=None, min_length=1, max_length=50)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key_env: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
+    description: str | None = None
+
+
+class PromptResponse(BaseModel):
+    """One prompt version (immutable: new version = new row)."""
+
+    id: int
+    version: str
+    system_prompt: str
+    is_active: bool
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class PromptCreateRequest(BaseModel):
+    """Body for ``POST /prompts`` (new row; never edits in place)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    version: str = Field(min_length=1, max_length=50)
+    system_prompt: str = Field(min_length=1)
+    is_active: bool = False
+
+
+class SecretBody(BaseModel):
+    """Body carrying only the shared secret (activate/retry/test-connection)."""
+
+    shared_Secret: str = Field(description="Authentication secret.")
+
+
+class ConnectionTestResponse(BaseModel):
+    """Result of ``POST /models/{id}/test-connection`` (key never included)."""
+
+    ok: bool
+    model: str
+    error: str | None = None

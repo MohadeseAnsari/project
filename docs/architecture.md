@@ -9,13 +9,17 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ## Components
 
 ### API (FastAPI)
-- Receives POST `/submit` with thesis metadata + shared_Secret
+- Receives POST `/submit` with thesis metadata + shared_Secret (plus optional `model_id`/`prompt_id` per-record overrides)
 - Authenticates via constant-time secret comparison BEFORE Pydantic validation
 - Validates input with Pydantic
 - Creates database record with status `ready`
 - Returns record ID and status
 - GET `/health` — database connectivity check
-- GET `/records/{id}` — retrieve record status/output
+- GET `/records/{id}` — retrieve record status/output plus review metadata and delivery state
+- GET `/records` — paginated listing (page/page_size ≤100, filters status/field/university/q/order) for the review panel
+- PATCH `/records/{id}` — review decision (approve/reject/save_draft, only from review, 409 otherwise)
+- GET `/deliveries` — paginated deliveries (filters status/platform/main_id) plus `POST /deliveries/{id}/retry` (failed only, resets attempts)
+- GET `/stats` — record/delivery counts per status plus worker heartbeat freshness (no per-record timings)
 
 ### Worker (Sequential, Persistent)
 - Polls PostgreSQL for `ready` jobs
@@ -36,8 +40,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Waits `SENDER_SEND_DELAY_SECONDS` after every attempt so a channel never sees a burst
 - Retries retryable failures with exponential backoff up to `SENDER_MAX_ATTEMPTS`, then parks the delivery as `failed`; permanent errors (unknown chat, revoked token) fail immediately
 - Recovers abandoned `sending` deliveries after `SENDER_LEASE_MINUTES`
-- `awaiting_confirmation` status is reserved for the planned human confirmation step and is not written yet
+- `awaiting_confirmation` is the gated initial status when
+  `REQUIRE_HUMAN_CONFIRMATION=true` (default): the sender never claims it, and
+  approval flips it to `pending`. With the flag off, queueing writes `pending`
+  directly.
 - Runs as its own compose service so channel rate limits and platform outages never affect generation
+- Human gate (`REQUIRE_HUMAN_CONFIRMATION`, default true): new deliveries queue as
+  `awaiting_confirmation` and only become `pending` on explicit approval; when
+  false they queue as `pending` directly (pre-gate behaviour)
 
 ### Field Classification (Deterministic)
 - Normalizes field names (Unicode NFC, trim, collapse whitespace)
@@ -49,7 +59,9 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### LLM Generation (PydanticAI + AvalAI)
 - Receives thesis metadata as structured data
 - Returns GeneratedNews(title, lead, body)
-- Prompt stored in database with version tracking
+- Resolves model+prompt per job: per-record override (`main.model_id`/`prompt_id` from `POST /submit`) → active row (`is_active`) → config fallback (`settings.llm_model`, packaged prompt)
+- Per-model `base_url`/`api_key_env` (env var name, never the key) override the provider endpoint/key
+- Models/prompts managed via `/models` + `/prompts` (list/create/detail, single-active `POST /{id}/activate`); prompts immutable (new version = new row, never edit); `POST /models/{id}/test-connection` probes with a 1-token call without returning the key
 - Model and prompt references recorded on main record
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 

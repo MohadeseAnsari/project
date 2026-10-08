@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}رشته‌ها{% endblock %}
+{% block h1 %}رشته‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › رشته‌ها{% endblock %}
+{% block content %}
+<div class="two">
+  <div class="card">
+    <h3>رشته‌های تعریف‌شده<span class="grow"></span><span class="badge s-off">{{ total|fa }} رشته</span></h3>
+    <table>
+      <thead><tr><th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:150px">دسته</th><th style="width:110px">کانال مسیرشده</th></tr></thead>
+      <tbody>
+        {% for f in fields %}
+        <tr><td class="num">{{ f.id|fa }}</td><td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
+          <td>{{ f.category_name or '—' }}</td><td>{{ f.channel_names or 'بدون کانال' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+      {% for t in top %}
+      <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>{{ t.name }}</span><span class="num">{{ t.pct|fa }}٪</span></div><div class="bar"><i style="width:{{ t.pct }}%"></i></div></div>
+      {% endfor %}
+    </div></div>
+    <div class="note">تطبیق رشته با نرمال‌سازی نام و قوانین کلیدواژه انجام می‌شود؛ رشته‌های تازهٔ دیده‌شده با منبع runtime ثبت می‌شوند.</div>
+  </div>
+</div>
+{% endblock %}

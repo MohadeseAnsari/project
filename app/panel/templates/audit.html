@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}رویدادها{% endblock %}
+{% block h1 %}رویدادها{% endblock %}
+{% block crumb %}کنسول › مدیریت › رویدادها{% endblock %}
+{% block top_actions %}
+<span class="pill">ثبت خودکار و غیرقابل حذف</span>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <form method="get" action="/audit">
+    <div class="filters">
+      <select name="action"><option value="">همهٔ کنش‌ها</option>{% for code, label in actions %}<option value="{{ code }}" {% if action==code %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      <select name="username"><option value="">همهٔ کاربران</option>{% for u in users %}<option value="{{ u }}" {% if username==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>
+      <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ main_id or '' }}">
+      <button class="btn btn-primary btn-sm" type="submit">فیلتر</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>ردپای تغییرات<span class="grow"></span><span class="badge s-off">ثبت خودکار و غیرقابل حذف</span></h3>
+  <table>
+    <thead><tr><th style="width:150px">زمان</th><th style="width:158px">کاربر</th><th style="width:170px">کنش</th><th>هدف</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr><td class="num">{{ e.created_at|jalali }}</td><td>{{ e.username }}</td><td>{{ e.action }}</td>
+        <td class="title">{% if e.main_id %}<a href="/records/{{ e.main_id }}">رکورد {{ e.main_id|fa }}</a> · {% endif %}{{ e.detail }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="foot">نمایش {{ ((page - 1) * page_size + 1)|fa }} تا {{ ([page * page_size, total]|min)|fa }} از {{ total|fa }} رویداد
+    <div class="pager">
+      {% if page > 1 %}<a href="/audit?{{ query }}&page={{ page - 1 }}">قبلی</a>{% endif %}
+      <b>{{ page|fa }}</b>
+      {% if page * page_size < total %}<a href="/audit?{{ query }}&page={{ page + 1 }}">بعدی</a>{% endif %}
+    </div></div>
+</div>
+
+<div class="ok-note">ویرایش متن، خروجی ذخیره‌شدهٔ رکورد را به‌روزرسانی می‌کند و کنشِ هر بازبین با زمان و نام کاربری در همین جدول ثبت می‌شود.</div>
+{% endblock %}

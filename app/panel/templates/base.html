@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css"></head>
+<body>
+{% block layout %}
+<div class="grid">
+  <aside>
+    <div class="brand"><div class="logo">ا</div><div><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
+    <nav>
+      <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
+      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if review_count %}<span class="cnt">{{ review_count|fa }}</span>{% endif %}</a>
+      <a href="/deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
+      <div class="sep">تنظیمات</div>
+      <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها</a>
+      <a href="/categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>
+      <a href="/channels" class="{% if active=='channels' %}on{% endif %}"><span class="ic">⇄</span>کانال‌ها و مسیرها</a>
+      <a href="/prompts" class="{% if active=='prompts' %}on{% endif %}"><span class="ic">✎</span>پرامپت‌ها</a>
+      <a href="/models" class="{% if active=='models' %}on{% endif %}"><span class="ic">⚙</span>مدل‌ها</a>
+      <div class="sep">مدیریت</div>
+      <a href="/users" class="{% if active=='users' %}on{% endif %}"><span class="ic">◕</span>کاربران و نقش‌ها</a>
+      <a href="/audit" class="{% if active=='audit' %}on{% endif %}"><span class="ic">⌘</span>رویدادها</a>
+    </nav>
+    {% if current_user %}
+    <div class="side-foot"><div class="avatar">{{ current_user.username[:1] }}</div><div><b style="font-size:12.5px"><a href="/profile" style="color:inherit;text-decoration:none">{{ current_user.username }}</a></b><small>{{ role_fa(current_user) }}</small></div></div>
+    {% endif %}
+  </aside>
+  <main>
+    <header class="top">
+      <div><h1>{% block h1 %}{% endblock %}</h1><div class="crumb">{% block crumb %}کنسول{% endblock %}</div></div>
+      <div class="grow"></div>
+      {% block top_actions %}{% endblock %}
+    </header>
+    <div class="wrap">
+      {% if error %}<div class="note">{{ error }}</div>{% endif %}
+      {% if ok %}<div class="ok-note">{{ ok }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}
+<script src="/static/htmx.min.js" defer></script>
+</body></html>

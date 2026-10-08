@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}بازبینی خبر — رکورد {{ record.id|fa }}{% endblock %}
+{% block h1 %}بازبینی خبر — رکورد {{ record.id|fa }}{% endblock %}
+{% block crumb %}کنسول › رکوردها › {{ record.id|fa }} › بازبینی{% endblock %}
+{% block top_actions %}
+<a class="btn btn-ghost btn-sm" href="/records">بازگشت به فهرست</a>
+{% endblock %}
+{% block content %}
+<div class="side3">
+  <div class="card">
+    <h3>خبر تولیدشده توسط مدل — قابل ویرایش<span class="grow"></span>
+      {% if record.status == 'review' %}<span class="badge s-review">★ نیازمند تأیید</span>
+      {% elif record.status == 'rejected' %}<span class="badge s-failed">رد شده</span>
+      {% else %}<span class="badge s-off">{{ record.status }}</span>{% endif %}
+    </h3>
+    <div class="tabs">
+      <a href="/records/{{ record.id }}?tab=text" style="text-decoration:none;color:inherit"><span class="{% if tab=='text' %}on{% endif %}">متن خبر</span></a>
+      <a href="/records/{{ record.id }}?tab=raw" style="text-decoration:none;color:inherit"><span class="{% if tab=='raw' %}on{% endif %}">خروجی خام مدل</span></a>
+      <a href="/records/{{ record.id }}?tab=meta" style="text-decoration:none;color:inherit"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
+      <a href="/records/{{ record.id }}?tab=history" style="text-decoration:none;color:inherit"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
+      <a href="/records/{{ record.id }}?tab=delivery" style="text-decoration:none;color:inherit"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
+    </div>
+    {% if tab == 'raw' %}
+    <div class="body">
+      <div class="code">{{ record.output_json | tojson(indent=2) if record.output_json else '{}' }}</div>
+      <div class="hint" style="margin-top:9px">اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
+    </div>
+    {% elif tab == 'meta' %}
+    <div class="body">
+      <dl class="kv">
+        <dt>عنوان پایان‌نامه</dt><dd>{{ record.title }}</dd>
+        <dt>چکیده</dt><dd>{{ record.abstract }}</dd>
+        <dt>فهرست مطالب</dt><dd>{{ record.table_of_contents or '—' }}</dd>
+        <dt>نام کاربری ثبت‌کننده</dt><dd>{{ record.username }}</dd>
+        <dt>مدل</dt><dd>{{ model_name or '—' }}</dd>
+        <dt>پرامپت</dt><dd>{{ prompt_version or '—' }}</dd>
+      </dl>
+    </div>
+    {% elif tab == 'history' %}
+    <div class="body">
+      <div class="timeline">
+        {% for h in history %}
+        <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ h.title }}</b><small>{{ h.sub }}</small></div></div>
+        {% endfor %}
+      </div>
+    </div>
+    {% elif tab == 'delivery' %}
+    <table>
+      <thead><tr><th>کانال</th><th>وضعیت</th><th>تلاش</th><th>شناسهٔ پیام</th></tr></thead>
+      <tbody>
+        {% for d in deliveries %}
+        <tr><td class="title">{{ d.channel.username or d.channel.title or d.channel.platform }}</td>
+          <td><span class="badge {% if d.status=='sent' %}s-sent{% elif d.status=='failed' %}s-failed{% elif d.status=='pending' %}s-ready{% else %}s-off{% endif %}">{{ d.status }}</span></td>
+          <td class="num">{{ d.attempts|fa }}</td><td class="num">{{ d.platform_message_id or '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if message_preview %}
+    <div class="body">
+      <div class="preview">
+        <h4>پیش‌نمایش پیام {{ preview_channel }}</h4>
+        <p style="white-space:pre-wrap">{{ message_preview }}</p>
+      </div>
+      <div class="hint" style="margin-top:9px">این دقیقاً همان متنی است که با تأیید، به کانال ارسال می‌شود.</div>
+    </div>
+    {% endif %}
+    {% else %}
+    {% if record.output_json %}
+    <form method="post" action="/records/{{ record.id }}/review">
+      <div class="body">
+        <div class="field"><label>عنوان</label><input type="text" name="title" value="{{ record.output_json.get('title','') }}"></div>
+        <div class="field"><label>لید</label><textarea name="lead" rows="2">{{ record.output_json.get('lead','') }}</textarea></div>
+        <div class="field"><label>متن خبر</label><textarea name="body" rows="5">{{ record.output_json.get('body','') }}</textarea></div>
+        <div class="chips" style="margin-top:4px"><span class="chip">طول عنوان: {{ (record.output_json.get('title','')|length)|fa }} نویسه</span><span class="chip">لید: {{ (record.output_json.get('lead','')|length)|fa }} نویسه</span><span class="chip">متن: {{ (record.output_json.get('body','')|length)|fa }} نویسه</span></div>
+      </div>
+      {% if record.status == 'review' %}
+      <div class="body" style="border-top:1px solid var(--line2);display:flex;gap:9px;flex-wrap:wrap">
+        <button class="btn btn-primary" name="action" value="approve" type="submit">تأیید و انتشار</button>
+        <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیرهٔ ویرایش</button>
+        <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)">رد این خبر</button>
+      </div>
+      {% endif %}
+    </form>
+    {% if record.status in ('review', 'failed') and record.output_json %}
+    <form method="post" action="/records/{{ record.id }}/regenerate">
+      <div class="body" style="border-top:1px solid var(--line2)">
+        <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
+        <div class="hint" style="margin-top:8px">متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
+      </div>
+    </form>
+    {% endif %}
+    {% else %}
+    <div class="body">
+      <p>خروجی هنوز تولید نشده است.</p>
+      {% if record.error_message %}<div class="note" style="margin-top:10px">{{ record.error_message }}</div>{% endif %}
+      {% if record.status == 'failed' %}
+      <form method="post" action="/records/{{ record.id }}/regenerate" style="margin-top:10px">
+        <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="card">
+      <h3>متادیتای پایان‌نامه</h3>
+      <div class="body">
+        <dl class="kv">
+          <dt>رشته</dt><dd>{{ record.field }}</dd>
+          <dt>دانشگاه</dt><dd>{{ record.university }}</dd>
+          <dt>نویسنده</dt><dd>{{ record.author }}</dd>
+          <dt>استاد راهنما</dt><dd>{{ record.supervisor }}</dd>
+          <dt>نام کاربری ثبت‌کننده</dt><dd>{{ record.username }}</dd>
+          <dt>تاریخ ثبت</dt><dd>{{ record.created_at|jalali }}</dd>
+          <dt>کانال مسیرشده</dt><dd>{{ routed_channels or '—' }}</dd>
+        </dl>
+        <div class="hint" style="margin-top:10px">عنوان پایان‌نامه: «{{ record.title }}»</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>تاریخچهٔ این رکورد</h3>
+      <div class="body">
+        <div class="timeline">
+          {% for h in history %}
+          <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ h.title }}</b><small>{{ h.sub }}</small></div></div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

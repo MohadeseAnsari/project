@@ -172,6 +172,13 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     as the queue drains. Keeping the exclusion inside the query means the
     ``LIMIT`` only ever counts articles that have real work to do.
 
+    Human gate: when ``settings.require_human_confirmation`` is True (default),
+    new rows are created as ``awaiting_confirmation`` so nothing publishes
+    without explicit approval; approving flips them to ``pending``. When False,
+    rows are created as ``pending`` directly (the pre-gate behaviour). The gate
+    only changes the initial status — the anti-join/LIMIT selection above is
+    unchanged.
+
     The per-article ``already`` set below is kept as a race guard for a second
     sender replica inserting between the SELECT and the INSERT; the unique
     constraint on ``(main_id, channel_id)`` is the final backstop.
@@ -214,7 +221,11 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
                 Delivery(
                     main_id=article.id,
                     channel_id=channel.id,
-                    status="pending",
+                    status=(
+                        "awaiting_confirmation"
+                        if settings.require_human_confirmation
+                        else "pending"
+                    ),
                     attempts=0,
                 )
             )
@@ -224,6 +235,30 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
         await session.commit()
         logger.info("Queued %d pending deliveries", created)
     return created
+
+
+async def confirm_deliveries_for_article(session, article_id: int) -> int:
+    """Flip an article's ``awaiting_confirmation`` deliveries to ``pending``.
+
+    Called once when a reviewer approves the article. Only the gated status
+    moves — ``sent``/``failed``/``pending`` rows are never touched — so
+    approving twice is a no-op rather than a duplicate send.
+
+    Returns:
+        Number of deliveries flipped.
+    """
+    result = await session.execute(
+        update(Delivery)
+        .where(Delivery.main_id == article_id)
+        .where(Delivery.status == "awaiting_confirmation")
+        .values(status="pending", updated_at=datetime.utcnow())
+    )
+    await session.commit()
+    if result.rowcount:
+        logger.info(
+            "Confirmed %d deliveries for article id=%s", result.rowcount, article_id
+        )
+    return result.rowcount or 0
 
 
 async def recover_stale_deliveries(session) -> int:

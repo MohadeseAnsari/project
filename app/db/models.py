@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -61,7 +62,11 @@ class Field(Base):
 
 
 class Model(Base):
-    """LLM model configuration; ``is_active`` marks the model the Worker uses."""
+    """LLM model configuration; ``is_active`` marks the model the Worker uses.
+
+    ``base_url`` overrides the provider endpoint per model; ``api_key_env`` is
+    the ENVIRONMENT VARIABLE NAME holding the key (never the key itself).
+    """
 
     __tablename__ = "models"
 
@@ -70,6 +75,11 @@ class Model(Base):
     provider = Column(String(50), nullable=False)
     version = Column(String(50), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    base_url = Column(String(500), nullable=True)
+    api_key_env = Column(String(100), nullable=True)
+    temperature = Column(Float, nullable=True)
+    max_output_tokens = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     main_records = relationship("Main", back_populates="model")
@@ -89,10 +99,52 @@ class Prompt(Base):
     main_records = relationship("Main", back_populates="prompt")
 
 
+class Role(Base):
+    """A panel role (admin full access, editor review only)."""
+
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(20), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    users = relationship("PanelUser", back_populates="role")
+
+
+class PanelUser(Base):
+    """A human panel account (argon2 password hash, never plaintext)."""
+
+    __tablename__ = "panel_users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), unique=True, nullable=False)
+    password_hash = Column(Text, nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    role = relationship("Role", back_populates="users")
+
+
+class AuditLog(Base):
+    """Who did what to which record (review/retry/config changes)."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("panel_users.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(50), nullable=False)
+    main_id = Column(Integer, ForeignKey("main.id", ondelete="SET NULL"), nullable=True)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
 class Main(Base):
     """The thesis/news record and job-state queue entry.
 
-    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``.
+    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``,
+    plus ``rejected`` for an explicit human rejection from ``review``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
     ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
     auditability of the classification and generation configuration used.
@@ -101,7 +153,7 @@ class Main(Base):
     __tablename__ = "main"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('ready', 'processing', 'review', 'failed')",
+            "status IN ('ready', 'processing', 'review', 'failed', 'rejected')",
             name="ck_main_status",
         ),
         Index("ix_main_status_created_at", "status", "created_at"),
