@@ -24,6 +24,7 @@ from app.db.models import Main
 from app.schemas.news import (
     ErrorResponse,
     HealthResponse,
+    RecordDetailResponse,
     RecordListResponse,
     RecordResponse,
     ServiceInfo,
@@ -219,7 +220,7 @@ async def list_records(
 
 @router.get(
     "/records/{record_id}",
-    response_model=RecordResponse,
+    response_model=RecordDetailResponse,
     responses={
         401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
         404: {"model": ErrorResponse, "description": "Record not found"},
@@ -241,21 +242,55 @@ async def get_record(
     """Retrieve a record's status and (when finished) its generated output.
 
     Requires the shared secret as a query parameter. Returns 401 without a
-    valid secret and 404 for unknown record ids.
+    valid secret and 404 for unknown record ids. The extended payload keeps the
+    original fields and adds thesis metadata, audit FKs, timestamps, and the
+    per-channel delivery state for the review panel.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     from sqlalchemy import select
 
+    from app.db.models import Channel, Delivery
+
     result = await session.execute(select(Main).where(Main.id == record_id))
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+    deliveries_result = await session.execute(
+        select(Delivery, Channel)
+        .join(Channel, Channel.id == Delivery.channel_id)
+        .where(Delivery.main_id == record.id)
+        .order_by(Delivery.id)
+    )
+    deliveries = [
+        {
+            "id": delivery.id,
+            "channel_id": delivery.channel_id,
+            "platform": channel.platform,
+            "username": channel.username,
+            "status": delivery.status,
+            "attempts": delivery.attempts,
+            "error_message": delivery.error_message,
+            "sent_at": delivery.sent_at,
+        }
+        for delivery, channel in deliveries_result.all()
+    ]
     return {
         "id": record.id,
         "status": record.status,
         "field": record.field,
         "output_json": record.output_json,
         "error_message": record.error_message,
+        "author": record.author,
+        "supervisor": record.supervisor,
+        "university": record.university,
+        "table_of_contents": record.table_of_contents,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "field_id": record.field_id,
+        "category_id": record.category_id,
+        "model_id": record.model_id,
+        "prompt_id": record.prompt_id,
+        "deliveries": deliveries,
     }

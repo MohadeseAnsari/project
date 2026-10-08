@@ -82,6 +82,41 @@ class RecordResponse(BaseModel):
     error_message: str | None = Field(default=None)
 
 
+class DeliveryInfo(BaseModel):
+    """One delivery row with its channel destination for record detail."""
+
+    id: int
+    channel_id: int
+    platform: str | None = None
+    username: str | None = None
+    status: str
+    attempts: int
+    error_message: str | None = None
+    sent_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RecordDetailResponse(RecordResponse):
+    """Extended ``GET /records/{id}`` payload for the review panel.
+
+    Keeps every ``RecordResponse`` field unchanged and adds thesis metadata,
+    audit FKs, timestamps, and per-channel delivery state (the channel routes).
+    """
+
+    author: str | None = None
+    supervisor: str | None = None
+    university: str | None = None
+    table_of_contents: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    field_id: int | None = None
+    category_id: int | None = None
+    model_id: int | None = None
+    prompt_id: int | None = None
+    deliveries: list[DeliveryInfo] = Field(default_factory=list)
+
+
 class ServiceInfo(BaseModel):
     """Response for the root endpoint."""
 
