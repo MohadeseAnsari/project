@@ -150,6 +150,14 @@ def _is_admin(user: PanelUser) -> bool:
     return bool(user.role and user.role.name == "admin")
 
 
+def _can_review(user: PanelUser) -> bool:
+    """Review rights: admin full access, editor/reviewer may approve/reject/retry/submit.
+
+    Viewers are read-only — every mutation returns 403 for them.
+    """
+    return bool(user.role and user.role.name in ("admin", "editor"))
+
+
 # --------------------------------------------------------------------------
 # auth pages
 # --------------------------------------------------------------------------
@@ -291,6 +299,7 @@ _ACTION_FA = {
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
+    "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
 }
 
 
@@ -483,6 +492,8 @@ async def record_review(
 ):
     """Apply approve/reject/save_draft from the review form and audit it."""
     user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     if action not in ("approve", "reject", "save_draft"):
         return RedirectResponse(url=f"/records/{record_id}", status_code=302)
     async with async_session() as session:
@@ -616,6 +627,8 @@ async def deliveries_table(request: Request, status: str = "", platform: str = "
 async def delivery_retry(request: Request, delivery_id: int):
     """Re-queue a failed delivery (attempts reset) and audit the retry."""
     user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     async with async_session() as session:
         delivery = await session.get(Delivery, delivery_id)
         if not delivery or delivery.status != "failed":
@@ -1024,6 +1037,8 @@ async def submit_create(
 ):
     """Create a thesis job from the panel form (overrides validated, stored)."""
     user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     async with async_session() as session:
         mid = int(model_id) if model_id.strip().isdigit() else None
         pid = int(prompt_id) if prompt_id.strip().isdigit() else None
@@ -1045,3 +1060,152 @@ async def submit_create(
         await session.commit()
         await audit(session, user.id, "submit", row.id, f"field={field}")
     return RedirectResponse(url=f"/records/{row.id}", status_code=302)
+
+
+# --------------------------------------------------------------------------
+# users & audit (admin only; viewer/editor get 403)
+# --------------------------------------------------------------------------
+
+
+def _require_admin_or_403(request: Request, user: PanelUser):
+    """Render the 403 page unless the user is an admin (management pages)."""
+    if not _is_admin(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    return None
+
+
+@panel_app.get("/users", response_class=HTMLResponse)
+async def users_page(request: Request):
+    """List console users with the role access matrix (admin only)."""
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    async with async_session() as session:
+        rows = (await session.execute(select(PanelUser).order_by(PanelUser.id))).scalars().all()
+        users = []
+        for u in rows:
+            role = await session.get(Role, u.role_id)
+            users.append({"id": u.id, "username": u.username, "role": role.name if role else "—",
+                          "created_at": u.created_at, "is_active": u.is_active})
+        roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
+        counts_ctx = await _sidebar_counts(session)
+    return templates.TemplateResponse(request, "users.html",
+        _ctx(request, user, active="users", **counts_ctx, users=users, roles=roles))
+
+
+@panel_app.post("/users")
+async def user_create(
+    request: Request, username: str = Form(...), password: str = Form(...), role: str = Form(...),
+):
+    """Create a console user with an argon2-hashed password (admin only)."""
+    from app.panel.auth import hash_password
+
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    if role not in ("admin", "editor", "viewer"):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
+    async with async_session() as session:
+        role_row = (await session.execute(select(Role).where(Role.name == role))).scalar_one_or_none()
+        if not role_row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش یافت نشد."), status_code=422)
+        session.add(PanelUser(username=username.strip(), password_hash=hash_password(password),
+                              role_id=role_row.id, is_active=True))
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نام کاربری تکراری است."), status_code=422)
+        await audit(session, user.id, "user_create", None, f"username={username}")
+    return RedirectResponse(url="/users", status_code=302)
+
+
+@panel_app.post("/users/{user_id}/role")
+async def user_change_role(request: Request, user_id: int, role: str = Form(...)):
+    """Change a console user's role (admin only)."""
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    if role not in ("admin", "editor", "viewer"):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
+    async with async_session() as session:
+        row = await session.get(PanelUser, user_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
+        role_row = (await session.execute(select(Role).where(Role.name == role))).scalar_one_or_none()
+        if not role_row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش یافت نشد."), status_code=422)
+        row.role_id = role_row.id
+        await session.commit()
+        await audit(session, user.id, "user_role", None, f"username={row.username} role={role}")
+    return RedirectResponse(url="/users", status_code=302)
+
+
+@panel_app.post("/users/{user_id}/toggle")
+async def user_toggle(request: Request, user_id: int):
+    """Activate/deactivate a console user (admin only; never deletes)."""
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    async with async_session() as session:
+        row = await session.get(PanelUser, user_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
+        if row.id == user.id:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نمی‌توانید حساب خودتان را غیرفعال کنید."), status_code=422)
+        row.is_active = not row.is_active
+        await session.commit()
+        await audit(session, user.id, "user_toggle", None, f"username={row.username} active={row.is_active}")
+    return RedirectResponse(url="/users", status_code=302)
+
+
+@panel_app.get("/audit", response_class=HTMLResponse)
+async def audit_page(
+    request: Request, action: str = "", username: str = "", main_id: str = "", page: int = 1,
+):
+    """Show the immutable audit trail with filters (admin only)."""
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    page = max(1, page)
+    page_size = 20
+    action_f = action or None
+    user_f = username.strip() or None
+    mid = int(main_id.strip()) if main_id.strip().isdigit() else None
+    async with async_session() as session:
+        count_q = select(func.count()).select_from(AuditLog)
+        list_q = select(AuditLog)
+        if user_f:
+            uid_rows = (await session.execute(select(PanelUser.id).where(PanelUser.username == user_f))).scalars().all()
+            count_q = count_q.where(AuditLog.user_id.in_(uid_rows))
+            list_q = list_q.where(AuditLog.user_id.in_(uid_rows))
+        if action_f:
+            count_q = count_q.where(AuditLog.action == action_f)
+            list_q = list_q.where(AuditLog.action == action_f)
+        if mid is not None:
+            count_q = count_q.where(AuditLog.main_id == mid)
+            list_q = list_q.where(AuditLog.main_id == mid)
+        total = (await session.execute(count_q)).scalar_one()
+        rows = (
+            await session.execute(list_q.order_by(AuditLog.id.desc()).limit(page_size).offset((page - 1) * page_size))
+        ).scalars().all()
+        events = []
+        for a in rows:
+            actor = await session.get(PanelUser, a.user_id) if a.user_id else None
+            events.append({"created_at": a.created_at, "username": actor.username if actor else "سیستم (worker)",
+                           "action": _ACTION_FA.get(a.action, a.action), "main_id": a.main_id,
+                           "detail": a.detail or "—"})
+        users = [r[0] for r in (await session.execute(select(PanelUser.username).order_by(PanelUser.username))).all()]
+        counts_ctx = await _sidebar_counts(session)
+    from urllib.parse import urlencode
+
+    query = urlencode({k: v for k, v in {"action": action, "username": username, "main_id": main_id}.items() if v})
+    return templates.TemplateResponse(request, "audit.html",
+        _ctx(request, user, active="audit", **counts_ctx, events=events, total=total, page=page,
+             page_size=page_size, action=action, username=username, main_id=main_id, query=query,
+             users=users, actions=sorted(_ACTION_FA.items())))

@@ -23,11 +23,13 @@ A signed `panel_session` cookie (12h, HttpOnly, Lax) keeps the login.
 
 | Role | Capabilities |
 |---|---|
-| `admin` | Everything: review, retry, submit, models/prompts/channels management |
-| `editor` | Review only: records list/detail (approve/reject/save_draft), delivery retry, submit form. Config pages return 403. |
+| `viewer` (بیننده) | Read-only: views every page, every mutation returns 403 |
+| `editor` (بازبین) | Review: records list/detail (approve/reject/save_draft), delivery retry, submit form |
+| `admin` (ادمین) | Everything above plus models/prompts/channels/users management and the audit trail |
 
 Every review/retry/config change is written to `audit_logs` (who, action,
-record, detail) and shown on the record detail page as history.
+record, detail) and shown on the record detail page as history and on the
+global `/audit` page.
 
 ## Pages and the endpoints/logic they use
 
@@ -42,13 +44,26 @@ record, detail) and shown on the record detail page as history.
 | Models | `GET /models`, `POST /models`, `POST /models/{id}/activate`, `POST /models/{id}/test` | List/create/detail; single-active activate (atomic); 1-token real connection probe (key never returned/logged). Admin only for mutations. |
 | Prompts | `GET /prompts`, `POST /prompts`, `POST /prompts/{id}/activate` | Immutable versions: new version = new row + activate previous off; never edited in place. Admin only for mutations. |
 | Channels + routing | `GET /channels`, `POST /channels`, `POST /channels/route`, `POST /channels/unroute` | Destinations (tokens stay in env, never on rows); field→channel routes as row inserts. Admin only for mutations. |
-| Fields | `GET /fields` | Read-only list (200 newest) with category + source. |
-| Categories | `GET /categories` | Read-only list. |
+| Fields | `GET /fields` | Read-only table with category, source, routed channels, plus top-field bars from real record counts. |
+| Categories | `GET /categories` | Cards per category with real field names as chips and field counts; server-side name search. |
+| Users | `GET /users`, `POST /users`, `POST /users/{id}/role`, `POST /users/{id}/toggle` | Console accounts (argon2 hashes, never plaintext); role changes and activate/deactivate; access matrix. Admin only. |
+| Audit trail | `GET /audit` | Immutable `audit_logs` table with action/user/record filters and pagination. Admin only. |
 
 Machine API (`POST /submit`, `/health`, `/records/{id}`, `/records`,
 `/deliveries`, `/stats`, `/models`, `/prompts`) keeps the shared-secret
 dependency unchanged; the panel uses its own cookie auth and never accepts the
 shared secret.
+
+## Visual design
+
+The panel ports the approved design reference (`panel.css` plus one reference
+page per screen) with the same structure, class names, and component hierarchy
+(sidebar, topbar, KPIs, cards, tables, badges, filters, tabs, timeline, matrix,
+chart, switch, notes, login box). `app/panel/static/panel.css` is a byte-identical
+copy (only served from `/static/`); fonts are the repo's own Vazirmatn files.
+Mock numbers/texts from the reference are replaced with real data; pages show
+Persian labels, `dir="rtl"`, and HTMX powers the filter/table partials (the
+script tag is invisible and changes no pixels).
 
 ## Worker heartbeat
 

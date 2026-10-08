@@ -146,6 +146,7 @@ once:
 6. `006_add_rejected_status.sql` — allow `rejected` on `main.status`
 7. `007_model_config_columns.sql` — `models.base_url/api_key_env/temperature/max_output_tokens/description`
 8. `008_panel_auth_audit.sql` — `roles`, `panel_users`, `audit_logs`
+9. `009_seed_viewer_role.sql` — read-only `viewer` role
 
 Migrations run automatically: the one-shot `migrate` service executes
 `scripts/apply_migrations.py` on every `docker compose up`, and both `api` and

@@ -30,6 +30,28 @@ async def _user(session: AsyncSession, username: str = "panel-tester") -> None:
     await session.commit()
 
 
+async def _user_with_role(session: AsyncSession, username: str, role_name: str) -> None:
+    """Create a user with the given role (viewer/editor split is tested below)."""
+    from sqlalchemy import select
+
+    from app.db.models import PanelUser, Role
+
+    role = (await session.execute(select(Role).where(Role.name == role_name))).scalar_one_or_none()
+    if role is None:
+        role = Role(name=role_name, description=role_name)
+        session.add(role)
+        await session.flush()
+    session.add(
+        PanelUser(
+            username=username,
+            password_hash=hash_password("secret123"),
+            role_id=role.id,
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+
 def _client() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
 
@@ -76,3 +98,61 @@ async def test_login_and_htmx_records_table(session: AsyncSession):
         assert table.status_code == 200
         assert "<table>" in table.text
         assert "رکورد" in table.text
+
+
+async def _login(client: AsyncClient, username: str) -> None:
+    """Log in over HTTP and keep the session cookie on the client."""
+    response = await client.post(
+        "/login", data={"username": username, "password": "secret123"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_users_page_is_admin_only(session: AsyncSession):
+    """Users management renders for admins, 403 for editors (matrix page)."""
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get("/users")
+        assert page.status_code == 200
+        assert "کاربران کنسول" in page.text
+        assert "ماتریس دسترسی نقش‌ها" in page.text
+    async with _client() as editor:
+        await _login(editor, "panel-editor")
+        assert (await editor.get("/users")).status_code == 403
+        assert (await editor.get("/audit")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_audit_page_lists_trail(session: AsyncSession):
+    """Audit trail renders the immutable event table for admins."""
+    await _user(session, "panel-admin")
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get("/audit")
+        assert page.status_code == 200
+        assert "ردپای تغییرات" in page.text
+
+
+@pytest.mark.asyncio
+async def test_viewer_is_read_only(session: AsyncSession):
+    """Viewers see pages but every review mutation returns 403."""
+    from app.db.models import Main
+
+    await _user_with_role(session, "panel-viewer", "viewer")
+    row = Main(
+        username="tester", title="Thesis", abstract="Abstract", field="پزشکی",
+        university="Tehran University", author="Author", supervisor="Supervisor",
+        status="review", output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-viewer")
+        assert (await client.get("/records")).status_code == 200
+        assert (await client.get(f"/records/{row.id}")).status_code == 200
+        denied = await client.post(f"/records/{row.id}/review", data={"action": "approve"})
+        assert denied.status_code == 403
