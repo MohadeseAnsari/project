@@ -618,3 +618,35 @@ async def test_raw_output_renders_persian_literally(session: AsyncSession):
         assert decoded.index('"body"') < decoded.index('"lead"') < decoded.index('"title"')
         second = await client.get(f"/records/{row.id}", params={"tab": "raw"})
         assert second.text == first.text
+
+
+@pytest.mark.asyncio
+async def test_approved_record_leaves_review_list(session: AsyncSession):
+    """Panel review list defaults to needs-review; approved shows its banner."""
+    from datetime import datetime
+
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    fresh = Main(
+        username="t", title="Fresh", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    done = Main(
+        username="t", title="Done", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review", approved_at=datetime.utcnow(),
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add_all([fresh, done])
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        needs_review = await client.get("/records/table")
+        assert "Fresh" in needs_review.text
+        assert "Done" not in needs_review.text
+        approved = await client.get("/records/table", params={"approved": "yes"})
+        assert "Done" in approved.text
+        assert "Fresh" not in approved.text
+        detail = await client.get(f"/records/{done.id}")
+        assert "تأیید شده" in detail.text

@@ -156,6 +156,7 @@ async def list_records(
     university: str | None = Query(None, description="Substring filter on university (case-insensitive)."),
     q: str | None = Query(None, description="Search across title/abstract/field/university/author/supervisor."),
     order: str = Query("newest", description="Result order: newest (default) or oldest."),
+    approved: bool | None = Query(None, description="True: only approved; False: only needs-review; omit: all."),
     session: AsyncSession = Depends(get_session),
 ):
     """List records with SQL LIMIT/OFFSET pagination for the review panel.
@@ -165,6 +166,8 @@ async def list_records(
     ``q`` is a case-insensitive substring match across the main thesis text
     columns; ``field``/``university`` narrow it further. ``order`` selects
     creation order only, keeping the listing deterministic for review.
+    ``approved`` splits reviewed rows into approved vs still-needs-review
+    (``approved_at`` set or not); omitted means both.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -176,6 +179,10 @@ async def list_records(
     filters = []
     if status:
         filters.append(Main.status == status)
+    if approved is True:
+        filters.append(Main.approved_at.isnot(None))
+    elif approved is False:
+        filters.append(Main.approved_at.is_(None))
     if field:
         filters.append(Main.field.ilike(f"%{field}%"))
     if university:
@@ -220,6 +227,7 @@ async def list_records(
                 "author": r.author,
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
+                "approved_at": r.approved_at,
             }
             for r in rows
         ],
@@ -295,6 +303,8 @@ async def _record_detail_payload(session: AsyncSession, record: Main) -> dict:
         "table_of_contents": record.table_of_contents,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "approved_at": record.approved_at,
+        "published_at": record.published_at,
         "field_id": record.field_id,
         "category_id": record.category_id,
         "model_id": record.model_id,
@@ -334,7 +344,8 @@ async def review_record(
     """Apply a human review decision to a ``review`` record.
 
     Only ``review`` rows may transition (409 otherwise) so an already-decided
-    or still-processing job is never overwritten. ``approve`` flips gated
+    or still-processing job is never overwritten. ``approve`` stamps
+    ``approved_at`` (first approval wins) and flips gated
     ``awaiting_confirmation`` deliveries to ``pending``; ``reject`` moves the
     record to ``rejected`` (gated deliveries stay gated and are therefore never
     sent); ``save_draft`` only edits the stored ``output_json``. Optional
@@ -376,6 +387,10 @@ async def review_record(
         record.output_json = current
 
     if data.action == "approve":
+        if record.approved_at is None:
+            # First approval wins: re-approving reflips deliveries without
+            # rewriting who approved first and when.
+            record.approved_at = datetime.utcnow()
         record.updated_at = datetime.utcnow()
         await session.commit()
         await confirm_deliveries_for_article(session, record.id)

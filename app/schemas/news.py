@@ -114,6 +114,8 @@ class RecordDetailResponse(RecordResponse):
     table_of_contents: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    approved_at: datetime | None = None
+    published_at: datetime | None = None
     field_id: int | None = None
     category_id: int | None = None
     model_id: int | None = None
@@ -212,6 +214,7 @@ class RecordListItem(BaseModel):
     author: str
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    approved_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

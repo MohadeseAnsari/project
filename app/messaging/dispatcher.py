@@ -497,13 +497,21 @@ async def load_delivery_context(session, delivery: Delivery) -> tuple[Main, Chan
 
 
 async def mark_sent(session, delivery: Delivery, platform_message_id: int) -> None:
-    """Record a successful send."""
+    """Record a successful send; stamp the article published on first send."""
+    from sqlalchemy import update
+
     delivery.status = "sent"
     delivery.sent_at = datetime.utcnow()
     delivery.platform_message_id = platform_message_id
     delivery.claimed_at = None
     delivery.error_message = None
     delivery.updated_at = datetime.utcnow()
+    await session.execute(
+        update(Main)
+        .where(Main.id == delivery.main_id)
+        .where(Main.published_at.is_(None))
+        .values(published_at=datetime.utcnow())
+    )
     await session.commit()
     logger.info(
         "Delivered id=%s article=%s channel=%s message_id=%s",

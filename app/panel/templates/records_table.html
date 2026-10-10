@@ -14,7 +14,8 @@
       <td>{{ r.field }}</td>
       <td>{{ r.university }}</td>
       <td>
-        {% if r.status == 'review' %}<span class="badge s-review">★ در انتظار بازبینی</span>
+        {% if r.status == 'review' and not r.approved_at %}<span class="badge s-review">★ در انتظار بازبینی</span>
+        {% elif r.status == 'review' %}<span class="badge s-sent">✓ تأیید شده</span>
         {% elif r.status == 'processing' %}<span class="badge s-processing">… در حال تولید خبر</span>
         {% elif r.status == 'ready' %}<span class="badge s-ready">… در صف، منتظر worker</span>
         {% elif r.status == 'failed' %}<span class="badge s-failed">! تولید ناموفق</span>
@@ -23,7 +24,7 @@
       </td>
       <td class="num">{{ r.created_at|jalali }}</td>
       <td>
-        {% if r.status == 'review' %}
+        {% if r.status == 'review' and not r.approved_at %}
         <form method="post" action="/records/{{ r.id }}/review" style="display:inline"><input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
         <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
         {% else %}

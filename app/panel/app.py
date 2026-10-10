@@ -150,7 +150,11 @@ def _ctx(request: Request, user: PanelUser | None, **extra):
 async def _sidebar_counts(session: AsyncSession) -> dict:
     """Sidebar badges: records awaiting review + deliveries needing attention."""
     review_total = (
-        await session.execute(select(func.count()).select_from(Main).where(Main.status == "review"))
+        await session.execute(
+            select(func.count()).select_from(Main)
+            .where(Main.status == "review")
+            .where(Main.approved_at.is_(None))
+        )
     ).scalar_one()
     gated_total = (
         await session.execute(
@@ -385,10 +389,19 @@ def _record_filters(status, field, university, q):
     return filters
 
 
+def _approved_filter(value: str):
+    """Tri-state approval filter: 'yes' (approved), 'no' (needs review), '' (all)."""
+    if value == "yes":
+        return Main.approved_at.isnot(None)
+    if value == "no":
+        return Main.approved_at.is_(None)
+    return None
+
+
 @panel_app.get("/records", response_class=HTMLResponse)
 async def records_page(
     request: Request, status: str = "", field: str = "", university: str = "",
-    q: str = "", order: str = "newest", page: int = 1,
+    q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
 ):
     """Show the filterable record list (first page server-rendered, rest via HTMX)."""
     user = await require_login(request)
@@ -414,6 +427,9 @@ async def records_page(
             ).all()
         ]
         filters = _record_filters(status or None, field or None, university or None, q or None)
+        approved_criterion = _approved_filter(approved)
+        if approved_criterion is not None:
+            filters.append(approved_criterion)
         count_q = select(func.count()).select_from(Main)
         if filters:
             count_q = count_q.where(*filters)
@@ -425,13 +441,20 @@ async def records_page(
         items = (
             await session.execute(query_sel.order_by(*ordering).limit(page_size).offset((page - 1) * page_size))
         ).scalars().all()
+        needs_review = (
+            await session.execute(
+                select(func.count()).select_from(Main)
+                .where(Main.status == "review")
+                .where(Main.approved_at.is_(None))
+            )
+        ).scalar_one()
         counts_ctx = await _sidebar_counts(session)
-    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order}.items() if v})
+    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
             request, user, active="records", **counts_ctx,
-            status=status, field=field, university=university, q=q, order=order, query=query,
-            kpi_review=counts.get("review", 0),
+            status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
+            kpi_review=needs_review,
             kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
             kpi_sent=delivery_counts.get("sent", 0),
             kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
@@ -445,12 +468,16 @@ async def records_page(
 async def records_table(
     request: Request, status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, page_size: int = 20,
+    approved: str = "no",
 ):
     """HTMX partial: one page of filtered record rows (used by the list page)."""
     user = await require_login(request)
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     filters = _record_filters(status or None, field or None, university or None, q or None)
+    approved_criterion = _approved_filter(approved)
+    if approved_criterion is not None:
+        filters.append(approved_criterion)
     async with async_session() as session:
         count_q = select(func.count()).select_from(Main)
         if filters:
@@ -465,7 +492,7 @@ async def records_table(
         ).scalars().all()
     from urllib.parse import urlencode
 
-    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order}.items() if v})
+    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records_table.html",
         {"request": request, "current_user": user, "items": rows, "total": total, "page": page, "page_size": page_size, "query": query_str},
     )
@@ -550,11 +577,21 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
         for a in audits:
             actor = await session.get(PanelUser, a.user_id) if a.user_id else None
             history.append({"title": _audit_title(a), "sub": f"{actor.username if actor else 'سیستم'} · {_jalali(a.created_at)}"})
+        approved_by = None
+        if record.approved_at is not None:
+            first_approval = (
+                await session.execute(
+                    select(AuditLog).where(AuditLog.main_id == record.id, AuditLog.action == "approve").order_by(AuditLog.id).limit(1))
+            ).scalar_one_or_none()
+            if first_approval is not None:
+                approver = await session.get(PanelUser, first_approval.user_id) if first_approval.user_id else None
+                approved_by = f"{approver.username if approver else '—'} · {_jalali(first_approval.created_at)}"
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "record_detail.html",
         _ctx(
             request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
+            approved_by=approved_by,
             routed_channels=routed_channels, message_preview=message_preview,
             snapshot_category=snapshot_category, current_category=current_category,
             field_keyword=field_keyword,
@@ -643,6 +680,8 @@ async def record_review(
             current["body"] = body.strip()
         record.output_json = current
         if action == "approve":
+            if record.approved_at is None:
+                record.approved_at = datetime.utcnow()
             await session.commit()
             await confirm_deliveries_for_article(session, record.id)
             await audit(session, user.id, "approve", record.id, "تأیید و انتشار")

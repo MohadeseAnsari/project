@@ -9,7 +9,8 @@
 <div class="side3">
   <div class="card">
     <h3>خبر تولیدشده توسط مدل — قابل ویرایش<span class="grow"></span>
-      {% if record.status == 'review' %}<span class="badge s-review">★ نیازمند تأیید</span>
+      {% if record.status == 'review' and not record.approved_at %}<span class="badge s-review">★ نیازمند تأیید</span>
+      {% elif record.status == 'review' %}<span class="badge s-sent">✓ تأیید شده{% if approved_by %} · {{ approved_by }}{% endif %}</span>
       {% elif record.status == 'rejected' %}<span class="badge s-failed">رد شده</span>
       {% else %}<span class="badge s-off">{{ record.status }}</span>{% endif %}
     </h3>
@@ -74,9 +75,14 @@
         <div class="field"><label>متن خبر</label><textarea name="body" rows="5">{{ record.output_json.get('body','') }}</textarea></div>
         <div class="chips" style="margin-top:4px"><span class="chip">طول عنوان: {{ (record.output_json.get('title','')|length)|fa }} نویسه</span><span class="chip">لید: {{ (record.output_json.get('lead','')|length)|fa }} نویسه</span><span class="chip">متن: {{ (record.output_json.get('body','')|length)|fa }} نویسه</span></div>
       </div>
-      {% if record.status == 'review' %}
+      {% if record.status == 'review' and not record.approved_at %}
       <div class="body" style="border-top:1px solid var(--line2);display:flex;gap:9px;flex-wrap:wrap">
         <button class="btn btn-primary" name="action" value="approve" type="submit">تأیید و انتشار</button>
+        <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیرهٔ ویرایش</button>
+        <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)">رد این خبر</button>
+      </div>
+      {% elif record.status == 'review' %}
+      <div class="body" style="border-top:1px solid var(--line2);display:flex;gap:9px;flex-wrap:wrap">
         <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیرهٔ ویرایش</button>
         <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)">رد این خبر</button>
       </div>
