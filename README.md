@@ -124,7 +124,7 @@ project/
 │       ├── auth.py           # argon2, signed cookies, login lockout, proxy IP
 │       ├── templates/        # Jinja2 pages ported from the approved design
 │       └── static/           # panel.css (byte-identical design), HTMX, Vazirmatn
-├── migrations/               # SQL migrations 001–009 (authoritative schema)
+├── migrations/               # SQL migrations 001–015 (authoritative schema)
 ├── scripts/
 │   ├── apply_migrations.py   # Ordered, once-only runner (`_migrations` table)
 │   ├── seed_fields.py        # Loads data/fields.xlsx (idempotent)
@@ -304,6 +304,12 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 7. `007_model_config_columns.sql` — `models.base_url/api_key_env/temperature/max_output_tokens/description`
 8. `008_panel_auth_audit.sql` — `roles`, `panel_users`, `audit_logs`
 9. `009_seed_viewer_role.sql` — read-only `viewer` role
+10. `010_fields_matched_keyword.sql` — `fields.matched_keyword`
+11. `011_category_channel_routes.sql` — primary category→channel mapping
+12. `012_delivery_routing_provenance.sql` — `deliveries.category_id`/`route_source`
+13. `013_record_publish_timestamps.sql` — `main.approved_at`/`published_at`
+14. `014_channel_bot_token_env.sql` — `channels.bot_token_env`
+15. `015_field_category_source.sql` — `fields.category_source` (`rules`/`curated`)
 
 Migrations are additive-only and never edited after applying — schema changes
 always add the next numbered file. Full ER diagram: `docs/erd.md`.

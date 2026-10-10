@@ -63,6 +63,7 @@ class Field(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     source = Column(String(20), nullable=False, default="spreadsheet")
     matched_keyword = Column(String(200), nullable=True)
+    category_source = Column(String(20), nullable=False, default="rules")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     category = relationship("Category", back_populates="fields")

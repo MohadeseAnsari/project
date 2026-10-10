@@ -46,6 +46,7 @@ async def list_fields(session, limit: int = 100) -> list[dict]:
                 "source": field.source,
                 "category_name": category.name if category else None,
                 "matched_keyword": field.matched_keyword,
+                "category_source": field.category_source,
                 "channel_names": "، ".join(c.username or c.title or c.platform for c in routed) or None,
             }
         )
@@ -55,6 +56,18 @@ async def list_fields(session, limit: int = 100) -> list[dict]:
 async def field_total(session) -> int:
     """Total field rows (table badge)."""
     return (await session.execute(select(func.count()).select_from(Field))).scalar_one()
+
+
+async def confirm_category(session, field: Field) -> Field:
+    """Freeze a field's category as human-curated (reclassification skips it).
+
+    The reviewer has read the matched keyword and agrees: future rule
+    updates and ``--apply`` runs must never move this row again.
+    """
+    field.category_source = "curated"
+    await session.commit()
+    await session.refresh(field)
+    return field
 
 
 async def top_fields(session, limit: int = 3) -> list[dict]:

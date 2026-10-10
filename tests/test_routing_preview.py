@@ -35,6 +35,15 @@ def _panel() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
 
 
+async def _login(client: AsyncClient, username: str) -> None:
+    """Log in over HTTP and keep the session cookie on the client."""
+    response = await client.post(
+        "/login", data={"username": username, "password": "secret123"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+
 @pytest.mark.asyncio
 async def test_routing_preview_for_field(session: AsyncSession):
     """Raw field name resolves to category, keyword, and live channels."""
@@ -249,3 +258,73 @@ async def test_seed_twice_produces_identical_categories(session: AsyncSession):
     others = sorted(name for name, cat in second.items() if cat == "other")
     assert keyworded == len(second) - len(others)
     assert others == ["دکترای تخصصی پژوهشی", "کارشناسی حرفه‌ای ارشد"]
+
+
+@pytest.mark.asyncio
+async def test_reclassify_skips_curated_rows(session: AsyncSession):
+    """Human-confirmed categories survive reclassification permanently."""
+    import importlib.util
+    from pathlib import Path
+
+    import asyncpg
+
+    from app.db.models import Category, Field
+
+    other = Category(name="other", description="Other")
+    med = Category(name="پزشکی و علوم سلامت", description="Medical")
+    session.add_all([other, med])
+    await session.commit()
+    session.add(Field(
+        name="رادیولوژی مخصوص", normalized_name="رادیولوژی مخصوص",
+        category_id=other.id, source="spreadsheet", matched_keyword=None,
+        category_source="curated",
+    ))
+    session.add(Field(
+        name="رادیولوژی تازه", normalized_name="رادیولوژی تازه",
+        category_id=other.id, source="spreadsheet", matched_keyword=None,
+        category_source="rules",
+    ))
+    await session.commit()
+
+    spec = importlib.util.spec_from_file_location(
+        "reclassify_fields", str(Path("scripts/reclassify_fields.py").resolve())
+    )
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    from app.config import settings
+
+    conn = await asyncpg.connect(settings.database_url.replace("+asyncpg", ""))
+    try:
+        diff = await script.collect_diff(conn)
+    finally:
+        await conn.close()
+    names = [row[0] for row in diff]
+    assert "رادیولوژی مخصوص" not in names
+    assert "رادیولوژی تازه" in names
+
+
+@pytest.mark.asyncio
+async def test_field_confirm_freezes_category(session: AsyncSession):
+    """Reviewers freeze a category from the fields page (audited)."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, Category, Field
+
+    await _admin(session)
+    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
+    session.add(cat)
+    await session.commit()
+    field = Field(name="f", normalized_name="f", category_id=cat.id, matched_keyword="پزشکی")
+    session.add(field)
+    await session.commit()
+    async with _panel() as client:
+        await _login(client, "rout-admin")
+        response = await client.post(f"/fields/{field.id}/confirm", follow_redirects=False)
+        assert response.status_code == 302
+    await session.refresh(field)
+    assert field.category_source == "curated"
+    actions = (
+        await session.execute(select(AuditLog.action).where(AuditLog.main_id.is_(None)))
+    ).scalars().all()
+    assert "curate" in actions

@@ -30,15 +30,17 @@ from app.fields.normalization import normalize_field
 async def collect_diff(conn) -> list[tuple]:
     """Compare every spreadsheet field's stored category with a fresh classify.
 
-    Returns ``(name, old_category, new_category, matched_keyword)`` rows for
-    fields that would change (plus their current keyword for context).
+    Curated rows (``category_source='curated'``) are skipped permanently:
+    human decisions survive rule updates. Returns
+    ``(name, old_category, new_category, matched_keyword)`` rows for fields
+    that would change (plus their current keyword for context).
     """
     rows = await conn.fetch(
         """
-        SELECT f.id, f.name, f.normalized_name, f.matched_keyword, c.name AS category
+        SELECT f.id, f.name, f.normalized_name, f.matched_keyword, f.category_source, c.name AS category
         FROM fields f
         JOIN categories c ON c.id = f.category_id
-        WHERE f.source = 'spreadsheet'
+        WHERE f.source = 'spreadsheet' AND f.category_source != 'curated'
         ORDER BY f.id
         """
     )

@@ -341,6 +341,7 @@ _ACTION_FA = {
     "login": "ورود به کنسول", "login_failed": "ورود ناموفق", "approve": "تأیید و انتشار", "reject": "رد خبر",
     "save_draft": "ذخیرهٔ پیش‌نویس", "retry": "تلاش مجدد ارسال", "release": "آزادسازی ارسال",
     "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
+    "curate": "تأیید انسانی دسته",
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
@@ -805,6 +806,23 @@ async def fields_page(request: Request):
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "fields.html",
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top))
+
+
+@panel_app.post("/fields/{field_id}/confirm")
+async def field_confirm(request: Request, field_id: int):
+    """Freeze a field's category as human-curated (reviewers and admins)."""
+    user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    async with async_session() as session:
+        from app.services import fields as field_service
+
+        field = await session.get(Field, field_id)
+        if not field:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
+        field = await field_service.confirm_category(session, field)
+        await audit(session, user.id, "curate", None, f"field={field.name}")
+    return RedirectResponse(url="/fields", status_code=302)
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)

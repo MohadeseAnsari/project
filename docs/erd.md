@@ -32,6 +32,7 @@ erDiagram
         INTEGER category_id FK
         VARCHAR source
         VARCHAR matched_keyword
+        VARCHAR category_source
         TIMESTAMP created_at
     }
 
