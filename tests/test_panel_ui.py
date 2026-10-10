@@ -794,3 +794,76 @@ async def test_final_prompt_tab_shows_exact_messages(session: AsyncSession):
         assert "preview-model" in page.text
         assert settings.shared_secret not in page.text
         assert settings.avalai_api_key not in page.text
+
+
+@pytest.mark.asyncio
+async def test_user_delete_safeguards(session: AsyncSession):
+    """Self-delete and last-admin delete are refused; history decides deactivate vs erase."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, PanelUser
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    admin = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one()
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        assert (await client.post(f"/users/{admin.id}/delete", follow_redirects=False)).status_code == 422
+        assert (await client.post("/users/999999/delete", follow_redirects=False)).status_code == 404
+        # Editor has no audit history: hard-deleted, row gone.
+        assert (await client.post(f"/users/{editor.id}/delete", follow_redirects=False)).status_code == 302
+    session.expunge_all()
+    assert await session.get(PanelUser, editor.id) is None
+    # Last active admin cannot be deleted even with a second admin present-but-inactive.
+    assert (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one().is_active is True
+
+
+@pytest.mark.asyncio
+async def test_user_delete_keeps_audited_row_deactivated(session: AsyncSession):
+    """A user with audit history is kept as a deactivated row, never erased."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, PanelUser
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    # Give the editor authored history (audits record the actor, not the
+    # target): they change their own password, then the admin deletes them.
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        changed = await client.post(
+            "/profile/password",
+            data={"current_password": "secret123", "new_password": "rotated99"},
+        )
+        assert changed.status_code == 200
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        response = await client.post(f"/users/{editor.id}/delete", follow_redirects=False)
+        assert response.status_code == 302
+    session.expunge_all()
+    row = await session.get(PanelUser, editor.id)
+    assert row is not None
+    assert row.is_active is False
+    actions = (await session.execute(select(AuditLog.action).where(AuditLog.detail.contains("panel-editor")))).scalars().all()
+    assert "user_delete" in actions
+
+
+@pytest.mark.asyncio
+async def test_delete_last_admin_refused_at_service(session: AsyncSession):
+    """The sole active admin survives even a privileged delete call."""
+    import pytest
+
+    from sqlalchemy import select
+
+    from app.db.models import PanelUser
+    from app.services import users as user_service
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    admin = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one()
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    with pytest.raises(ValueError, match="last-admin"):
+        await user_service.delete_user(session, admin, actor_id=editor.id)
+    assert (await session.get(PanelUser, admin.id)).is_active is True

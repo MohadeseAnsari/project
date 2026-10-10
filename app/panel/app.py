@@ -346,6 +346,7 @@ _ACTION_FA = {
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
+    "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
     "regenerate": "تولید دوباره با مدل",
 }
@@ -1450,6 +1451,38 @@ async def profile_change_password(
         await audit(session, user.id, "password_change", None, f"username={row.username}")
     return templates.TemplateResponse(request, "profile.html",
         _ctx(request, user, active="", target=user, ok="گذرواژه با موفقیت تغییر کرد."))
+
+
+@panel_app.post("/users/{user_id}/delete")
+async def user_delete(request: Request, user_id: int):
+    """Delete a console user with safeguards (admin only).
+
+    Deactivation stays the recommended action (see the toggle button and the
+    hint on the page). Deletion keeps history-bearing rows as deactivated
+    rows and hard-deletes only users with no audit trail.
+    """
+    user = await require_login(request)
+    denied = _require_admin_or_403(request, user)
+    if denied is not None:
+        return denied
+    async with async_session() as session:
+        from app.services import users as user_service
+
+        row = await user_service.get_user(session, user_id)
+        if not row:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
+        username = row.username
+        try:
+            outcome = await user_service.delete_user(session, row, actor_id=user.id)
+        except ValueError as e:
+            message = {
+                "self-delete": "نمی‌توانید حساب خودتان را حذف کنید.",
+                "last-admin": "آخرین ادمین فعال قابل حذف نیست.",
+            }.get(str(e), "حذف ممکن نیست.")
+            return templates.TemplateResponse(request, "base.html",
+                _ctx(request, user, error=message), status_code=422)
+        await audit(session, user.id, "user_delete", None, f"username={username} outcome={outcome}")
+    return RedirectResponse(url="/users", status_code=302)
 
 
 @panel_app.get("/audit", response_class=HTMLResponse)

@@ -20,10 +20,14 @@
           <td>{% if u.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}</td>
           <td>
             <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline"><button class="rowbtn" type="submit">{% if u.is_active %}غیرفعال‌سازی{% else %}فعال‌سازی{% endif %}</button></form>
+            <form method="post" action="/users/{{ u.id }}/delete" style="display:inline" onsubmit="return confirm('حذف کاربر؟ تاریخچه‌دارها غیرفعال می‌مانند.')"><button class="rowbtn no" type="submit">حذف</button></form>
           </td></tr>
         {% endfor %}
       </tbody>
     </table>
+    <div class="body" style="border-top:1px solid var(--line2)">
+      <div class="hint">توصیه: به‌جای حذف، غیرفعال کنید. حذف، ردیف‌های دارای تاریخچه را فقط غیرفعال نگه می‌دارد و فقط کاربران بدون تاریخچه را کاملاً پاک می‌کند.</div>
+    </div>
     <div class="body" style="border-top:1px solid var(--line2)">
       <div class="hint">تغییر نقش هر کاربر از همین جدول انجام می‌شود:</div>
       {% for u in users %}
