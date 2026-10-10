@@ -100,11 +100,10 @@
     <form method="post" action="/channels">
       <div class="two" style="gap:10px">
         <div class="field"><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
-        <div class="field"><label>chat_id</label><input type="number" name="chat_id" required></div>
-        <div class="field"><label>username</label><input type="text" name="username"></div>
-        <div class="field"><label>title</label><input type="text" name="title"></div>
+        <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@channel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود و عنوان resolved نمایش داده می‌شود.</div></div>
+        <div class="field"><label>عنوان نمایشی (اختیاری)</label><input type="text" name="title"></div>
       </div>
-      <button class="btn btn-primary" type="submit">ایجاد کانال</button>
+      <button class="btn btn-primary" type="submit">بررسی و ایجاد کانال</button>
     </form>
   </div>
 </div>

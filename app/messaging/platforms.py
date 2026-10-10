@@ -77,6 +77,53 @@ class PlatformClient:
         """Send one plain-text message and return the provider message id."""
         raise NotImplementedError
 
+    async def get_chat(self, chat: int | str) -> dict:
+        """Resolve a numeric chat id or @username via ``getChat``.
+
+        Returns the provider's ``result`` object (``id``, ``title``,
+        ``username``, ...) so callers can validate a destination BEFORE
+        saving it and show the resolved title. Same error policy as sends:
+        retryable failures raise transient, unknown chats raise permanent.
+        """
+        return await self._get("getChat", {"chat_id": chat})
+
+    async def _get(self, method: str, params: dict) -> dict:
+        """GET a Bot-API-style method and return the ``result`` object.
+
+        Shares ``_post``'s envelope/error policy; split out because creation
+        needs the full result (id/title), not just a message id.
+        """
+        url = f"{self._api_base()}/bot{self._token}/{method}"
+        try:
+            async with httpx.AsyncClient(timeout=settings.sender_request_timeout_seconds) as client:
+                response = await client.get(url, params=params)
+        except httpx.TimeoutException as e:
+            raise TransientDeliveryError(f"timeout calling {method}: {e}") from e
+        except httpx.HTTPError as e:
+            raise TransientDeliveryError(f"network error calling {method}: {e}") from e
+
+        if response.status_code >= 400:
+            raise _classify_status(response.status_code, response.text)
+
+        try:
+            body = response.json()
+        except ValueError as e:
+            raise TransientDeliveryError(f"{method}: non-JSON response: {response.text[:200]}") from e
+
+        if not isinstance(body, dict) or not body.get("ok"):
+            description = ""
+            if isinstance(body, dict):
+                description = str(body.get("description", ""))[:500]
+            error_code = body.get("error_code") if isinstance(body, dict) else None
+            if isinstance(error_code, int) and error_code >= 500:
+                raise TransientDeliveryError(f"{method}: {description} (error_code={error_code})")
+            raise PermanentDeliveryError(f"{method}: {description or 'ok=false'}")
+
+        result = body.get("result")
+        if not isinstance(result, dict):
+            raise PermanentDeliveryError(f"{method}: missing result object")
+        return result
+
     async def _post(self, method: str, payload: dict) -> int:
         """POST a Bot-API-style request and unwrap the ``ok``/``result`` envelope.
 

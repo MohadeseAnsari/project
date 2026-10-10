@@ -1161,17 +1161,60 @@ async def channel_update(
 
 @panel_app.post("/channels")
 async def channel_create(
-    request: Request, platform: str = Form(...), chat_id: int = Form(...),
-    username: str = Form(""), title: str = Form(""),
+    request: Request, platform: str = Form(...), target: str = Form(...),
+    title: str = Form(""),
 ):
-    """Create a channel destination (admin only; tokens stay in env)."""
+    """Create a channel destination after live getChat validation (admin only).
+
+    Accepts a numeric chat id or an @username; the platform API resolves it
+    first, so typos fail here instead of silently parking every future send.
+    Tokens stay in env (platform-wide for creation); the resolved title is
+    shown on the channel card right after redirect.
+    """
+    from app.messaging.platforms import (
+        DeliveryError,
+        configured_clients,
+    )
+
     user = await require_login(request)
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    if platform not in ("bale", "telegram"):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="سکوی نامعتبر است."), status_code=422)
+    clients = configured_clients()
+    client = clients.get(platform)
+    if client is None:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=f"توکن ربات {platform} پیکربندی نشده است."), status_code=422)
+    target = target.strip()
+    chat: int | str = int(target) if target.lstrip("-").isdigit() else target
+    try:
+        resolved = await client.get_chat(chat)
+    except DeliveryError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=f"کانال یافت نشد: {e}"), status_code=422)
+    try:
+        resolved_id = int(resolved.get("id", 0))
+    except (TypeError, ValueError):
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="پاسخ getChat شناسهٔ معتبر نداشت."), status_code=422)
+    if not resolved_id:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="پاسخ getChat شناسهٔ معتبر نداشت."), status_code=422)
     async with async_session() as session:
-        session.add(Channel(platform=platform, chat_id=chat_id, username=username or None, title=title or None, is_active=True))
-        await session.commit()
-        await audit(session, user.id, "channel_create", None, f"{platform}:{chat_id}")
+        session.add(Channel(
+            platform=platform, chat_id=resolved_id,
+            username=resolved.get("username") or (target if isinstance(chat, str) else None),
+            title=title.strip() or resolved.get("title"),
+            is_active=True,
+        ))
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            return templates.TemplateResponse(request, "base.html",
+                _ctx(request, user, error="این کانال قبلاً ثبت شده است."), status_code=422)
+        await audit(session, user.id, "channel_create", None, f"{platform}:{resolved_id}")
     return RedirectResponse(url="/channels", status_code=302)
 
 
