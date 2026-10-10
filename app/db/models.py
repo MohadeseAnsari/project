@@ -190,6 +190,8 @@ class Main(Base):
     error_message = Column(Text, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
     heartbeat_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

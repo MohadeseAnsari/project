@@ -76,6 +76,8 @@ erDiagram
         TEXT error_message
         TIMESTAMP claimed_at
         TIMESTAMP heartbeat_at
+        TIMESTAMP approved_at
+        TIMESTAMP published_at
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
@@ -147,7 +149,10 @@ erDiagram
 
 `main.status` is the generation lifecycle: `ready`, `processing`, `review`,
 `failed`, plus `rejected` (explicit human rejection from `review` via
-`PATCH /records/{id}`). `deliveries.status` is the separate publishing lifecycle:
+`PATCH /records/{id}`). Approval deliberately keeps `status='review'` (no
+state-machine change); `approved_at`/`published_at` timestamps distinguish
+approved and published articles instead — "needs review" means
+`status='review' AND approved_at IS NULL`. `deliveries.status` is the separate publishing lifecycle:
 `pending`, `sending`, `sent`, `failed`, `awaiting_confirmation` (gated initial
 status while `REQUIRE_HUMAN_CONFIRMATION` is on; approval flips it to `pending`).
 
