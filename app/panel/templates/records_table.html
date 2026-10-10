@@ -26,7 +26,7 @@
       <td class="num">{{ r.created_at|jalali }}</td>
       <td>
         {% if r.status == 'review' and not r.approved_at %}
-        <form method="post" action="/records/{{ r.id }}/review" style="display:inline"><input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
+        <form method="post" action="/records/{{ r.id }}/review" style="display:inline">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
         <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
         {% else %}
         <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">مشاهده</a>

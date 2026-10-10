@@ -10,6 +10,7 @@ from app.db.models import Category, CategoryChannelRoute, Channel, Field, Main
 from app.main import app as api_app
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
+from tests.panel_test_client import panel_client
 
 
 async def _admin(session: AsyncSession) -> None:
@@ -31,8 +32,9 @@ def _api() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=api_app), base_url="http://test")
 
 
-def _panel() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _panel():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 async def _login(client: AsyncClient, username: str) -> None:

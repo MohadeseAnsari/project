@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
+from tests.panel_test_client import panel_client
 
 
 async def _user(session: AsyncSession, username: str = "panel-tester") -> None:
@@ -55,8 +56,9 @@ async def _user_with_role(session: AsyncSession, username: str, role_name: str) 
     await session.commit()
 
 
-def _client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _client():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 @pytest.mark.asyncio

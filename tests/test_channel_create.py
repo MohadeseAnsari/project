@@ -14,6 +14,7 @@ from app.messaging.platforms import (
 )
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
+from tests.panel_test_client import panel_client
 
 
 class FakeResponse:
@@ -109,8 +110,9 @@ async def _admin(session: AsyncSession) -> None:
     await session.commit()
 
 
-def _panel() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _panel():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 @pytest.mark.asyncio

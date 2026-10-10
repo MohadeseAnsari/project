@@ -7,7 +7,7 @@
   <div class="card">
     <h3>متادیتای پایان‌نامه</h3>
     <div class="body">
-      <form method="post" action="/submit">
+      <form method="post" action="/submit">{{ csrf_field(request) | safe }}
         <div class="two" style="gap:12px">
           <div class="field"><label>عنوان پایان‌نامه</label><input type="text" name="title" required></div>
           <div class="field"><label>نویسنده</label><input type="text" name="author" required></div>

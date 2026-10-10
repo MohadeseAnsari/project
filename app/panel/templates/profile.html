@@ -19,7 +19,7 @@
   <div class="card">
     <h3>تغییر گذرواژه</h3>
     <div class="body">
-      <form method="post" action="/profile/password">
+      <form method="post" action="/profile/password">{{ csrf_field(request) | safe }}
         <div class="field"><label>گذرواژهٔ فعلی</label><input type="password" name="current_password" autocomplete="current-password" required></div>
         <div class="field"><label>گذرواژهٔ تازه (حداقل ۸ نویسه)</label><input type="password" name="new_password" autocomplete="new-password" required minlength="8"></div>
         <button class="btn btn-primary" type="submit">ثبت گذرواژهٔ تازه</button>

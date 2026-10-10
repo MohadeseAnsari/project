@@ -15,11 +15,11 @@
           {% if m.creds.key_present %}<span class="badge s-sent">✓ کلید موجود</span>{% else %}<span class="badge s-failed">! کلید ناموجود</span>{% endif %}</td>
         <td>{% if m.is_active %}<span class="badge s-sent">✓ فعال</span>{% else %}<span class="badge s-ready">آمادهٔ فعال‌سازی</span>{% endif %}</td>
         <td>
-          <form method="post" action="/models/{{ m.id }}/test" style="display:inline"><button class="rowbtn" type="submit">تست اتصال</button></form>
+          <form method="post" action="/models/{{ m.id }}/test" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">تست اتصال</button></form>
           {% if m.is_active %}
           <a class="rowbtn" href="/models?model_id={{ m.id }}" style="text-decoration:none">ویرایش</a>
           {% else %}
-          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline"><button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
+          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
           {% endif %}
         </td></tr>
       {% endfor %}
@@ -30,7 +30,7 @@
 <div class="two">
   <div class="card"><h3>تنظیمات مدل فعال</h3><div class="body">
     {% if selected %}
-    <form method="post" action="/models/{{ selected.id }}">
+    <form method="post" action="/models/{{ selected.id }}">{{ csrf_field(request) | safe }}
       <div class="field"><label>نام مدل</label><input type="text" value="{{ selected.description or selected.name }}" disabled><div class="hint">نام نمایشی از توضیحات می‌آید؛ شناسهٔ مدل (<span class="num">{{ selected.name }}</span>) ثابت است.</div></div>
       <div class="field"><label>مدل پایه</label><input type="text" value="{{ selected.name }}" style="direction:ltr;text-align:left" disabled></div>
       <div class="field"><label>نقطهٔ اتصال (base URL)</label><input type="text" name="base_url" value="{{ selected.base_url or '' }}" style="direction:ltr;text-align:left"></div>
@@ -57,7 +57,7 @@
     {% else %}
       <div class="hint">این تست فقط اتصال و قالب خروجی را می‌سنجد؛ آزمون کیفیت متن، کار بازبین انسانی است.</div>
     {% endif %}
-    <form method="post" action="/models/{{ selected.id }}/test"><button class="btn btn-soft" type="submit">اجرای آزمون</button></form>
+    <form method="post" action="/models/{{ selected.id }}/test">{{ csrf_field(request) | safe }}<button class="btn btn-soft" type="submit">اجرای آزمون</button></form>
     {% else %}
     <p>مدلی برای آزمون وجود ندارد.</p>
     {% endif %}
@@ -67,7 +67,7 @@
 <div class="card">
   <h3>مدل تازه</h3>
   <div class="body">
-    <form method="post" action="/models">
+    <form method="post" action="/models">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:10px">
         <div class="field"><label>نام (شناسهٔ مدل)</label><input type="text" name="name" required style="direction:ltr;text-align:left"></div>
         <div class="field"><label>ارائه‌دهنده</label><input type="text" name="provider" value="openai" required></div>

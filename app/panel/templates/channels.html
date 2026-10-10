@@ -12,7 +12,7 @@
         <div class="b {% if c.platform=='telegram' %}b-blue{% else %}b-green{% endif %}" style="width:36px;height:36px;border-radius:10px;display:grid;place-items:center">{% if c.platform=='telegram' %}✈{% else %}⇢{% endif %}</div>
         <div class="grow"><b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b><div class="hint">{{ c.route_count|fa }} رشتهٔ مسیرشده · <span class="num">{{ c.chat_id }}</span>{% if c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>{% else %} · توکن سراسری{% endif %}</div></div>
         {% if c.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}
-        <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline"><button type="submit" title="تغییر وضعیت" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
+        <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="تغییر وضعیت" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
       </div>
       {% endfor %}
       <div style="border:1px dashed var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:11px">
@@ -27,7 +27,7 @@
     <h3>تنظیمات کانال انتخاب‌شده{% if selected %} — {{ selected.title or selected.username or selected.platform }}{% endif %}</h3>
     <div class="body">
       {% if selected %}
-      <form method="post" action="/channels/{{ selected.id }}">
+      <form method="post" action="/channels/{{ selected.id }}">{{ csrf_field(request) | safe }}
         <div class="field"><label>نام نمایشی</label><input type="text" name="title" value="{{ selected.title or '' }}"></div>
         <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}" style="direction:ltr;text-align:left"></div>
         <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}" style="direction:ltr;text-align:left"><div class="hint">توکن ربات در متغیر محیطی می‌ماند و در پایگاه‌داده ذخیره نمی‌شود.</div></div>
@@ -54,12 +54,12 @@
     </tbody>
   </table>
   <div class="body" style="border-top:1px solid var(--line2)">
-    <form method="post" action="/channels/category-route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">
+    <form method="post" action="/channels/category-route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">{{ csrf_field(request) | safe }}
       <div class="field" style="margin:0"><label>دسته</label><select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}</select></div>
       <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-primary btn-sm" type="submit">افزودن مسیر</button>
     </form>
-    <form method="post" action="/channels/category-unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+    <form method="post" action="/channels/category-unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">{{ csrf_field(request) | safe }}
       <div class="field" style="margin:0"><label>دسته</label><select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}</select></div>
       <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-ghost btn-sm" type="submit">حذف مسیر</button>
@@ -81,12 +81,12 @@
     </tbody>
   </table>
   <div class="body" style="border-top:1px solid var(--line2)">
-    <form method="post" action="/channels/route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">
+    <form method="post" action="/channels/route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">{{ csrf_field(request) | safe }}
       <div class="field" style="margin:0"><label>رشته (استثنا)</label><select name="field_id">{% for f in all_fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></div>
       <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-primary btn-sm" type="submit">افزودن مسیر</button>
     </form>
-    <form method="post" action="/channels/unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+    <form method="post" action="/channels/unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">{{ csrf_field(request) | safe }}
       <div class="field" style="margin:0"><label>رشته (استثنا)</label><select name="field_id">{% for f in all_fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></div>
       <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-ghost btn-sm" type="submit">حذف مسیر</button>
@@ -99,7 +99,7 @@
 <div class="card">
   <h3>کانال جدید</h3>
   <div class="body">
-    <form method="post" action="/channels">
+    <form method="post" action="/channels">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:10px">
         <div class="field"><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
         <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@channel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود و عنوان resolved نمایش داده می‌شود.</div></div>

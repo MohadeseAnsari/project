@@ -80,7 +80,7 @@
     </div>
     {% else %}
     {% if record.output_json %}
-    <form method="post" action="/records/{{ record.id }}/review">
+    <form method="post" action="/records/{{ record.id }}/review">{{ csrf_field(request) | safe }}
       <div class="body">
         <div class="field"><label>عنوان</label><input type="text" name="title" value="{{ record.output_json.get('title','') }}"></div>
         <div class="field"><label>لید</label><textarea name="lead" rows="2">{{ record.output_json.get('lead','') }}</textarea></div>
@@ -101,7 +101,7 @@
       {% endif %}
     </form>
     {% if record.status in ('review', 'failed') and record.output_json %}
-    <form method="post" action="/records/{{ record.id }}/regenerate">
+    <form method="post" action="/records/{{ record.id }}/regenerate">{{ csrf_field(request) | safe }}
       <div class="body" style="border-top:1px solid var(--line2)">
         <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
         <div class="hint" style="margin-top:8px">متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
@@ -113,7 +113,7 @@
       <p>خروجی هنوز تولید نشده است.</p>
       {% if record.error_message %}<div class="note" style="margin-top:10px">{{ record.error_message }}</div>{% endif %}
       {% if record.status == 'failed' %}
-      <form method="post" action="/records/{{ record.id }}/regenerate" style="margin-top:10px">
+      <form method="post" action="/records/{{ record.id }}/regenerate" style="margin-top:10px">{{ csrf_field(request) | safe }}
         <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
       </form>
       {% endif %}

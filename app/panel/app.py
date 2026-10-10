@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import jdatetime
-from fastapi import FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,6 +37,7 @@ from app.db.models import (
 )
 from app.messaging.dispatcher import channels_for_article
 from app.panel.auth import audit, ensure_admin_user, session_user_id
+from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
@@ -90,6 +91,7 @@ templates.env.filters["jalali"] = _jalali
 templates.env.filters["fa"] = _fa
 templates.env.filters["tojson_fa"] = _tojson_fa
 templates.env.globals["role_fa"] = _role_fa
+templates.env.globals["csrf_field"] = csrf_field
 
 
 @asynccontextmanager
@@ -101,8 +103,20 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-panel_app = FastAPI(title="IranDoc Review Panel", docs_url=None, redoc_url=None, lifespan=lifespan)
+panel_app = FastAPI(
+    title="IranDoc Review Panel", docs_url=None, redoc_url=None, lifespan=lifespan,
+    dependencies=[Depends(verify_csrf)],
+)
 panel_app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
+
+
+@panel_app.exception_handler(CSRFError)
+async def _csrf_error_handler(request: Request, exc: CSRFError):
+    """Render CSRF failures as a Persian 400 page (never a stack trace)."""
+    return HTMLResponse(
+        f'<meta charset="utf-8"><div class="note">{exc.message}</div>',
+        status_code=400,
+    )
 
 
 async def current_user(request: Request) -> PanelUser | None:

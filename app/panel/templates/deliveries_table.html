@@ -20,9 +20,9 @@
       </td>
       <td>
         {% if d.status == 'failed' %}
-        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline"><button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
         {% elif d.status == 'awaiting_confirmation' %}
-        <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline"><button class="rowbtn ok" type="submit">آزادسازی</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">آزادسازی</button></form>
         {% else %}
         <a class="rowbtn" href="/records/{{ d.main_id }}" style="text-decoration:none">مشاهدهٔ خبر</a>
         {% endif %}

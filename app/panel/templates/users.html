@@ -19,8 +19,8 @@
           <td class="num">{{ u.created_at|jalali }}</td>
           <td>{% if u.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}</td>
           <td>
-            <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline"><button class="rowbtn" type="submit">{% if u.is_active %}غیرفعال‌سازی{% else %}فعال‌سازی{% endif %}</button></form>
-            <form method="post" action="/users/{{ u.id }}/delete" style="display:inline" onsubmit="return confirm('حذف کاربر؟ تاریخچه‌دارها غیرفعال می‌مانند.')"><button class="rowbtn no" type="submit">حذف</button></form>
+            <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">{% if u.is_active %}غیرفعال‌سازی{% else %}فعال‌سازی{% endif %}</button></form>
+            <form method="post" action="/users/{{ u.id }}/delete" style="display:inline" onsubmit="return confirm('حذف کاربر؟ تاریخچه‌دارها غیرفعال می‌مانند.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف</button></form>
           </td></tr>
         {% endfor %}
       </tbody>
@@ -31,7 +31,7 @@
     <div class="body" style="border-top:1px solid var(--line2)">
       <div class="hint">تغییر نقش هر کاربر از همین جدول انجام می‌شود:</div>
       {% for u in users %}
-      <form method="post" action="/users/{{ u.id }}/role" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+      <form method="post" action="/users/{{ u.id }}/role" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">{{ csrf_field(request) | safe }}
         <span style="font-size:12.5px">{{ u.username }}</span>
         <select name="role">
           <option value="viewer" {% if u.role=='viewer' %}selected{% endif %}>بیننده — فقط دیدن</option>
@@ -40,7 +40,7 @@
         </select>
         <button class="btn btn-ghost btn-sm" type="submit">ثبت نقش</button>
       </form>
-      <form method="post" action="/users/{{ u.id }}/password" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+      <form method="post" action="/users/{{ u.id }}/password" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">{{ csrf_field(request) | safe }}
         <span style="font-size:12.5px">{{ u.username }}</span>
         <input type="password" name="new_password" placeholder="گذرواژهٔ تازه (حداقل ۸ نویسه)" required minlength="8" style="max-width:230px">
         <button class="btn btn-ghost btn-sm" type="submit">ثبت گذرواژه</button>
@@ -52,7 +52,7 @@
   <div class="card">
     <h3>افزودن کاربر</h3>
     <div class="body">
-      <form method="post" action="/users">
+      <form method="post" action="/users">{{ csrf_field(request) | safe }}
         <div class="field"><label>نام کاربری</label><input type="text" name="username" placeholder="s.ahmadi" style="direction:ltr;text-align:left" required></div>
         <div class="field"><label>گذرواژهٔ اولیه</label><input type="password" name="password" required><div class="hint">گذرواژه فقط هش‌شده (argon2) ذخیره می‌شود و هرگز به‌صورت متن ساده نگه‌داشته نمی‌شود.</div></div>
         <div class="field"><label>نقش</label><select name="role"><option value="viewer">بیننده — فقط دیدن</option><option value="editor">بازبین — ویرایش و تأیید خبر</option><option value="admin">ادمین — همهٔ دسترسی‌ها</option></select></div>

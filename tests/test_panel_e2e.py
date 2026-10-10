@@ -20,6 +20,7 @@ from app.messaging.dispatcher import claim_next_delivery, deliver_one, ensure_pe
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from app.worker.worker import process_job
+from tests.panel_test_client import panel_client
 
 
 class StubClient:
@@ -50,8 +51,9 @@ async def _admin(session: AsyncSession) -> None:
     await session.commit()
 
 
-def _panel() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _panel():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 @pytest.mark.asyncio

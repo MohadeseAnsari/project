@@ -13,7 +13,7 @@
         <tr><td class="num">{{ f.id|fa }}</td><td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
           <td>{{ f.category_name or '—' }}</td><td>{{ f.matched_keyword or '—' }}</td>
           <td>{% if f.category_source == 'curated' %}<span class="badge s-sent">انسانی</span>
-            {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline"><button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
+            {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
           <td>{{ f.channel_names or 'بدون کانال' }}</td></tr>
         {% endfor %}
       </tbody>
