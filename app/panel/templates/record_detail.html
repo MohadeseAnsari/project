@@ -22,7 +22,7 @@
     </div>
     {% if tab == 'raw' %}
     <div class="body">
-      <div class="code">{{ record.output_json | tojson(indent=2) if record.output_json else '{}' }}</div>
+      <div class="code">{{ record.output_json | tojson_fa if record.output_json else '{}' }}</div>
       <div class="hint" style="margin-top:9px">اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
     </div>
     {% elif tab == 'meta' %}

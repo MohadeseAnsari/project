@@ -74,8 +74,21 @@ def _role_fa(user) -> str:
     return _ROLE_FA.get(user.role.name, user.role.name)
 
 
+def _tojson_fa(value) -> str:
+    """Render JSON with real Persian characters in stable key order.
+
+    Jinja's ``tojson`` escapes non-ASCII as ``\\uXXXX``, which reviewers
+    cannot read or copy-paste; ``ensure_ascii=False`` keeps Persian text
+    literal and ``sort_keys`` keeps repeated renders byte-identical.
+    """
+    import json
+
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 templates.env.filters["jalali"] = _jalali
 templates.env.filters["fa"] = _fa
+templates.env.filters["tojson_fa"] = _tojson_fa
 templates.env.globals["role_fa"] = _role_fa
 
 

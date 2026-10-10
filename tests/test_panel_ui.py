@@ -591,3 +591,30 @@ async def test_admin_deactivates_user_over_http(session: AsyncSession):
         assert toggled.status_code == 302
     async with _client() as client:
         assert (await client.post("/login", data={"username": "panel-editor", "password": "secret123"}, follow_redirects=False)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_raw_output_renders_persian_literally(session: AsyncSession):
+    """The raw tab shows real Persian characters in stable order, not escapes."""
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="t", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "خبر پزشکی", "lead": "لید آزمایشی", "body": "متن کامل خبر"},
+    )
+    session.add(row)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        first = await client.get(f"/records/{row.id}", params={"tab": "raw"})
+        assert first.status_code == 200
+        assert "خبر پزشکی" in first.text
+        assert "\\u062e" not in first.text
+        import html as _html
+
+        decoded = _html.unescape(first.text)
+        assert decoded.index('"body"') < decoded.index('"lead"') < decoded.index('"title"')
+        second = await client.get(f"/records/{row.id}", params={"tab": "raw"})
+        assert second.text == first.text
