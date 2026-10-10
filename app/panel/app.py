@@ -1037,6 +1037,14 @@ async def channel_create(
 # --------------------------------------------------------------------------
 
 
+def _attach_creds(rows) -> None:
+    """Attach resolved credential summaries (never key values) for display."""
+    from app.news.generation import describe_model_credentials
+
+    for row in rows:
+        row.creds = describe_model_credentials(row)
+
+
 @panel_app.get("/models", response_class=HTMLResponse)
 async def models_page(request: Request, model_id: int | None = None):
     """List models with the selected (default active) settings and test cards."""
@@ -1048,6 +1056,7 @@ async def models_page(request: Request, model_id: int | None = None):
             selected = await session.get(Model, model_id)
         if selected is None:
             selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
+        _attach_creds(rows)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "models.html",
         _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected, test_result=None))
@@ -1079,6 +1088,7 @@ async def panel_model_create(
             await session.rollback()
             rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
             selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
+            _attach_creds(rows)
             counts_ctx = await _sidebar_counts(session)
             return templates.TemplateResponse(request, "models.html",
                 _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
@@ -1138,10 +1148,10 @@ async def panel_model_test(request: Request, model_id: int):
         row = await session.get(Model, model_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
-        from app.news.generation import probe_model_connection, resolve_api_key
+        from app.news.generation import describe_model_credentials, probe_model_connection
 
         ok, error = await probe_model_connection(
-            row.name, row.base_url, resolve_api_key(row.api_key_env)
+            row.name, row.base_url, row.api_key_env
         )
         test_result = {"ok": ok, "model": row.name, "error": error}
         ok_msg = f"اتصال مدل {row.name} موفق بود." if ok else None
@@ -1149,6 +1159,7 @@ async def panel_model_test(request: Request, model_id: int):
         await audit(session, user.id, "model_test", None, f"model={row.name} ok={ok}")
         rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
         selected = await session.get(Model, model_id)
+        _attach_creds(rows)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "models.html",
         _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,

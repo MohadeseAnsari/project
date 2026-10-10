@@ -72,6 +72,12 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Per-model `base_url`/`api_key_env` (env var name, never the key) override the provider endpoint/key
 - Models/prompts managed via `/models` + `/prompts` (list/create/detail, single-active `POST /{id}/activate`); prompts immutable (new version = new row, never edit); `POST /models/{id}/test-connection` probes with a 1-token call without returning the key
 - Model and prompt references recorded on main record
+- Model configuration lives in the database, secrets live only in the
+  environment: a row stores the variable NAME (`api_key_env`), never a key.
+  A row with its own `base_url` but no usable key fails loudly
+  (`MissingModelKeyError` → `main.error_message`) instead of borrowing the
+  global key; the global key applies only to rows sharing the configured
+  endpoint
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 
 ## Database

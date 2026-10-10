@@ -34,11 +34,54 @@ def test_resolve_system_prompt_priority():
 def test_resolve_base_url_and_key_fallback(monkeypatch):
     assert resolve_base_url("https://custom/v1") == "https://custom/v1"
     assert resolve_base_url(None) == settings.avalai_base_url
-    assert resolve_api_key(None) == settings.avalai_api_key
+    # No base_url: legacy path, global key applies.
+    assert resolve_api_key(None, None) == settings.avalai_api_key
     monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
-    assert resolve_api_key("CUSTOM_TEST_KEY_ENV") == "secret-value"
-    # Missing env var falls back without ever returning the var name as a key.
-    assert resolve_api_key("DEFINITELY_MISSING_ENV_VAR") == settings.avalai_api_key
+    assert resolve_api_key("CUSTOM_TEST_KEY_ENV", None) == "secret-value"
+    # Missing env var without a base_url still falls back (shared endpoint).
+    assert resolve_api_key("DEFINITELY_MISSING_ENV_VAR", None) == settings.avalai_api_key
+
+
+def test_resolve_api_key_fails_loudly_with_custom_base(monkeypatch):
+    """A row with its own endpoint but no usable key raises, never substitutes."""
+    from app.news.generation import MissingModelKeyError
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    assert (
+        resolve_api_key("CUSTOM_TEST_KEY_ENV", "https://custom/v1") == "secret-value"
+    )
+    with pytest.raises(MissingModelKeyError, match="api_key_env"):
+        resolve_api_key(None, "https://custom/v1")
+    with pytest.raises(MissingModelKeyError, match="DEFINITELY_MISSING_ENV_VAR"):
+        resolve_api_key("DEFINITELY_MISSING_ENV_VAR", "https://custom/v1")
+    monkeypatch.setenv("CUSTOM_TEST_EMPTY", "")
+    with pytest.raises(MissingModelKeyError):
+        resolve_api_key("CUSTOM_TEST_EMPTY", "https://custom/v1")
+
+
+def test_describe_model_credentials_never_contains_key(monkeypatch):
+    """The panel display carries source + presence, never a key value."""
+    from app.news.generation import describe_model_credentials
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    described = describe_model_credentials(
+        _Row(base_url="https://custom/v1", api_key_env="CUSTOM_TEST_KEY_ENV")
+    )
+    assert described == {
+        "base_url": "https://custom/v1",
+        "key_env": "CUSTOM_TEST_KEY_ENV",
+        "key_present": True,
+        "uses_global_key": False,
+    }
+    missing = describe_model_credentials(
+        _Row(base_url="https://custom/v1", api_key_env="DEFINITELY_MISSING_ENV_VAR")
+    )
+    assert missing["key_present"] is False
+    assert "secret-value" not in str(described) + str(missing)
 
 
 def test_resolve_generation_config_priority():
@@ -48,7 +91,7 @@ def test_resolve_generation_config_priority():
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
-    override_model = _Row(name="override-model", base_url="https://override/v1", api_key_env=None)
+    override_model = _Row(name="override-model", base_url=None, api_key_env=None)
     override_prompt = _Row(system_prompt="override prompt")
     active_model = _Row(name="active-model", base_url=None, api_key_env=None)
     active_prompt = _Row(system_prompt="active prompt")
@@ -56,7 +99,7 @@ def test_resolve_generation_config_priority():
     full = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
     assert full["model_name"] == "override-model"
     assert full["system_prompt"] == "override prompt"
-    assert full["base_url"] == "https://override/v1"
+    assert full["base_url"] == settings.avalai_base_url
 
     active_only = resolve_generation_config(None, None, active_model, active_prompt)
     assert active_only["model_name"] == "active-model"
@@ -69,14 +112,15 @@ def test_resolve_generation_config_priority():
 
 
 @pytest.mark.asyncio
-async def test_probe_model_connection_reports_failure_without_raising():
+async def test_probe_model_connection_reports_failure_without_raising(monkeypatch):
     """Shared API/panel probe: missing keys and dead endpoints return, not raise."""
-    ok, error = await probe_model_connection("any-model", None, "")
+    ok, error = await probe_model_connection("any-model", "http://127.0.0.1:9/v1", None)
     assert ok is False
-    assert error == "no API key configured"
+    assert "api_key_env" in error
 
+    monkeypatch.setenv("CUSTOM_TEST_PROBE_KEY", "dummy-key-for-test")
     ok, error = await probe_model_connection(
-        "any-model", "http://127.0.0.1:1/v1", "dummy-key-for-test"
+        "any-model", "http://127.0.0.1:1/v1", "CUSTOM_TEST_PROBE_KEY"
     )
     assert ok is False
     assert error

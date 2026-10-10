@@ -50,15 +50,63 @@ def resolve_base_url(model_base_url: str | None) -> str:
     return model_base_url or settings.avalai_base_url
 
 
-def resolve_api_key(api_key_env: str | None) -> str:
-    """Resolve the provider key without ever returning or logging it.
+class MissingModelKeyError(ValueError):
+    """A model row points at its own endpoint but no usable key exists.
 
-    ``api_key_env`` is the ENVIRONMENT VARIABLE NAME (never the key itself);
-    when unset or missing from the environment, fall back to the configured key.
+    Raised (never swallowed) so the failure lands loudly in
+    ``main.error_message`` and on the panel instead of sending another
+    provider's key to a new endpoint. The message names the model, the
+    endpoint, and the missing variable — never a key value.
     """
-    if api_key_env:
-        return os.environ.get(api_key_env, "") or settings.avalai_api_key
-    return settings.avalai_api_key
+
+
+def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str:
+    """Resolve the provider key for a model row, explicitly.
+
+    - The row defines ``base_url``: only that endpoint's own key is usable
+      (``api_key_env`` read from the environment). A missing variable name,
+      an unset variable, or an empty value raises :class:`MissingModelKeyError`
+      instead of silently substituting the global key.
+    - The row defines no ``base_url``: the row shares the configured
+      endpoint, so its ``api_key_env`` (when usable) or otherwise the global
+      ``settings.avalai_api_key`` applies — the historical behavior.
+    """
+    usable = api_key_env and os.environ.get(api_key_env)
+    if base_url:
+        if usable:
+            return usable
+        if not api_key_env:
+            raise MissingModelKeyError(
+                f"model defines base_url '{base_url}' but has no api_key_env configured; "
+                "set the variable name instead of falling back to the global key"
+            )
+        raise MissingModelKeyError(
+            f"model defines base_url '{base_url}' but environment variable "
+            f"'{api_key_env}' is not set or empty"
+        )
+    return usable or settings.avalai_api_key
+
+
+def describe_model_credentials(model_row) -> dict[str, object]:
+    """Describe a model row's resolved endpoint/key WITHOUT key values.
+
+    Returns ``base_url`` (row or global fallback), ``key_env`` (the variable
+    name, or ``None``), ``key_present`` (whether a usable key exists right
+    now), and ``uses_global_key``. The panel renders source + present/missing
+    badges from this; nothing here can leak a secret.
+    """
+    base_url = model_row.base_url or settings.avalai_base_url
+    key_env = model_row.api_key_env or None
+    if model_row.base_url:
+        present = bool(key_env and os.environ.get(key_env))
+    else:
+        present = bool((key_env and os.environ.get(key_env)) or settings.avalai_api_key)
+    return {
+        "base_url": base_url,
+        "key_env": key_env,
+        "key_present": present,
+        "uses_global_key": not bool(model_row.base_url),
+    }
 
 
 def resolve_generation_config(
@@ -77,6 +125,15 @@ def resolve_generation_config(
     active_base = getattr(active_model, "base_url", None)
     override_env = getattr(model_override, "api_key_env", None)
     active_env = getattr(active_model, "api_key_env", None)
+    effective_base = override_base or active_base
+    # The key always travels with the row that provides the endpoint: a
+    # base_url without its own usable key fails loudly (MissingModelKeyError)
+    # instead of borrowing another row's — or the global — key.
+    effective_env = override_env if override_base else (active_env if active_base else (override_env or active_env))
+    base_url = resolve_base_url(effective_base)
+    # Key resolution may raise MissingModelKeyError: the caller (Worker fail
+    # path, panel regenerate, connection probe) surfaces it loudly instead of
+    # sending the wrong provider's key to this endpoint.
     return {
         "model_name": resolve_model_name(
             getattr(model_override, "name", None),
@@ -86,24 +143,27 @@ def resolve_generation_config(
             getattr(prompt_override, "system_prompt", None),
             getattr(active_prompt, "system_prompt", None),
         ),
-        "base_url": resolve_base_url(override_base or active_base),
-        "api_key": resolve_api_key(override_env or active_env),
+        "base_url": base_url,
+        "api_key": resolve_api_key(effective_env, effective_base or None),
     }
 
 
 async def probe_model_connection(
-    model_name: str, base_url: str | None, api_key: str | None
+    model_name: str, base_url: str | None = None, api_key_env: str | None = None
 ) -> tuple[bool, str | None]:
     """Make a real minimal 1-token provider call; return ``(ok, error)``.
 
     Shared by the machine API (``POST /models/{id}/test-connection``) and the
-    panel model test button, so both report the same result for the same row.
-    A missing key, DNS failure, auth error, or timeout returns ``(False,
-    error)`` instead of raising, and the key value is never included in the
+    panel model test button, so both report the same result for the same row:
+    the resolved key/base_url are exercised, and a missing key reports its
+    real reason instead of raising. The key value is never included in the
     error text or logged anywhere.
     """
+    try:
+        effective_key = resolve_api_key(api_key_env, base_url)
+    except MissingModelKeyError as e:
+        return False, str(e)
     effective_base_url = base_url or settings.avalai_base_url
-    effective_key = api_key or ""
     if not effective_key:
         return False, "no API key configured"
     try:

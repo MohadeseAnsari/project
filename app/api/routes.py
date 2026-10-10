@@ -755,14 +755,14 @@ async def test_model_connection(
     leaking credentials.
     """
     from app.db.models import Model
-    from app.news.generation import probe_model_connection, resolve_api_key
+    from app.news.generation import probe_model_connection
 
     _require_secret(payload)
     row = await session.get(Model, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
     ok, error = await probe_model_connection(
-        row.name, row.base_url, resolve_api_key(row.api_key_env)
+        row.name, row.base_url, row.api_key_env
     )
     return {"ok": ok, "model": row.name, "error": error}
 
