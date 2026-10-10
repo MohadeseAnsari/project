@@ -26,7 +26,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.db.models import CategoryChannelRoute, Channel, Delivery, FieldChannelRoute, Main
 from app.messaging.formatting import render_article
-from app.messaging.platforms import DeliveryError, PlatformClient
+from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
 
 logger = logging.getLogger(__name__)
 
@@ -579,11 +579,9 @@ async def deliver_one(
         await mark_failed(session, delivery, "article has no renderable content")
         return False
 
-    client = clients.get(channel.platform)
+    client, token_error = client_for_channel(channel, clients)
     if client is None:
-        await mark_failed(
-            session, delivery, f"no bot token configured for platform '{channel.platform}'"
-        )
+        await mark_failed(session, delivery, token_error)
         return False
 
     try:

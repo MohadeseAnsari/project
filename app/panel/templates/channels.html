@@ -10,7 +10,7 @@
       {% for c in channels %}
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:11px">
         <div class="b {% if c.platform=='telegram' %}b-blue{% else %}b-green{% endif %}" style="width:36px;height:36px;border-radius:10px;display:grid;place-items:center">{% if c.platform=='telegram' %}✈{% else %}⇢{% endif %}</div>
-        <div class="grow"><b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b><div class="hint">{{ c.route_count|fa }} رشتهٔ مسیرشده · <span class="num">{{ c.chat_id }}</span></div></div>
+        <div class="grow"><b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b><div class="hint">{{ c.route_count|fa }} رشتهٔ مسیرشده · <span class="num">{{ c.chat_id }}</span>{% if c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>{% else %} · توکن سراسری{% endif %}</div></div>
         {% if c.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}
         <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline"><button type="submit" title="تغییر وضعیت" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
       </div>
@@ -31,6 +31,7 @@
         <div class="field"><label>نام نمایشی</label><input type="text" name="title" value="{{ selected.title or '' }}"></div>
         <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}" style="direction:ltr;text-align:left"></div>
         <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}" style="direction:ltr;text-align:left"><div class="hint">توکن ربات در متغیر محیطی می‌ماند و در پایگاه‌داده ذخیره نمی‌شود.</div></div>
+        <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env" value="{{ selected.bot_token_env or '' }}" style="direction:ltr;text-align:left"><div class="hint">خالی = توکن سراسری سکو. فقط نام متغیر، هرگز خود توکن.</div></div>
         <div style="display:flex;gap:9px"><button class="btn btn-primary" type="submit">ذخیره</button></div>
       </form>
       {% else %}
@@ -102,6 +103,7 @@
         <div class="field"><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
         <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@channel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود و عنوان resolved نمایش داده می‌شود.</div></div>
         <div class="field"><label>عنوان نمایشی (اختیاری)</label><input type="text" name="title"></div>
+        <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env" style="direction:ltr;text-align:left"><div class="hint">خالی = توکن سراسری سکو. فقط نام متغیر.</div></div>
       </div>
       <button class="btn btn-primary" type="submit">بررسی و ایجاد کانال</button>
     </form>

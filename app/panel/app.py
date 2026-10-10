@@ -1140,7 +1140,7 @@ async def channel_toggle(request: Request, channel_id: int):
 @panel_app.post("/channels/{channel_id}")
 async def channel_update(
     request: Request, channel_id: int, title: str = Form(""),
-    chat_id: str = Form(""), username: str = Form(""),
+    chat_id: str = Form(""), username: str = Form(""), bot_token_env: str = Form(""),
 ):
     """Update a channel's display fields (admin only; no tokens on rows)."""
     user = await require_login(request)
@@ -1152,6 +1152,7 @@ async def channel_update(
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
         row.title = title.strip() or None
         row.username = username.strip() or None
+        row.bot_token_env = bot_token_env.strip() or None
         if chat_id.strip().lstrip("-").isdigit():
             row.chat_id = int(chat_id.strip())
         await session.commit()
@@ -1162,7 +1163,7 @@ async def channel_update(
 @panel_app.post("/channels")
 async def channel_create(
     request: Request, platform: str = Form(...), target: str = Form(...),
-    title: str = Form(""),
+    title: str = Form(""), bot_token_env: str = Form(""),
 ):
     """Create a channel destination after live getChat validation (admin only).
 
@@ -1206,6 +1207,7 @@ async def channel_create(
             platform=platform, chat_id=resolved_id,
             username=resolved.get("username") or (target if isinstance(chat, str) else None),
             title=title.strip() or resolved.get("title"),
+            bot_token_env=bot_token_env.strip() or None,
             is_active=True,
         ))
         try:

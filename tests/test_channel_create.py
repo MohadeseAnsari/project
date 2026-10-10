@@ -156,3 +156,86 @@ async def test_channel_create_unknown_fails_without_row(session: AsyncSession, s
         )
         assert response.status_code == 422
     assert (await session.execute(select(Channel))).scalars().all() == []
+
+
+def test_client_for_channel_prefers_row_token(monkeypatch):
+    """Per-channel variable wins; missing variable fails loudly; else platform client."""
+    from app.messaging.platforms import client_for_channel
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _Stub:
+        platform = "bale"
+
+    platform_stub = _Stub()
+    monkeypatch.setenv("CHAN_TEST_TOKEN", "chan-secret")
+    client, error = client_for_channel(
+        _Row(id=1, platform="bale", bot_token_env="CHAN_TEST_TOKEN"),
+        {"bale": platform_stub},
+    )
+    assert error is None
+    assert client is not platform_stub
+    assert client._token == "chan-secret"
+
+    client, error = client_for_channel(
+        _Row(id=2, platform="bale", bot_token_env="CHAN_MISSING_VAR"), {"bale": platform_stub}
+    )
+    assert client is None
+    assert "CHAN_MISSING_VAR" in error
+    assert "chan-secret" not in error
+
+    client, error = client_for_channel(
+        _Row(id=3, platform="bale", bot_token_env=None), {"bale": platform_stub}
+    )
+    assert (client, error) == (platform_stub, None)
+
+    client, error = client_for_channel(_Row(id=4, platform="bale", bot_token_env=None), {})
+    assert client is None
+    assert "no bot token" in error
+
+
+@pytest.mark.asyncio
+async def test_delivery_uses_channel_token(session: AsyncSession, monkeypatch):
+    """Sender sends through the channel's own bot when configured."""
+    from sqlalchemy import select as _select
+
+    from app.db.models import Category, Delivery, Field, Main
+    from app.messaging.dispatcher import claim_next_delivery, deliver_one
+
+    monkeypatch.setenv("CHAN_SEND_TOKEN", "chan-secret")
+    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
+    session.add(cat)
+    await session.commit()
+    field = Field(name="tok-field", normalized_name="tok-field", category_id=cat.id)
+    session.add(field)
+    await session.commit()
+    channel = Channel(platform="bale", chat_id=73001, username="@c", bot_token_env="CHAN_SEND_TOKEN")
+    session.add(channel)
+    await session.commit()
+    article = Main(
+        username="t", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review", field_id=field.id,
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(article)
+    await session.commit()
+    session.add(Delivery(main_id=article.id, channel_id=channel.id, status="pending"))
+    await session.commit()
+
+    used = {}
+
+    class _Recording:
+        platform = "bale"
+
+        async def send_text(self, chat_id: int, text: str) -> int:
+            used["chat_id"] = chat_id
+            return 4242
+
+    import app.messaging.platforms as platforms
+
+    monkeypatch.setattr(platforms, "build_client", lambda platform, token: _Recording() if token == "chan-secret" else (_ for _ in ()).throw(AssertionError("wrong token")))
+    claimed = await claim_next_delivery(session)
+    assert await deliver_one(session, claimed, {}) is True
+    assert used["chat_id"] == 73001

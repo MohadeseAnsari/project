@@ -213,6 +213,11 @@ class Channel(Base):
 
     ``username`` is rendered as the message footer so readers know which
     channel the article came from.
+
+    ``bot_token_env`` optionally names the environment variable holding THIS
+    channel's bot token (never the token itself); when set and present it
+    overrides the platform-wide token, so a second channel on the same
+    platform needs no code change.
     """
 
     __tablename__ = "channels"
@@ -225,6 +230,7 @@ class Channel(Base):
     chat_id = Column(BigInteger, nullable=False)
     username = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
+    bot_token_env = Column(String(100), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 

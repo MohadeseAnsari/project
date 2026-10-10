@@ -113,6 +113,7 @@ erDiagram
         BIGINT chat_id UK
         VARCHAR username
         VARCHAR title
+        VARCHAR bot_token_env
         BOOLEAN is_active
         TIMESTAMP created_at
     }

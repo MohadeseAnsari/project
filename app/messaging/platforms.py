@@ -241,3 +241,27 @@ def configured_clients() -> dict[str, PlatformClient]:
             continue
         clients[platform] = build_client(platform, token)
     return clients
+
+
+def client_for_channel(channel, clients: dict[str, PlatformClient]):
+    """Pick the send client for one channel row: per-channel token wins.
+
+    Returns ``(client, None)`` on success, or ``(None, error)`` when neither
+    the row's ``bot_token_env`` (set but missing from the environment) nor a
+    platform-wide client exists. Only variable NAMES and presence are read —
+    token values never leave this function except inside the client itself.
+    """
+    import os
+
+    if getattr(channel, "bot_token_env", None):
+        token = os.environ.get(channel.bot_token_env)
+        if not token:
+            return None, (
+                f"bot token variable '{channel.bot_token_env}' for channel {channel.id} "
+                "is not set"
+            )
+        return build_client(channel.platform, token), None
+    client = clients.get(channel.platform)
+    if client is None:
+        return None, f"no bot token configured for platform '{channel.platform}'"
+    return client, None
