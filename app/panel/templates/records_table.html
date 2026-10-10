@@ -1,7 +1,7 @@
 <table>
   <thead>
     <tr>
-      <th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
+      <th style="width:36px"></th><th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
       <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
       <th style="width:196px">عملیات</th>
     </tr>
@@ -9,6 +9,7 @@
   <tbody>
     {% for r in items %}
     <tr>
+      <td>{% if r.status == 'review' and not r.approved_at %}<input type="checkbox" name="ids" value="{{ r.id }}">{% endif %}</td>
       <td class="num">{{ r.id|fa }}</td>
       <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
       <td>{{ r.field }}</td>

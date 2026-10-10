@@ -38,8 +38,11 @@
       <a class="btn btn-ghost btn-sm" href="/records">پاک‌کردن</a>
     </div>
   </form>
+  <form method="post" action="/records/bulk-approve">
   <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load, every 15s">
     {% include "records_table.html" %}
   </div>
+  <div class="foot"><button class="btn btn-primary btn-sm" type="submit">تأیید گروهی انتخاب‌شده‌ها</button></div>
+  </form>
 </div>
 {% endblock %}

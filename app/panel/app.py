@@ -695,6 +695,40 @@ async def record_review(
     return RedirectResponse(url=f"/records/{record_id}", status_code=302)
 
 
+@panel_app.post("/records/bulk-approve")
+async def records_bulk_approve(request: Request):
+    """Approve many review records at once (backlog friendly).
+
+    Only rows still in ``review`` transition; anything else is skipped, never
+    forced. Each approval stamps ``approved_at`` (first wins), releases gated
+    deliveries, and writes its own audit row — the same per-record semantics
+    as the single approve, applied in one pass.
+    """
+    user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    form = await request.form()
+    ids = []
+    for value in form.getlist("ids"):
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    ids = sorted(set(ids))
+    async with async_session() as session:
+        for record_id in ids:
+            record = await session.get(Main, record_id)
+            if record is None or record.status != "review":
+                continue
+            if record.approved_at is None:
+                record.approved_at = datetime.utcnow()
+            record.updated_at = datetime.utcnow()
+            await session.commit()
+            await confirm_deliveries_for_article(session, record.id)
+            await audit(session, user.id, "approve", record.id, "تأیید گروهی")
+    return RedirectResponse(url="/records", status_code=302)
+
+
 # --------------------------------------------------------------------------
 # deliveries
 # --------------------------------------------------------------------------

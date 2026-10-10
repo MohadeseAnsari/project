@@ -650,3 +650,54 @@ async def test_approved_record_leaves_review_list(session: AsyncSession):
         assert "Fresh" not in approved.text
         detail = await client.get(f"/records/{done.id}")
         assert "تأیید شده" in detail.text
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_releases_backlog(session: AsyncSession):
+    """Bulk approve stamps, releases, and audits each eligible record; skips the rest."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, Delivery, Main
+
+    await _user(session, "panel-admin")
+    rows = []
+    for title in ("Bulk-A", "Bulk-B", "Bulk-C"):
+        row = Main(
+            username="t", title=title, abstract="A", field="پزشکی", university="U",
+            author="A", supervisor="S", status="review",
+            output_json={"title": "T", "lead": "L", "body": "B"},
+        )
+        session.add(row)
+        rows.append(row)
+    failed = Main(
+        username="t", title="Skip-Me", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="failed",
+    )
+    session.add(failed)
+    await session.commit()
+    ids = [r.id for r in rows]
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        from urllib.parse import urlencode
+
+        body = urlencode([("ids", str(i)) for i in ids + [failed.id, 999999]])
+        response = await client.post(
+            "/records/bulk-approve", content=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        table = await client.get("/records/table")
+        for title in ("Bulk-A", "Bulk-B", "Bulk-C"):
+            assert title not in table.text
+    for record_id in ids:
+        session.expire_all()
+        row = await session.get(Main, record_id)
+        assert row.approved_at is not None
+    actions = sorted(
+        (await session.execute(select(AuditLog.action).where(AuditLog.action == "approve"))).scalars().all()
+    )
+    assert actions == ["approve", "approve", "approve"]
+    await session.refresh(failed)
+    assert failed.status == "failed"
+    assert failed.approved_at is None
