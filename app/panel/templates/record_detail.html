@@ -51,7 +51,7 @@
       <thead><tr><th>کانال</th><th>دسته / مسیر</th><th>وضعیت</th><th>تلاش</th><th>شناسهٔ پیام</th></tr></thead>
       <tbody>
         {% for d in deliveries %}
-        <tr><td class="title">{{ d.channel.username or d.channel.title or d.channel.platform }}</td>
+        <tr><td class="title">{{ d.channel_name }}</td>
           <td><small>{{ d.category_name or '—' }}{% if d.route_source %} · {{ d.route_source }}{% endif %}</small></td>
           <td><span class="badge {% if d.status=='sent' %}s-sent{% elif d.status=='failed' %}s-failed{% elif d.status=='pending' %}s-ready{% else %}s-off{% endif %}">{{ d.status }}</span></td>
           <td class="num">{{ d.attempts|fa }}</td><td class="num">{{ d.platform_message_id or '—' }}</td></tr>
