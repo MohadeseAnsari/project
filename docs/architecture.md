@@ -80,8 +80,6 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
   endpoint
 
 ### What is sent to the LLM (exact structure)
-
-- **System prompt**: the record's linked prompt row (`main.prompt_id`), else
   the active `prompts` row, else the packaged fallback in
   `app/news/prompts.py`. Thesis content is framed as DATA inside it, never
   instructions.
@@ -100,6 +98,12 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - **Preview**: the record page's `پرامپت نهایی` tab renders the exact system
   prompt + user message + resolved model name for that record. No secret is
   ever included in either message or shown in the preview.
+- **Resolution order (implemented, tested per step)**: per-record override
+  (`main.model_id`/`prompt_id`) → active DB row (`is_active`) → packaged
+  fallback (`settings.llm_model`, `SYSTEM_PROMPT`); `base_url` from the
+  endpoint-owning row else configuration; API key from that row's
+  `api_key_env`, else the platform-wide key — except a row with its own
+  `base_url` and no usable key fails loudly instead of substituting.
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 
 ## Database

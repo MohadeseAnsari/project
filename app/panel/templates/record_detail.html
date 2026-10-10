@@ -71,10 +71,12 @@
     <div class="body">
       <dl class="kv">
         <dt>مدل</dt><dd><span class="num">{{ prompt_preview.model_name }}</span></dd>
+        <dt>نقطهٔ اتصال</dt><dd><span class="num">{{ prompt_preview.base_url }}</span></dd>
       </dl>
       <div class="field"><label>system prompt</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.system_prompt }}</div></div>
       <div class="field"><label>user message</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.user_message }}</div></div>
       <div class="hint" style="margin-top:9px">همین متن‌ها برای این رکورد به مدل ارسال شد (یا می‌شود)؛ هیچ کلیدی اینجا نمایش داده نمی‌شود.</div>
+      <div class="hint">ترتیب وضوح: بازنویسی رکورد ← سطر فعال ← پیکربندی بسته‌بندی‌شده. کلید همیشه از سطری می‌آید که نقطهٔ اتصال را داده است.</div>
     </div>
     {% else %}
     {% if record.output_json %}

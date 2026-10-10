@@ -111,6 +111,25 @@ def test_resolve_generation_config_priority():
     assert empty["system_prompt"] == SYSTEM_PROMPT
 
 
+def test_generation_config_key_travels_with_endpoint(monkeypatch):
+    """The key always comes from the row that provides the base_url."""
+    from app.news.generation import MissingModelKeyError
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    keyed = _Row(name="m", base_url="https://m/v1", api_key_env="CUSTOM_TEST_KEY_ENV")
+    assert resolve_generation_config(keyed, None, None, None)["api_key"] == "secret-value"
+    # Override endpoint without its own key fails even if the active row has one.
+    active = _Row(name="a", base_url=None, api_key_env="CUSTOM_TEST_KEY_ENV")
+    with pytest.raises(MissingModelKeyError):
+        resolve_generation_config(
+            _Row(name="m", base_url="https://m/v1", api_key_env=None), None, active, None
+        )
+
+
 @pytest.mark.asyncio
 async def test_probe_model_connection_reports_failure_without_raising(monkeypatch):
     """Shared API/panel probe: missing keys and dead endpoints return, not raise."""

@@ -524,14 +524,20 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
                 d_category = await session.get(Category, d.category_id)
                 d.category_name = d_category.name if d_category else None
         model_name = None
+        preview_base_url = None
         model_row = await session.get(Model, record.model_id) if record.model_id else None
         if model_row is not None:
             model_name = model_row.name
+            preview_base_url = model_row.base_url
         if model_name is None:
             active_model = (
                 await session.execute(select(Model).where(Model.is_active.is_(True)).limit(1))
             ).scalar_one_or_none()
             model_name = active_model.name if active_model else settings.llm_model
+            preview_base_url = preview_base_url or (active_model.base_url if active_model else None)
+        from app.news.generation import resolve_base_url
+
+        preview_base_url = resolve_base_url(preview_base_url)
         prompt_version = None
         prompt_text = None
         if record.prompt_id:
@@ -554,6 +560,7 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
 
         prompt_preview = {
             "model_name": model_name,
+            "base_url": preview_base_url,
             "system_prompt": prompt_text,
             "user_message": build_user_message({
                 "title": record.title, "abstract": record.abstract, "field": record.field,
