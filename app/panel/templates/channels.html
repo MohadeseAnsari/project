@@ -55,13 +55,13 @@
   </table>
   <div class="body" style="border-top:1px solid var(--line2)">
     <form method="post" action="/channels/category-route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">
-      <div class="field" style="margin:0"><label>category_id</label><input type="number" name="category_id" required style="width:130px"></div>
-      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>دسته</label><select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}</select></div>
+      <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-primary btn-sm" type="submit">افزودن مسیر</button>
     </form>
     <form method="post" action="/channels/category-unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
-      <div class="field" style="margin:0"><label>category_id</label><input type="number" name="category_id" required style="width:130px"></div>
-      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>دسته</label><select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}</select></div>
+      <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-ghost btn-sm" type="submit">حذف مسیر</button>
     </form>
     <div class="hint" style="margin-top:9px">فرستنده اول مسیر دسته را می‌خواند؛ مسیر رشته فقط استثناست. <a href="/routing">پیش‌نمایش مسیریابی</a></div>
@@ -82,15 +82,16 @@
   </table>
   <div class="body" style="border-top:1px solid var(--line2)">
     <form method="post" action="/channels/route" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end">
-      <div class="field" style="margin:0"><label>field_id</label><input type="number" name="field_id" required style="width:130px"></div>
-      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>رشته (استثنا)</label><select name="field_id">{% for f in all_fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></div>
+      <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-primary btn-sm" type="submit">افزودن مسیر</button>
     </form>
     <form method="post" action="/channels/unroute" style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
-      <div class="field" style="margin:0"><label>field_id</label><input type="number" name="field_id" required style="width:130px"></div>
-      <div class="field" style="margin:0"><label>channel_id</label><input type="number" name="channel_id" required style="width:130px"></div>
+      <div class="field" style="margin:0"><label>رشته (استثنا)</label><select name="field_id">{% for f in all_fields %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></div>
+      <div class="field" style="margin:0"><label>کانال</label><select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.title or c.username or c.platform }}</option>{% endfor %}</select></div>
       <button class="btn btn-ghost btn-sm" type="submit">حذف مسیر</button>
     </form>
+    <div class="hint" style="margin-top:9px">مسیر رشته فقط استثناست؛ نگاشت اصلی در جدول دسته‌ها بالاست و رشته‌های بدون استثنا از دسته پیروی می‌کنند.</div>
   </div>
 </div>
 

@@ -1015,6 +1015,12 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
             )
             matrix.append({"field_name": f.name, "channel_ids": ids})
         categories = (await session.execute(select(Category).order_by(Category.id))).scalars().all()
+        all_fields = [
+            {"id": fid, "name": fname}
+            for fid, fname in (
+                await session.execute(select(Field.id, Field.name).order_by(Field.name))
+            ).all()
+        ]
         cat_routes = []
         for cat in categories:
             ids = set(
@@ -1026,7 +1032,8 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             matrix=matrix, cat_routes=cat_routes, show_new=bool(new)))
+             matrix=matrix, cat_routes=cat_routes, categories=categories, all_fields=all_fields,
+             show_new=bool(new)))
 
 
 
