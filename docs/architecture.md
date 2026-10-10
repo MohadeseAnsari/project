@@ -106,6 +106,22 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
   `base_url` and no usable key fails loudly instead of substituting.
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 
+## Layering (browser → routes → services → ORM → PostgreSQL)
+
+- The browser never talks to PostgreSQL directly: every page is rendered
+  server-side, and HTMX partials hit panel routes that query through services.
+- `app/services/` holds one module per domain (`records`, `deliveries`,
+  `models`, `prompts`, `channels`, `fields`, `users`): every shared query
+  and state transition lives there exactly once. Both the panel routes and
+  the machine API routes call the same functions; no route contains ad-hoc
+  SQL.
+- Routes keep HTTP, auth, and response mapping (including Persian display
+  text and audit calls with the acting user); services raise plain
+  `ValueError`s with stable messages that routes map to statuses/pages.
+- Single-row primary-key fetches, auth/session handling, and page assembly
+  stay in routes by design — services own multi-clause domain queries,
+  transitions, and anything both layers need.
+
 ## Database
 
 PostgreSQL serves as both persistent storage and job queue. See [erd.md](erd.md) for the full schema.

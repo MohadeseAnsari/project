@@ -16,7 +16,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -35,7 +35,7 @@ from app.db.models import (
     Prompt,
     Role,
 )
-from app.messaging.dispatcher import confirm_deliveries_for_article
+from app.messaging.dispatcher import channels_for_article
 from app.panel.auth import audit, ensure_admin_user, session_user_id
 
 _here = Path(__file__).resolve().parent
@@ -149,17 +149,13 @@ def _ctx(request: Request, user: PanelUser | None, **extra):
 
 async def _sidebar_counts(session: AsyncSession) -> dict:
     """Sidebar badges: records awaiting review + deliveries needing attention."""
-    review_total = (
-        await session.execute(
-            select(func.count()).select_from(Main)
-            .where(Main.status == "review")
-            .where(Main.approved_at.is_(None))
-        )
-    ).scalar_one()
-    gated_total = (
-        await session.execute(
-            select(func.count()).select_from(Delivery).where(Delivery.status.in_(["failed", "awaiting_confirmation"])))
-    ).scalar_one()
+    from app.services import deliveries as delivery_service
+    from app.services import records as record_service
+
+    review_total = await record_service.needs_review_count(session)
+    counts = await delivery_service.delivery_status_counts(session)
+    gated_total = counts.get("failed", 0) + counts.get("awaiting_confirmation", 0)
+    return {"review_count": review_total or None, "gated_count": gated_total or None}
     return {"review_count": review_total or None, "gated_count": gated_total or None}
 
 
@@ -262,19 +258,12 @@ async def dashboard(request: Request):
 
     user = await require_login(request)
     async with async_session() as session:
-        counts = dict(
-            (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
-        )
-        delivery_counts = dict(
-            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
-        )
-        kpi_review = (
-            await session.execute(
-                select(func.count()).select_from(Main)
-                .where(Main.status == "review")
-                .where(Main.approved_at.is_(None))
-            )
-        ).scalar_one()
+        from app.services import deliveries as delivery_service
+        from app.services import records as record_service
+
+        counts = await record_service.record_status_counts(session)
+        delivery_counts = await delivery_service.delivery_status_counts(session)
+        kpi_review = await record_service.needs_review_count(session)
         kpi_queued = counts.get("ready", 0) + counts.get("processing", 0)
         kpi_sent = delivery_counts.get("sent", 0)
         kpi_failed = counts.get("failed", 0) + delivery_counts.get("failed", 0)
@@ -376,34 +365,6 @@ def _audit_title(entry: AuditLog) -> str:
 # --------------------------------------------------------------------------
 
 
-def _record_filters(status, field, university, q):
-    filters = []
-    if status:
-        filters.append(Main.status == status)
-    if field:
-        filters.append(Main.field.ilike(f"%{field}%"))
-    if university:
-        filters.append(Main.university.ilike(f"%{university}%"))
-    if q:
-        like = f"%{q}%"
-        filters.append(
-            or_(
-                Main.title.ilike(like), Main.abstract.ilike(like), Main.field.ilike(like),
-                Main.university.ilike(like), Main.author.ilike(like), Main.supervisor.ilike(like),
-            )
-        )
-    return filters
-
-
-def _approved_filter(value: str):
-    """Tri-state approval filter: 'yes' (approved), 'no' (needs review), '' (all)."""
-    if value == "yes":
-        return Main.approved_at.isnot(None)
-    if value == "no":
-        return Main.approved_at.is_(None)
-    return None
-
-
 @panel_app.get("/records", response_class=HTMLResponse)
 async def records_page(
     request: Request, status: str = "", field: str = "", university: str = "",
@@ -416,12 +377,11 @@ async def records_page(
     page = max(1, page)
     page_size = 20
     async with async_session() as session:
-        counts = dict(
-            (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
-        )
-        delivery_counts = dict(
-            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
-        )
+        from app.services import deliveries as delivery_service
+        from app.services import records as record_service
+
+        counts = await record_service.record_status_counts(session)
+        delivery_counts = await delivery_service.delivery_status_counts(session)
         field_options = [
             r[0] for r in (
                 await session.execute(select(Main.field).distinct().order_by(Main.field).limit(50))
@@ -432,28 +392,13 @@ async def records_page(
                 await session.execute(select(Main.university).distinct().order_by(Main.university).limit(50))
             ).all()
         ]
-        filters = _record_filters(status or None, field or None, university or None, q or None)
-        approved_criterion = _approved_filter(approved)
-        if approved_criterion is not None:
-            filters.append(approved_criterion)
-        count_q = select(func.count()).select_from(Main)
-        if filters:
-            count_q = count_q.where(*filters)
-        total = (await session.execute(count_q)).scalar_one()
-        ordering = [Main.created_at.desc(), Main.id.desc()] if order != "oldest" else [Main.created_at.asc(), Main.id.asc()]
-        query_sel = select(Main)
-        if filters:
-            query_sel = query_sel.where(*filters)
-        items = (
-            await session.execute(query_sel.order_by(*ordering).limit(page_size).offset((page - 1) * page_size))
-        ).scalars().all()
-        needs_review = (
-            await session.execute(
-                select(func.count()).select_from(Main)
-                .where(Main.status == "review")
-                .where(Main.approved_at.is_(None))
-            )
-        ).scalar_one()
+        approved_flag = {"yes": True, "no": False}.get(approved)
+        items, total = await record_service.list_records(
+            session, page=page, page_size=page_size, status=status or None,
+            field=field or None, university=university or None, q=q or None,
+            order=order, approved=approved_flag,
+        )
+        needs_review = await record_service.needs_review_count(session)
         counts_ctx = await _sidebar_counts(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records.html",
@@ -480,28 +425,28 @@ async def records_table(
     user = await require_login(request)
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
-    filters = _record_filters(status or None, field or None, university or None, q or None)
-    approved_criterion = _approved_filter(approved)
-    if approved_criterion is not None:
-        filters.append(approved_criterion)
     async with async_session() as session:
-        count_q = select(func.count()).select_from(Main)
-        if filters:
-            count_q = count_q.where(*filters)
-        total = (await session.execute(count_q)).scalar_one()
-        ordering = [Main.created_at.desc(), Main.id.desc()] if order != "oldest" else [Main.created_at.asc(), Main.id.asc()]
-        query = select(Main)
-        if filters:
-            query = query.where(*filters)
-        rows = (
-            await session.execute(query.order_by(*ordering).limit(page_size).offset((page - 1) * page_size))
-        ).scalars().all()
+        from app.services import records as record_service
+
+        approved_flag = {"yes": True, "no": False}.get(approved)
+        items, total = await record_service.list_records(
+            session, page=page, page_size=page_size, status=status or None,
+            field=field or None, university=university or None, q=q or None,
+            order=order, approved=approved_flag,
+        )
     from urllib.parse import urlencode
 
     query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records_table.html",
-        {"request": request, "current_user": user, "items": rows, "total": total, "page": page, "page_size": page_size, "query": query_str},
+        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str},
     )
+
+
+class _DisplayDelivery:
+    """Attribute-access view over service delivery dicts for templates."""
+
+    def __init__(self, payload: dict):
+        self.__dict__.update(payload)
 
 
 @panel_app.get("/records/{record_id}", response_class=HTMLResponse)
@@ -511,56 +456,43 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
     if tab not in ("text", "raw", "meta", "history", "delivery", "final"):
         tab = "text"
     async with async_session() as session:
-        record = await session.get(Main, record_id)
+        from app.services import records as record_service
+
+        record = await record_service.get_record(session, record_id)
         if not record:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
-        deliveries = (
-            await session.execute(select(Delivery).where(Delivery.main_id == record.id).order_by(Delivery.id))
-        ).scalars().all()
-        for d in deliveries:
-            d.channel = await session.get(Channel, d.channel_id)
-            d.category_name = None
-            if d.category_id is not None:
-                d_category = await session.get(Category, d.category_id)
-                d.category_name = d_category.name if d_category else None
-        model_name = None
-        preview_base_url = None
-        model_row = await session.get(Model, record.model_id) if record.model_id else None
-        if model_row is not None:
-            model_name = model_row.name
-            preview_base_url = model_row.base_url
-        if model_name is None:
-            active_model = (
-                await session.execute(select(Model).where(Model.is_active.is_(True)).limit(1))
-            ).scalar_one_or_none()
-            model_name = active_model.name if active_model else settings.llm_model
-            preview_base_url = preview_base_url or (active_model.base_url if active_model else None)
-        from app.news.generation import resolve_base_url
-
-        preview_base_url = resolve_base_url(preview_base_url)
-        prompt_version = None
-        prompt_text = None
-        if record.prompt_id:
-            prompt = await session.get(Prompt, record.prompt_id)
-            if prompt is not None:
-                prompt_version = prompt.version
-                prompt_text = prompt.system_prompt
-        if prompt_text is None:
-            active_prompt = (
-                await session.execute(select(Prompt).where(Prompt.is_active.is_(True)).limit(1))
-            ).scalar_one_or_none()
-            if active_prompt is not None:
-                prompt_version = prompt_version or active_prompt.version
-                prompt_text = active_prompt.system_prompt
+        overview = await record_service.record_overview(session, record)
+        # Deliveries as display objects (template reads attributes).
+        deliveries = [_DisplayDelivery(d) for d in overview["deliveries"]]
+        # History: lifecycle steps from real timestamps, then audit entries.
+        history = [
+            {"title": "ثبت درخواست", "sub": f"وضعیت: ready · {_jalali(record.created_at)}"},
+        ]
+        if record.claimed_at:
+            history.append({"title": "worker پردازش را برداشت", "sub": f"وضعیت: processing · {_jalali(record.claimed_at)}"})
+        if record.output_json:
+            history.append({"title": "خروجی مدل ذخیره شد", "sub": f"وضعیت: review · {_jalali(record.updated_at)}"})
+        elif record.error_message:
+            history.append({"title": "تولید ناموفق ماند", "sub": f"وضعیت: failed · {_jalali(record.updated_at)}"})
+        if record.status == "review":
+            history.append({"title": "در انتظار تصمیم بازبین", "sub": "پس از تأیید: ارسال به کانال‌های مسیرشده"})
+        elif record.status == "rejected":
+            history.append({"title": "خبر رد شد", "sub": f"{_jalali(record.updated_at)}"})
+        for entry in overview["history"]:
+            action = _ACTION_FA.get(entry["title"], entry["title"])
+            history.append({"title": action, "sub": f"{entry['username'] or 'سیستم'} · {_jalali(entry['created_at'])}"})
+        model_name = overview["model_name"] or settings.llm_model
+        prompt_version = overview["prompt_version"]
+        prompt_text = overview["prompt_text"]
         if prompt_text is None:
             from app.news.prompts import SYSTEM_PROMPT
 
             prompt_text = SYSTEM_PROMPT
-        from app.news.generation import build_user_message
+        from app.news.generation import build_user_message, resolve_base_url
 
         prompt_preview = {
             "model_name": model_name,
-            "base_url": preview_base_url,
+            "base_url": overview["model_base_url"] or resolve_base_url(None),
             "system_prompt": prompt_text,
             "user_message": build_user_message({
                 "title": record.title, "abstract": record.abstract, "field": record.field,
@@ -568,22 +500,6 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
                 "author": record.author, "supervisor": record.supervisor,
             }),
         }
-        # Snapshot (what the Worker stored at processing time) vs current
-        # field category (what a reclassification would give today). The
-        # record keeps the snapshot; the panel shows both when they differ.
-        snapshot_category = None
-        if record.category_id is not None:
-            snapshot = await session.get(Category, record.category_id)
-            snapshot_category = snapshot.name if snapshot else None
-        current_category = None
-        field_keyword = None
-        if record.field_id is not None:
-            field_row = await session.get(Field, record.field_id)
-            if field_row is not None:
-                field_keyword = field_row.matched_keyword
-                if field_row.category_id is not None:
-                    current = await session.get(Category, field_row.category_id)
-                    current_category = current.name if current else None
         routed_channels = None
         message_preview = None
         preview_channel = None
@@ -600,35 +516,11 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
             message_preview = render_article(
                 record.output_json, preview_channel.username if preview_channel else None
             ) or None
-        # History: lifecycle steps from real timestamps, then audit entries.
-        history = [
-            {"title": "ثبت درخواست", "sub": f"وضعیت: ready · {_jalali(record.created_at)}"},
-        ]
-        if record.claimed_at:
-            history.append({"title": "worker پردازش را برداشت", "sub": f"وضعیت: processing · {_jalali(record.claimed_at)}"})
-        if record.output_json:
-            history.append({"title": "خروجی مدل ذخیره شد", "sub": f"وضعیت: review · {_jalali(record.updated_at)}"})
-        elif record.error_message:
-            history.append({"title": "تولید ناموفق ماند", "sub": f"وضعیت: failed · {_jalali(record.updated_at)}"})
-        if record.status == "review":
-            history.append({"title": "در انتظار تصمیم بازبین", "sub": "پس از تأیید: ارسال به کانال‌های مسیرشده"})
-        elif record.status == "rejected":
-            history.append({"title": "خبر رد شد", "sub": f"{_jalali(record.updated_at)}"})
-        audits = (
-            await session.execute(select(AuditLog).where(AuditLog.main_id == record.id).order_by(AuditLog.id.desc()).limit(20))
-        ).scalars().all()
-        for a in audits:
-            actor = await session.get(PanelUser, a.user_id) if a.user_id else None
-            history.append({"title": _audit_title(a), "sub": f"{actor.username if actor else 'سیستم'} · {_jalali(a.created_at)}"})
         approved_by = None
         if record.approved_at is not None:
-            first_approval = (
-                await session.execute(
-                    select(AuditLog).where(AuditLog.main_id == record.id, AuditLog.action == "approve").order_by(AuditLog.id).limit(1))
-            ).scalar_one_or_none()
-            if first_approval is not None:
-                approver = await session.get(PanelUser, first_approval.user_id) if first_approval.user_id else None
-                approved_by = f"{approver.username if approver else '—'} · {_jalali(first_approval.created_at)}"
+            info = await record_service.approval_info(session, record)
+            if info is not None:
+                approved_by = f"{info[0]} · {_jalali(info[1])}"
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "record_detail.html",
         _ctx(
@@ -636,8 +528,9 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
             approved_by=approved_by,
             routed_channels=routed_channels, message_preview=message_preview,
-            snapshot_category=snapshot_category, current_category=current_category,
-            field_keyword=field_keyword, prompt_preview=prompt_preview,
+            snapshot_category=overview["snapshot_category"],
+            current_category=overview["current_category"],
+            field_keyword=overview["field_keyword"], prompt_preview=prompt_preview,
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )
@@ -710,31 +603,21 @@ async def record_review(
     if action not in ("approve", "reject", "save_draft"):
         return RedirectResponse(url=f"/records/{record_id}", status_code=302)
     async with async_session() as session:
-        record = await session.get(Main, record_id)
-        if not record or record.status != "review":
+        from app.services import records as record_service
+
+        record = await record_service.get_record(session, record_id)
+        if record is None or record.status != "review":
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد در وضعیت بررسی نیست."), status_code=409
             )
-        current = dict(record.output_json or {})
-        if title.strip():
-            current["title"] = title.strip()
-        if lead.strip():
-            current["lead"] = lead.strip()
-        if body.strip():
-            current["body"] = body.strip()
-        record.output_json = current
-        if action == "approve":
-            if record.approved_at is None:
-                record.approved_at = datetime.utcnow()
-            await session.commit()
-            await confirm_deliveries_for_article(session, record.id)
-            await audit(session, user.id, "approve", record.id, "تأیید و انتشار")
-        elif action == "reject":
-            record.status = "rejected"
-            await session.commit()
-            await audit(session, user.id, "reject", record.id, "رد رکورد")
-        else:
-            await session.commit()
-            await audit(session, user.id, "save_draft", record.id, "ذخیره پیش‌نویس")
+        try:
+            await record_service.apply_review(
+                session, record, action=action,
+                title=title.strip() or None, lead=lead.strip() or None, body=body.strip() or None,
+            )
+        except ValueError:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد در وضعیت بررسی نیست."), status_code=409
+            )
+        await audit(session, user.id, action, record.id, {"approve": "تأیید و انتشار", "reject": "رد رکورد"}.get(action, "ذخیره پیش‌نویس"))
     return RedirectResponse(url=f"/records/{record_id}", status_code=302)
 
 
@@ -759,16 +642,11 @@ async def records_bulk_approve(request: Request):
             continue
     ids = sorted(set(ids))
     async with async_session() as session:
-        for record_id in ids:
-            record = await session.get(Main, record_id)
-            if record is None or record.status != "review":
-                continue
-            if record.approved_at is None:
-                record.approved_at = datetime.utcnow()
-            record.updated_at = datetime.utcnow()
-            await session.commit()
-            await confirm_deliveries_for_article(session, record.id)
-            await audit(session, user.id, "approve", record.id, "تأیید گروهی")
+        from app.services import records as record_service
+
+        approved, _ = await record_service.bulk_approve(session, ids)
+        for record_id in approved:
+            await audit(session, user.id, "approve", record_id, "تأیید گروهی")
     return RedirectResponse(url="/records", status_code=302)
 
 
@@ -788,31 +666,20 @@ async def deliveries_page(request: Request, status: str = "", platform: str = ""
     platform_f = platform or None
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     async with async_session() as session:
-        base = select(func.count()).select_from(Delivery)
-        if platform_f:
-            base = base.join(Channel, Channel.id == Delivery.channel_id).where(Channel.platform == platform_f)
-        if status_f:
-            base = base.where(Delivery.status == status_f)
-        if mid is not None:
-            base = base.where(Delivery.main_id == mid)
-        total = (await session.execute(base)).scalar_one()
-        query = select(Delivery, Channel, Main).join(
-            Channel, Channel.id == Delivery.channel_id).join(Main, Main.id == Delivery.main_id)
-        if status_f:
-            query = query.where(Delivery.status == status_f)
-        if platform_f:
-            query = query.where(Channel.platform == platform_f)
-        if mid is not None:
-            query = query.where(Delivery.main_id == mid)
-        pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size))).all()
+        from app.services import deliveries as delivery_service
+
+        pairs, total = await delivery_service.fetch_deliveries(
+            session, page=1, page_size=page_size, status=status_f,
+            platform=platform_f, main_id=mid,
+        )
         items = await _delivery_items(session, pairs)
         last_failed = (
             await session.execute(select(Delivery).where(Delivery.status == "failed").order_by(Delivery.id.desc()).limit(1))
         ).scalar_one_or_none()
         last_error = f"خطای آخر: «{last_failed.error_message}» — {_jalali(last_failed.updated_at)}" if last_failed and last_failed.error_message else None
-        delivery_counts = dict(
-            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
-        )
+        from app.services import deliveries as delivery_service
+
+        delivery_counts = await delivery_service.delivery_status_counts(session)
         counts_ctx = await _sidebar_counts(session)
     query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
     return templates.TemplateResponse(request, "deliveries.html",
@@ -865,23 +732,12 @@ async def deliveries_table(request: Request, status: str = "", platform: str = "
     platform_f = platform or None
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     async with async_session() as session:
-        base = select(func.count()).select_from(Delivery)
-        if platform_f:
-            base = base.join(Channel, Channel.id == Delivery.channel_id).where(Channel.platform == platform_f)
-        if status_f:
-            base = base.where(Delivery.status == status_f)
-        if mid is not None:
-            base = base.where(Delivery.main_id == mid)
-        total = (await session.execute(base)).scalar_one()
-        query = select(Delivery, Channel, Main).join(
-            Channel, Channel.id == Delivery.channel_id).join(Main, Main.id == Delivery.main_id)
-        if status_f:
-            query = query.where(Delivery.status == status_f)
-        if platform_f:
-            query = query.where(Channel.platform == platform_f)
-        if mid is not None:
-            query = query.where(Delivery.main_id == mid)
-        pairs = (await session.execute(query.order_by(Delivery.id.desc()).limit(page_size).offset((page - 1) * page_size))).all()
+        from app.services import deliveries as delivery_service
+
+        pairs, total = await delivery_service.fetch_deliveries(
+            session, page=page, page_size=page_size, status=status_f,
+            platform=platform_f, main_id=mid,
+        )
         items = await _delivery_items(session, pairs)
     from urllib.parse import urlencode
 
@@ -898,16 +754,15 @@ async def delivery_retry(request: Request, delivery_id: int):
     if not _can_review(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     async with async_session() as session:
-        delivery = await session.get(Delivery, delivery_id)
-        if not delivery or delivery.status != "failed":
+        from app.services import deliveries as delivery_service
+
+        delivery = await delivery_service.get_delivery(session, delivery_id)
+        if delivery is None:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
+        try:
+            delivery = await delivery_service.retry_delivery(session, delivery)
+        except ValueError:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال قابل تلاش مجدد نیست."), status_code=409)
-        delivery.status = "pending"
-        delivery.attempts = 0
-        delivery.claimed_at = None
-        delivery.error_message = None
-        delivery.next_attempt_at = datetime.utcnow()
-        delivery.updated_at = datetime.utcnow()
-        await session.commit()
         await audit(session, user.id, "retry", delivery.main_id, f"delivery={delivery.id}")
     return RedirectResponse(url="/deliveries", status_code=302)
 
@@ -919,14 +774,15 @@ async def delivery_release(request: Request, delivery_id: int):
     if not _can_review(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     async with async_session() as session:
-        delivery = await session.get(Delivery, delivery_id)
-        if not delivery or delivery.status != "awaiting_confirmation":
+        from app.services import deliveries as delivery_service
+
+        delivery = await delivery_service.get_delivery(session, delivery_id)
+        if delivery is None:
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
+        try:
+            delivery = await delivery_service.release_delivery(session, delivery)
+        except ValueError:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="این ارسال در انتظار تأیید نیست."), status_code=409)
-        delivery.status = "pending"
-        delivery.claimed_at = None
-        delivery.next_attempt_at = datetime.utcnow()
-        delivery.updated_at = datetime.utcnow()
-        await session.commit()
         await audit(session, user.id, "release", delivery.main_id, f"delivery={delivery.id}")
     return RedirectResponse(url="/deliveries", status_code=302)
 
@@ -941,30 +797,11 @@ async def fields_page(request: Request):
     """List known thesis fields with categories, routes, and top-field bars."""
     user = await require_login(request)
     async with async_session() as session:
-        rows = (await session.execute(select(Field).order_by(Field.id.desc()).limit(100))).scalars().all()
-        fields = []
-        for f in rows:
-            cat = await session.get(Category, f.category_id) if f.category_id else None
-            routed = (
-                await session.execute(
-                    select(Channel).join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id).where(
-                        FieldChannelRoute.field_id == f.id))
-            ).scalars().all()
-            fields.append(
-                {
-                    "id": f.id, "name": f.name, "source": f.source,
-                    "category_name": cat.name if cat else None,
-                    "matched_keyword": f.matched_keyword,
-                    "channel_names": "، ".join(c.username or c.title or c.platform for c in routed) or None,
-                }
-            )
-        total = (await session.execute(select(func.count()).select_from(Field))).scalar_one()
-        top_rows = (
-            await session.execute(
-                select(Main.field, func.count()).group_by(Main.field).order_by(func.count().desc()).limit(3))
-        ).all()
-        top_total = sum(n for _, n in top_rows) or 1
-        top = [{"name": name, "pct": int(round(n / top_total * 100))} for name, n in top_rows]
+        from app.services import fields as field_service
+
+        fields = await field_service.list_fields(session)
+        total = await field_service.field_total(session)
+        top = await field_service.top_fields(session)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "fields.html",
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top))
@@ -975,22 +812,9 @@ async def categories_page(request: Request, q: str = ""):
     """List categories as cards with their real field names as chips."""
     user = await require_login(request)
     async with async_session() as session:
-        query = select(Category).order_by(Category.id)
-        if q.strip():
-            query = query.where(Category.name.ilike(f"%{q.strip()}%"))
-        rows = (await session.execute(query)).scalars().all()
-        total = (await session.execute(select(func.count()).select_from(Category))).scalar_one()
-        categories = []
-        for c in rows:
-            names = (
-                await session.execute(select(Field.name).where(Field.category_id == c.id).order_by(Field.id).limit(9))
-            ).scalars().all()
-            n = (
-                await session.execute(select(func.count()).select_from(Field).where(Field.category_id == c.id))
-            ).scalar_one()
-            categories.append(
-                {"name": c.name, "description": c.description, "field_names": names, "field_count": n}
-            )
+        from app.services import fields as field_service
+
+        categories, total = await field_service.category_cards(session, q)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx, categories=categories, total=total, q=q))
@@ -1001,41 +825,19 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
     """List channels with route matrix and the selected channel settings."""
     user = await require_login(request)
     async with async_session() as session:
-        channels = (await session.execute(select(Channel).order_by(Channel.id))).scalars().all()
-        for c in channels:
-            c.route_count = (
-                await session.execute(
-                    select(func.count()).select_from(FieldChannelRoute).where(FieldChannelRoute.channel_id == c.id))
-            ).scalar_one()
+        from app.services import channels as channel_service
+        from app.services import fields as field_service
+
+        channels = await channel_service.channels_with_route_counts(session)
         selected = None
         if channel_id is not None:
-            selected = await session.get(Channel, channel_id)
+            selected = await channel_service.get_channel(session, channel_id)
         if selected is None:
             selected = channels[0] if channels else None
-        fields = (await session.execute(select(Field).order_by(Field.id).limit(30))).scalars().all()
-        matrix = []
-        for f in fields:
-            ids = set(
-                (await session.execute(
-                    select(FieldChannelRoute.channel_id).where(FieldChannelRoute.field_id == f.id))
-                ).scalars().all()
-            )
-            matrix.append({"field_name": f.name, "channel_ids": ids})
-        categories = (await session.execute(select(Category).order_by(Category.id))).scalars().all()
-        all_fields = [
-            {"id": fid, "name": fname}
-            for fid, fname in (
-                await session.execute(select(Field.id, Field.name).order_by(Field.name))
-            ).all()
-        ]
-        cat_routes = []
-        for cat in categories:
-            ids = set(
-                (await session.execute(
-                    select(CategoryChannelRoute.channel_id).where(CategoryChannelRoute.category_id == cat.id))
-                ).scalars().all()
-            )
-            cat_routes.append({"category_id": cat.id, "category_name": cat.name, "channel_ids": ids})
+        matrix = await channel_service.field_route_matrix(session)
+        _, cat_routes = await channel_service.category_route_matrix(session)
+        categories = await field_service.list_categories(session)
+        all_fields = await field_service.list_field_options(session)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
@@ -1051,11 +853,9 @@ async def channel_route(request: Request, field_id: int = Form(...), channel_id:
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        session.add(FieldChannelRoute(field_id=field_id, channel_id=channel_id))
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
+        from app.services import channels as channel_service
+
+        await channel_service.add_field_route(session, field_id=field_id, channel_id=channel_id)
         await audit(session, user.id, "route", None, f"field={field_id} channel={channel_id}")
     return RedirectResponse(url="/channels", status_code=302)
 
@@ -1067,10 +867,9 @@ async def channel_unroute(request: Request, field_id: int = Form(...), channel_i
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(FieldChannelRoute, (field_id, channel_id))
-        if row:
-            await session.delete(row)
-            await session.commit()
+        from app.services import channels as channel_service
+
+        await channel_service.remove_field_route(session, field_id=field_id, channel_id=channel_id)
         await audit(session, user.id, "unroute", None, f"field={field_id} channel={channel_id}")
     return RedirectResponse(url="/channels", status_code=302)
 
@@ -1082,11 +881,9 @@ async def channel_category_route(request: Request, category_id: int = Form(...),
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        session.add(CategoryChannelRoute(category_id=category_id, channel_id=channel_id))
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
+        from app.services import channels as channel_service
+
+        await channel_service.add_category_route(session, category_id=category_id, channel_id=channel_id)
         await audit(session, user.id, "route", None, f"category={category_id} channel={channel_id}")
     return RedirectResponse(url="/channels", status_code=302)
 
@@ -1098,10 +895,9 @@ async def channel_category_unroute(request: Request, category_id: int = Form(...
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(CategoryChannelRoute, (category_id, channel_id))
-        if row:
-            await session.delete(row)
-            await session.commit()
+        from app.services import channels as channel_service
+
+        await channel_service.remove_category_route(session, category_id=category_id, channel_id=channel_id)
         await audit(session, user.id, "unroute", None, f"category={category_id} channel={channel_id}")
     return RedirectResponse(url="/channels", status_code=302)
 
@@ -1142,11 +938,12 @@ async def channel_toggle(request: Request, channel_id: int):
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(Channel, channel_id)
+        from app.services import channels as channel_service
+
+        row = await channel_service.get_channel(session, channel_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
-        row.is_active = not row.is_active
-        await session.commit()
+        row = await channel_service.toggle_channel(session, row)
         await audit(session, user.id, "channel_create", None, f"toggle channel={channel_id} active={row.is_active}")
     return RedirectResponse(url="/channels", status_code=302)
 
@@ -1161,15 +958,21 @@ async def channel_update(
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(Channel, channel_id)
+        from app.services import channels as channel_service
+
+        row = await channel_service.get_channel(session, channel_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
-        row.title = title.strip() or None
-        row.username = username.strip() or None
-        row.bot_token_env = bot_token_env.strip() or None
+        updates = {}
+        if title is not None:
+            updates["title"] = title.strip() or None
+        if username is not None:
+            updates["username"] = username.strip() or None
+        if bot_token_env is not None:
+            updates["bot_token_env"] = bot_token_env.strip() or None
         if chat_id.strip().lstrip("-").isdigit():
-            row.chat_id = int(chat_id.strip())
-        await session.commit()
+            updates["chat_id"] = int(chat_id.strip())
+        row = await channel_service.update_channel(session, row, updates)
         await audit(session, user.id, "channel_create", None, f"update channel={channel_id}")
     return RedirectResponse(url=f"/channels?channel_id={channel_id}", status_code=302)
 
@@ -1186,51 +989,32 @@ async def channel_create(
     Tokens stay in env (platform-wide for creation); the resolved title is
     shown on the channel card right after redirect.
     """
-    from app.messaging.platforms import (
-        DeliveryError,
-        configured_clients,
-    )
-
     user = await require_login(request)
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-    if platform not in ("bale", "telegram"):
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="سکوی نامعتبر است."), status_code=422)
-    clients = configured_clients()
-    client = clients.get(platform)
-    if client is None:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=f"توکن ربات {platform} پیکربندی نشده است."), status_code=422)
     target = target.strip()
-    chat: int | str = int(target) if target.lstrip("-").isdigit() else target
     try:
-        resolved = await client.get_chat(chat)
-    except DeliveryError as e:
+        from app.services import channels as channel_service
+
+        async with async_session() as session:
+            row = await channel_service.create_channel(
+                session, platform=platform, target=target,
+                title=title.strip() or None,
+                bot_token_env=bot_token_env.strip() or None,
+            )
+            await audit(session, user.id, "channel_create", None, f"{platform}:{row.chat_id}")
+    except ValueError as e:
+        message = {
+            "bad-platform": "سکوی نامعتبر است.",
+            "no-platform-token": f"توکن ربات {platform} پیکربندی نشده است.",
+            "duplicate-channel": "این کانال قبلاً ثبت شده است.",
+            "bad-result": "پاسخ getChat شناسهٔ معتبر نداشت.",
+        }.get(str(e), f"کانال یافت نشد: {e}")
+        status = 422
+        if str(e).startswith("unresolvable:"):
+            message = f"کانال یافت نشد: {str(e)[len('unresolvable: '):]}"
         return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=f"کانال یافت نشد: {e}"), status_code=422)
-    try:
-        resolved_id = int(resolved.get("id", 0))
-    except (TypeError, ValueError):
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error="پاسخ getChat شناسهٔ معتبر نداشت."), status_code=422)
-    if not resolved_id:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error="پاسخ getChat شناسهٔ معتبر نداشت."), status_code=422)
-    async with async_session() as session:
-        session.add(Channel(
-            platform=platform, chat_id=resolved_id,
-            username=resolved.get("username") or (target if isinstance(chat, str) else None),
-            title=title.strip() or resolved.get("title"),
-            bot_token_env=bot_token_env.strip() or None,
-            is_active=True,
-        ))
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            return templates.TemplateResponse(request, "base.html",
-                _ctx(request, user, error="این کانال قبلاً ثبت شده است."), status_code=422)
-        await audit(session, user.id, "channel_create", None, f"{platform}:{resolved_id}")
+            _ctx(request, user, error=message), status_code=status)
     return RedirectResponse(url="/channels", status_code=302)
 
 
@@ -1254,10 +1038,12 @@ async def models_page(request: Request, model_id: int | None = None):
     """List models with the selected (default active) settings and test cards."""
     user = await require_login(request)
     async with async_session() as session:
-        rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
+        from app.services import models as model_service
+
+        rows = await model_service.list_models(session)
         selected = None
         if model_id is not None:
-            selected = await session.get(Model, model_id)
+            selected = await model_service.get_model(session, model_id)
         if selected is None:
             selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
         _attach_creds(rows)
@@ -1277,20 +1063,18 @@ async def panel_model_create(
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        session.add(
-            Model(
-                name=name.strip(), provider=provider.strip(), version=version.strip(),
+        from app.services import models as model_service
+
+        try:
+            row = await model_service.create_model(
+                session, name=name.strip(), provider=provider.strip(), version=version.strip(),
                 base_url=base_url.strip() or None, api_key_env=api_key_env.strip() or None,
                 temperature=float(temperature) if temperature.strip() else None,
                 max_output_tokens=int(max_output_tokens) if max_output_tokens.strip() else None,
                 description=description.strip() or None, is_active=False,
             )
-        )
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
+        except ValueError:
+            rows = await model_service.list_models(session)
             selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
             _attach_creds(rows)
             counts_ctx = await _sidebar_counts(session)
@@ -1304,18 +1088,16 @@ async def panel_model_create(
 @panel_app.post("/models/{model_id}/activate")
 async def panel_model_activate(request: Request, model_id: int):
     """Activate one model atomically (exactly one active row)."""
-    from sqlalchemy import update
-
     user = await require_login(request)
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(Model, model_id)
+        from app.services import models as model_service
+
+        row = await model_service.get_model(session, model_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
-        await session.execute(update(Model).where(Model.id != row.id).values(is_active=False))
-        row.is_active = True
-        await session.commit()
+        row = await model_service.activate_model(session, row)
         await audit(session, user.id, "model_activate", None, f"model={row.name}")
     return RedirectResponse(url="/models", status_code=302)
 
@@ -1331,15 +1113,18 @@ async def panel_model_update(
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(Model, model_id)
+        from app.services import models as model_service
+
+        row = await model_service.get_model(session, model_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
-        row.base_url = base_url.strip() or None
-        row.api_key_env = api_key_env.strip() or None
-        row.temperature = float(temperature) if temperature.strip() else None
-        row.max_output_tokens = int(max_output_tokens) if max_output_tokens.strip() else None
-        row.description = description.strip() or None
-        await session.commit()
+        row = await model_service.update_model(session, row, {
+            "base_url": base_url.strip() or None,
+            "api_key_env": api_key_env.strip() or None,
+            "temperature": float(temperature) if temperature.strip() else None,
+            "max_output_tokens": int(max_output_tokens) if max_output_tokens.strip() else None,
+            "description": description.strip() or None,
+        })
         await audit(session, user.id, "model_create", None, f"update model={row.name}")
     return RedirectResponse(url=f"/models?model_id={model_id}", status_code=302)
 
@@ -1349,14 +1134,12 @@ async def panel_model_test(request: Request, model_id: int):
     """Probe one model with the shared 1-token helper; the key is never shown."""
     user = await require_login(request)
     async with async_session() as session:
-        row = await session.get(Model, model_id)
+        from app.services import models as model_service
+
+        row = await model_service.get_model(session, model_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
-        from app.news.generation import describe_model_credentials, probe_model_connection
-
-        ok, error = await probe_model_connection(
-            row.name, row.base_url, row.api_key_env
-        )
+        ok, error = await model_service.test_model_connection(row)
         test_result = {"ok": ok, "model": row.name, "error": error}
         ok_msg = f"اتصال مدل {row.name} موفق بود." if ok else None
         missing_key = error == "no API key configured"
@@ -1377,7 +1160,9 @@ async def prompts_page(request: Request):
     """Show the active prompt editor, versions, and the JSON contract."""
     user = await require_login(request)
     async with async_session() as session:
-        rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+        from app.services import prompts as prompt_service
+
+        rows = await prompt_service.list_prompts(session)
         selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "prompts.html",
@@ -1391,12 +1176,14 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        session.add(Prompt(version=version.strip(), system_prompt=system_prompt, is_active=False))
+        from app.services import prompts as prompt_service
+
         try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+            row = await prompt_service.create_prompt(
+                session, version=version.strip(), system_prompt=system_prompt, is_active=False
+            )
+        except ValueError:
+            rows = await prompt_service.list_prompts(session)
             selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
             counts_ctx = await _sidebar_counts(session)
             return templates.TemplateResponse(request, "prompts.html",
@@ -1409,18 +1196,16 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
 @panel_app.post("/prompts/{prompt_id}/activate")
 async def panel_prompt_activate(request: Request, prompt_id: int):
     """Activate one prompt version atomically (previous stays as history)."""
-    from sqlalchemy import update
-
     user = await require_login(request)
     if not _is_admin(user):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     async with async_session() as session:
-        row = await session.get(Prompt, prompt_id)
+        from app.services import prompts as prompt_service
+
+        row = await prompt_service.get_prompt(session, prompt_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="پرامپت یافت نشد."), status_code=404)
-        await session.execute(update(Prompt).where(Prompt.id != row.id).values(is_active=False))
-        row.is_active = True
-        await session.commit()
+        row = await prompt_service.activate_prompt(session, row)
         await audit(session, user.id, "prompt_activate", None, f"version={row.version}")
     return RedirectResponse(url="/prompts", status_code=302)
 
@@ -1435,8 +1220,11 @@ async def submit_page(request: Request):
     """Show the thesis submit form with model/prompt override selects."""
     user = await require_login(request)
     async with async_session() as session:
-        models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-        prompts = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+        from app.services import models as model_service
+        from app.services import prompts as prompt_service
+
+        models = await model_service.list_models(session)
+        prompts = await prompt_service.list_prompts(session)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "submit.html",
         _ctx(request, user, active="submit", **counts_ctx, models=models, prompts=prompts))
@@ -1449,7 +1237,7 @@ async def submit_create(
     author: str = Form(...), supervisor: str = Form(...), model_id: str = Form(""), prompt_id: str = Form(""),
 ):
     """Create a thesis job from the panel form (same flow as POST /submit)."""
-    from app.submissions import create_thesis_record
+    from app.services import records as record_service
 
     user = await require_login(request)
     if not _can_review(user):
@@ -1458,7 +1246,7 @@ async def submit_create(
     pid = int(prompt_id) if prompt_id.strip().isdigit() else None
     try:
         async with async_session() as session:
-            row = await create_thesis_record(
+            row = await record_service.create_thesis_record(
                 session,
                 username=username.strip(), title=title.strip(), abstract=abstract.strip(),
                 field=field.strip(), university=university.strip(),
@@ -1469,8 +1257,11 @@ async def submit_create(
             await audit(session, user.id, "submit", row.id, f"field={field}")
     except ValueError:
         async with async_session() as session:
-            models = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-            prompts = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+            from app.services import models as model_service
+            from app.services import prompts as prompt_service
+
+            models = await model_service.list_models(session)
+            prompts = await prompt_service.list_prompts(session)
         return templates.TemplateResponse(request, "submit.html",
             _ctx(request, user, active="submit", models=models, prompts=prompts,
                  error="مدل/پرامپت انتخاب‌شده وجود ندارد."),
@@ -1498,13 +1289,10 @@ async def users_page(request: Request):
     if denied is not None:
         return denied
     async with async_session() as session:
-        rows = (await session.execute(select(PanelUser).order_by(PanelUser.id))).scalars().all()
-        users = []
-        for u in rows:
-            role = await session.get(Role, u.role_id)
-            users.append({"id": u.id, "username": u.username, "role": role.name if role else "—",
-                          "created_at": u.created_at, "is_active": u.is_active})
-        roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
+        from app.services import users as user_service
+
+        users = await user_service.list_users(session)
+        roles = await user_service.list_roles(session)
         counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "users.html",
         _ctx(request, user, active="users", **counts_ctx, users=users, roles=roles))
@@ -1526,16 +1314,17 @@ async def user_create(
     if len(password) < 8:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
     async with async_session() as session:
-        role_row = (await session.execute(select(Role).where(Role.name == role))).scalar_one_or_none()
-        if not role_row:
-            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش یافت نشد."), status_code=422)
-        session.add(PanelUser(username=username.strip(), password_hash=hash_password(password),
-                              role_id=role_row.id, is_active=True))
+        from app.services import users as user_service
+
         try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نام کاربری تکراری است."), status_code=422)
+            row = await user_service.create_user(
+                session, username=username.strip(),
+                password_hash=hash_password(password), role=role,
+            )
+        except ValueError as e:
+            message = "نام کاربری تکراری است." if str(e) == "duplicate-username" else "نقش یافت نشد."
+            return templates.TemplateResponse(request, "base.html",
+                _ctx(request, user, error=message), status_code=422)
         await audit(session, user.id, "user_create", None, f"username={username}")
     return RedirectResponse(url="/users", status_code=302)
 
@@ -1550,14 +1339,15 @@ async def user_change_role(request: Request, user_id: int, role: str = Form(...)
     if role not in ("admin", "editor", "viewer"):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
     async with async_session() as session:
-        row = await session.get(PanelUser, user_id)
+        from app.services import users as user_service
+
+        row = await user_service.get_user(session, user_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
-        role_row = (await session.execute(select(Role).where(Role.name == role))).scalar_one_or_none()
-        if not role_row:
+        try:
+            row = await user_service.change_role(session, row, role)
+        except ValueError:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش یافت نشد."), status_code=422)
-        row.role_id = role_row.id
-        await session.commit()
         await audit(session, user.id, "user_role", None, f"username={row.username} role={role}")
     return RedirectResponse(url="/users", status_code=302)
 
@@ -1570,13 +1360,15 @@ async def user_toggle(request: Request, user_id: int):
     if denied is not None:
         return denied
     async with async_session() as session:
-        row = await session.get(PanelUser, user_id)
+        from app.services import users as user_service
+
+        row = await user_service.get_user(session, user_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
-        if row.id == user.id:
+        try:
+            row = await user_service.toggle_user(session, row, actor_id=user.id)
+        except ValueError:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نمی‌توانید حساب خودتان را غیرفعال کنید."), status_code=422)
-        row.is_active = not row.is_active
-        await session.commit()
         await audit(session, user.id, "user_toggle", None, f"username={row.username} active={row.is_active}")
     return RedirectResponse(url="/users", status_code=302)
 
@@ -1594,11 +1386,12 @@ async def user_reset_password(request: Request, user_id: int, new_password: str 
         return templates.TemplateResponse(request, "base.html",
             _ctx(request, user, error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
     async with async_session() as session:
-        row = await session.get(PanelUser, user_id)
+        from app.services import users as user_service
+
+        row = await user_service.get_user(session, user_id)
         if not row:
             return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کاربر یافت نشد."), status_code=404)
-        row.password_hash = hash_password(new_password)
-        await session.commit()
+        row = await user_service.set_password(session, row, hash_password(new_password))
         await audit(session, user.id, "password_reset", None, f"username={row.username}")
     return RedirectResponse(url="/users", status_code=302)
 
@@ -1619,12 +1412,13 @@ async def profile_change_password(
 ):
     """Let any user change their own password after proving the current one."""
     from app.panel.auth import hash_password, verify_password
+    from app.services import users as user_service
 
     user = await require_login(request)
     async with async_session() as session:
-        row = await session.get(PanelUser, user.id)
+        row = await user_service.get_user(session, user.id)
         counts_ctx = await _sidebar_counts(session)
-        if not verify_password(row.password_hash, current_password):
+        if row is None or not verify_password(row.password_hash, current_password):
             return templates.TemplateResponse(request, "profile.html",
                 _ctx(request, user, active="", **counts_ctx, target=user,
                      error="گذرواژهٔ فعلی نادرست است."), status_code=401)
@@ -1632,8 +1426,9 @@ async def profile_change_password(
             return templates.TemplateResponse(request, "profile.html",
                 _ctx(request, user, active="", **counts_ctx, target=user,
                      error="گذرواژه باید حداقل ۸ نویسه باشد."), status_code=422)
-        row.password_hash = hash_password(new_password)
-        await session.commit()
+        from app.services import users as user_service
+
+        row = await user_service.set_password(session, row, hash_password(new_password))
         await audit(session, user.id, "password_change", None, f"username={row.username}")
     return templates.TemplateResponse(request, "profile.html",
         _ctx(request, user, active="", target=user, ok="گذرواژه با موفقیت تغییر کرد."))
@@ -1654,29 +1449,15 @@ async def audit_page(
     user_f = username.strip() or None
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     async with async_session() as session:
-        count_q = select(func.count()).select_from(AuditLog)
-        list_q = select(AuditLog)
-        if user_f:
-            uid_rows = (await session.execute(select(PanelUser.id).where(PanelUser.username == user_f))).scalars().all()
-            count_q = count_q.where(AuditLog.user_id.in_(uid_rows))
-            list_q = list_q.where(AuditLog.user_id.in_(uid_rows))
-        if action_f:
-            count_q = count_q.where(AuditLog.action == action_f)
-            list_q = list_q.where(AuditLog.action == action_f)
-        if mid is not None:
-            count_q = count_q.where(AuditLog.main_id == mid)
-            list_q = list_q.where(AuditLog.main_id == mid)
-        total = (await session.execute(count_q)).scalar_one()
-        rows = (
-            await session.execute(list_q.order_by(AuditLog.id.desc()).limit(page_size).offset((page - 1) * page_size))
-        ).scalars().all()
-        events = []
-        for a in rows:
-            actor = await session.get(PanelUser, a.user_id) if a.user_id else None
-            events.append({"created_at": a.created_at, "username": actor.username if actor else "سیستم (worker)",
-                           "action": _ACTION_FA.get(a.action, a.action), "main_id": a.main_id,
-                           "detail": a.detail or "—"})
-        users = [r[0] for r in (await session.execute(select(PanelUser.username).order_by(PanelUser.username))).all()]
+        from app.services import users as user_service
+
+        events, total = await user_service.audit_trail(
+            session, action=action_f, username=user_f, main_id=mid,
+            page=page, page_size=page_size,
+        )
+        for event in events:
+            event["action"] = _ACTION_FA.get(event["action"], event["action"])
+        users = await user_service.audit_usernames(session)
         counts_ctx = await _sidebar_counts(session)
     from urllib.parse import urlencode
 
