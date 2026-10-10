@@ -701,3 +701,65 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
     await session.refresh(failed)
     assert failed.status == "failed"
     assert failed.approved_at is None
+
+
+@pytest.mark.asyncio
+async def test_panel_release_is_audited(session: AsyncSession):
+    """Panel release flips the row and records who released it."""
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, Channel, Delivery, Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="t", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    channel = Channel(platform="bale", chat_id=96011, username="@c", is_active=True)
+    session.add(channel)
+    await session.commit()
+    delivery = Delivery(main_id=row.id, channel_id=channel.id, status="awaiting_confirmation")
+    session.add(delivery)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        response = await client.post(f"/deliveries/{delivery.id}/release", follow_redirects=False)
+        assert response.status_code == 302
+    await session.refresh(delivery)
+    assert delivery.status == "pending"
+    audits = (
+        await session.execute(select(AuditLog.action).where(AuditLog.main_id == row.id))
+    ).scalars().all()
+    assert "release" in audits
+
+
+@pytest.mark.asyncio
+async def test_dashboard_review_kpi_excludes_approved(session: AsyncSession):
+    """The 'needs review' KPI counts review rows with approved_at NULL only."""
+    from datetime import datetime
+
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    session.add(Main(
+        username="t", title="Fresh", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    ))
+    session.add(Main(
+        username="t", title="Done", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review", approved_at=datetime.utcnow(),
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    ))
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get("/")
+        assert page.status_code == 200
+        assert "در انتظار بازبینی انسانی" in page.text
+        assert '<div class="n">۱</div>' in page.text

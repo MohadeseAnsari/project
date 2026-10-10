@@ -268,7 +268,13 @@ async def dashboard(request: Request):
         delivery_counts = dict(
             (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
         )
-        kpi_review = counts.get("review", 0)
+        kpi_review = (
+            await session.execute(
+                select(func.count()).select_from(Main)
+                .where(Main.status == "review")
+                .where(Main.approved_at.is_(None))
+            )
+        ).scalar_one()
         kpi_queued = counts.get("ready", 0) + counts.get("processing", 0)
         kpi_sent = delivery_counts.get("sent", 0)
         kpi_failed = counts.get("failed", 0) + delivery_counts.get("failed", 0)
@@ -344,7 +350,7 @@ async def dashboard(request: Request):
 
 _ACTION_FA = {
     "login": "ورود به کنسول", "login_failed": "ورود ناموفق", "approve": "تأیید و انتشار", "reject": "رد خبر",
-    "save_draft": "ذخیرهٔ پیش‌نویس", "retry": "تلاش مجدد ارسال",
+    "save_draft": "ذخیرهٔ پیش‌نویس", "retry": "تلاش مجدد ارسال", "release": "آزادسازی ارسال",
     "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
@@ -767,6 +773,9 @@ async def deliveries_page(request: Request, status: str = "", platform: str = ""
             await session.execute(select(Delivery).where(Delivery.status == "failed").order_by(Delivery.id.desc()).limit(1))
         ).scalar_one_or_none()
         last_error = f"خطای آخر: «{last_failed.error_message}» — {_jalali(last_failed.updated_at)}" if last_failed and last_failed.error_message else None
+        delivery_counts = dict(
+            (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
+        )
         counts_ctx = await _sidebar_counts(session)
     query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
     return templates.TemplateResponse(request, "deliveries.html",
@@ -775,6 +784,7 @@ async def deliveries_page(request: Request, status: str = "", platform: str = ""
             main_id=main_id, query=query_str, items=items, total=total, page=1, page_size=page_size,
             last_error=last_error, max_attempts=settings.sender_max_attempts,
             backoff_base=settings.sender_backoff_base_seconds,
+            failed_count=delivery_counts.get("failed", 0),
         )
     )
 
@@ -862,6 +872,25 @@ async def delivery_retry(request: Request, delivery_id: int):
         delivery.updated_at = datetime.utcnow()
         await session.commit()
         await audit(session, user.id, "retry", delivery.main_id, f"delivery={delivery.id}")
+    return RedirectResponse(url="/deliveries", status_code=302)
+
+
+@panel_app.post("/deliveries/{delivery_id}/release")
+async def delivery_release(request: Request, delivery_id: int):
+    """Release one gated delivery for sending and audit who released it."""
+    user = await require_login(request)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    async with async_session() as session:
+        delivery = await session.get(Delivery, delivery_id)
+        if not delivery or delivery.status != "awaiting_confirmation":
+            return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="این ارسال در انتظار تأیید نیست."), status_code=409)
+        delivery.status = "pending"
+        delivery.claimed_at = None
+        delivery.next_attempt_at = datetime.utcnow()
+        delivery.updated_at = datetime.utcnow()
+        await session.commit()
+        await audit(session, user.id, "release", delivery.main_id, f"delivery={delivery.id}")
     return RedirectResponse(url="/deliveries", status_code=302)
 
 

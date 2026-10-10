@@ -549,6 +549,66 @@ async def retry_delivery(
     }
 
 
+@router.post(
+    "/deliveries/{delivery_id}/release",
+    response_model=DeliveryInfo,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Delivery not found"},
+        409: {"model": ErrorResponse, "description": "Delivery is not awaiting confirmation"},
+    },
+)
+async def release_delivery(
+    delivery_id: int = Path(..., description="The delivery identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Release one gated delivery for sending (the per-delivery approve).
+
+    Only ``awaiting_confirmation`` rows move (409 otherwise): already-queued,
+    in-flight, sent, or failed rows are never touched, so a release click
+    cannot duplicate a send. Unlike retry, attempts are kept — this is the
+    delivery's first release, not a re-queue after failure.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.db.models import Channel, Delivery
+
+    body = payload or {}
+    secret = body.get("shared_Secret")
+    if not secret or not verify_secret(secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    result = await session.execute(select(Delivery).where(Delivery.id == delivery_id))
+    delivery = result.scalar_one_or_none()
+    if not delivery:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status != "awaiting_confirmation":
+        raise HTTPException(status_code=409, detail="Delivery is not awaiting confirmation")
+
+    delivery.status = "pending"
+    delivery.claimed_at = None
+    delivery.next_attempt_at = datetime.utcnow()
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(delivery)
+
+    channel = await session.get(Channel, delivery.channel_id)
+    return {
+        "id": delivery.id,
+        "channel_id": delivery.channel_id,
+        "main_id": delivery.main_id,
+        "platform": channel.platform if channel else None,
+        "username": channel.username if channel else None,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "error_message": delivery.error_message,
+        "sent_at": delivery.sent_at,
+    }
+
+
 @router.get(
     "/stats",
     response_model=StatsResponse,
