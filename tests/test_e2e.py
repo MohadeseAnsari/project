@@ -57,7 +57,35 @@ async def _wait_for_terminal_status(record_id: str, attempts: int = 30) -> str:
 
 
 @pytest.mark.asyncio
-async def test_submit_process_review_flow(test_database, postgres_available):
+async def test_submit_process_review_flow(test_database, postgres_available, session):
+    """Submit -> claim -> process -> review, isolated from prior truncation.
+
+    Previous tests truncate all tables via the ``session`` fixture, which
+    wipes the seeded categories/models/prompts. Re-seed the minimum rows
+    here so this test is order-independent.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import Category, Model, Prompt
+
+    if (await session.execute(select(Category).limit(1))).scalars().first() is None:
+        for name in (
+            "پزشکی و علوم سلامت", "مهندسی و فناوری", "هنر و معماری",
+            "دامپزشکی", "علوم اجتماعی و اقتصاد", "علوم انسانی",
+            "علوم پایه", "علوم تربیتی و روان‌شناسی",
+            "کامپیوتر و فناوری اطلاعات", "حقوق و علوم سیاسی",
+            "کشاورزی و منابع طبیعی", "ورزش و تربیت بدنی",
+            "رسانه و ارتباطات", "other",
+        ):
+            session.add(Category(name=name))
+        await session.commit()
+    if (await session.execute(select(Model).where(Model.is_active.is_(True)).limit(1))).scalar_one_or_none() is None:
+        session.add(Model(name="e2e-model", provider="openai", version="latest", is_active=True))
+        await session.commit()
+    if (await session.execute(select(Prompt).where(Prompt.is_active.is_(True)).limit(1))).scalar_one_or_none() is None:
+        session.add(Prompt(version="e2e-v1", system_prompt="test prompt", is_active=True))
+        await session.commit()
+
     payload = {
         "shared_Secret": settings.shared_secret,
         "username": "e2e-integration-test",
