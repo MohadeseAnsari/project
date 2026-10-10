@@ -763,3 +763,34 @@ async def test_dashboard_review_kpi_excludes_approved(session: AsyncSession):
         assert page.status_code == 200
         assert "در انتظار بازبینی انسانی" in page.text
         assert '<div class="n">۱</div>' in page.text
+
+
+@pytest.mark.asyncio
+async def test_final_prompt_tab_shows_exact_messages(session: AsyncSession):
+    """پرامپت نهایی renders the exact system prompt, user message, and model — no secrets."""
+    from app.config import settings
+    from app.db.models import Main, Model, Prompt
+
+    await _user(session, "panel-admin")
+    model = Model(name="preview-model", provider="openai", version="v1", is_active=False)
+    prompt = Prompt(version="v-preview", system_prompt="SYSTEM PROMPT TEXT", is_active=False)
+    session.add_all([model, prompt])
+    await session.commit()
+    row = Main(
+        username="t", title="Thesis Title", abstract="Abs", field="پزشکی", university="U",
+        author="Author", supervisor="Sup", status="review",
+        model_id=model.id, prompt_id=prompt.id,
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get(f"/records/{row.id}", params={"tab": "final"})
+        assert page.status_code == 200
+        assert "SYSTEM PROMPT TEXT" in page.text
+        assert "title: Thesis Title" in page.text
+        assert "author: Author" in page.text
+        assert "preview-model" in page.text
+        assert settings.shared_secret not in page.text
+        assert settings.avalai_api_key not in page.text

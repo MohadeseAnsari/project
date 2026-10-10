@@ -20,6 +20,7 @@
       <a href="/records/{{ record.id }}?tab=meta" style="text-decoration:none;color:inherit"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
       <a href="/records/{{ record.id }}?tab=history" style="text-decoration:none;color:inherit"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
       <a href="/records/{{ record.id }}?tab=delivery" style="text-decoration:none;color:inherit"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
+      <a href="/records/{{ record.id }}?tab=final" style="text-decoration:none;color:inherit"><span class="{% if tab=='final' %}on{% endif %}">پرامپت نهایی</span></a>
     </div>
     {% if tab == 'raw' %}
     <div class="body">
@@ -66,6 +67,15 @@
       <div class="hint" style="margin-top:9px">این دقیقاً همان متنی است که با تأیید، به کانال ارسال می‌شود.</div>
     </div>
     {% endif %}
+    {% elif tab == 'final' %}
+    <div class="body">
+      <dl class="kv">
+        <dt>مدل</dt><dd><span class="num">{{ prompt_preview.model_name }}</span></dd>
+      </dl>
+      <div class="field"><label>system prompt</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.system_prompt }}</div></div>
+      <div class="field"><label>user message</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.user_message }}</div></div>
+      <div class="hint" style="margin-top:9px">همین متن‌ها برای این رکورد به مدل ارسال شد (یا می‌شود)؛ هیچ کلیدی اینجا نمایش داده نمی‌شود.</div>
+    </div>
     {% else %}
     {% if record.output_json %}
     <form method="post" action="/records/{{ record.id }}/review">

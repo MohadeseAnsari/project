@@ -39,6 +39,7 @@
         <div class="field"><label>دما (temperature)</label><input type="number" name="temperature" step="0.1" value="{{ selected.temperature if selected.temperature is not none else '' }}"></div>
         <div class="field"><label>سقف توکن خروجی</label><input type="number" name="max_output_tokens" value="{{ selected.max_output_tokens or '' }}"></div>
       </div>
+      <div class="hint">دما و سقف توکن ذخیره می‌شوند؛ فراخوانی فعلی از پیش‌فرض‌های ارائه‌دهنده استفاده می‌کند.</div>
       <div class="field"><label>توضیح</label><input type="text" name="description" value="{{ selected.description or '' }}"></div>
       <button class="btn btn-primary" type="submit">ذخیره</button>
     </form>

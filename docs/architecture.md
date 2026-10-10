@@ -78,6 +78,28 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
   (`MissingModelKeyError` → `main.error_message`) instead of borrowing the
   global key; the global key applies only to rows sharing the configured
   endpoint
+
+### What is sent to the LLM (exact structure)
+
+- **System prompt**: the record's linked prompt row (`main.prompt_id`), else
+  the active `prompts` row, else the packaged fallback in
+  `app/news/prompts.py`. Thesis content is framed as DATA inside it, never
+  instructions.
+- **User message** (built by `build_user_message`, shared with the panel
+  preview so both are byte-identical): the literal template
+  `Thesis metadata:\ntitle: {title}\nabstract: {abstract}\nfield: {field}\n
+  university: {university}\ntable_of_contents: {table_of_contents}\n
+  author: {author}\n supervisor: {supervisor}` with the record's seven
+  metadata values; missing values render empty.
+- **Model / endpoint**: the resolved model name and `base_url` (row override
+  else configuration). `temperature` / `max_output_tokens` are stored per
+  model row and shown in the panel, but the provider call currently uses
+  provider defaults for them — see the panel note where they are displayed.
+- **Required output shape**: strict JSON `{title, lead, body}` validated by
+  Pydantic (`GeneratedNews`); anything else fails the job with the error.
+- **Preview**: the record page's `پرامپت نهایی` tab renders the exact system
+  prompt + user message + resolved model name for that record. No secret is
+  ever included in either message or shown in the preview.
 - Bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s) so a hung call fails the job instead of blocking the Worker forever
 
 ## Database

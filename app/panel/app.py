@@ -508,7 +508,7 @@ async def records_table(
 async def record_detail(request: Request, record_id: int, tab: str = "text"):
     """Show one record with editable output, raw/meta/history/delivery tabs."""
     user = await require_login(request)
-    if tab not in ("text", "raw", "meta", "history", "delivery"):
+    if tab not in ("text", "raw", "meta", "history", "delivery", "final"):
         tab = "text"
     async with async_session() as session:
         record = await session.get(Main, record_id)
@@ -524,13 +524,43 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
                 d_category = await session.get(Category, d.category_id)
                 d.category_name = d_category.name if d_category else None
         model_name = None
-        if record.model_id:
-            model = await session.get(Model, record.model_id)
-            model_name = model.name if model else None
+        model_row = await session.get(Model, record.model_id) if record.model_id else None
+        if model_row is not None:
+            model_name = model_row.name
+        if model_name is None:
+            active_model = (
+                await session.execute(select(Model).where(Model.is_active.is_(True)).limit(1))
+            ).scalar_one_or_none()
+            model_name = active_model.name if active_model else settings.llm_model
         prompt_version = None
+        prompt_text = None
         if record.prompt_id:
             prompt = await session.get(Prompt, record.prompt_id)
-            prompt_version = prompt.version if prompt else None
+            if prompt is not None:
+                prompt_version = prompt.version
+                prompt_text = prompt.system_prompt
+        if prompt_text is None:
+            active_prompt = (
+                await session.execute(select(Prompt).where(Prompt.is_active.is_(True)).limit(1))
+            ).scalar_one_or_none()
+            if active_prompt is not None:
+                prompt_version = prompt_version or active_prompt.version
+                prompt_text = active_prompt.system_prompt
+        if prompt_text is None:
+            from app.news.prompts import SYSTEM_PROMPT
+
+            prompt_text = SYSTEM_PROMPT
+        from app.news.generation import build_user_message
+
+        prompt_preview = {
+            "model_name": model_name,
+            "system_prompt": prompt_text,
+            "user_message": build_user_message({
+                "title": record.title, "abstract": record.abstract, "field": record.field,
+                "university": record.university, "table_of_contents": record.table_of_contents,
+                "author": record.author, "supervisor": record.supervisor,
+            }),
+        }
         # Snapshot (what the Worker stored at processing time) vs current
         # field category (what a reclassification would give today). The
         # record keeps the snapshot; the panel shows both when they differ.
@@ -600,7 +630,7 @@ async def record_detail(request: Request, record_id: int, tab: str = "text"):
             approved_by=approved_by,
             routed_channels=routed_channels, message_preview=message_preview,
             snapshot_category=snapshot_category, current_category=current_category,
-            field_keyword=field_keyword,
+            field_keyword=field_keyword, prompt_preview=prompt_preview,
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )

@@ -199,3 +199,17 @@ async def test_process_job_falls_back_to_active_then_config(session: AsyncSessio
         _, kwargs = mock_gen.call_args
         assert kwargs["model_name"] == "active-model"
         assert kwargs["system_prompt"] == "active prompt"
+
+
+def test_build_user_message_template():
+    """The shared builder renders the exact documented template."""
+    from app.news.generation import build_user_message
+
+    assert build_user_message({
+        "title": "T", "abstract": "A", "field": "F", "university": "U",
+        "table_of_contents": None, "author": "Au", "supervisor": "Su",
+    }) == (
+        "Thesis metadata:\n"
+        "title: T\nabstract: A\nfield: F\nuniversity: U\n"
+        "table_of_contents: \nauthor: Au\nsupervisor: Su"
+    )

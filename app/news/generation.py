@@ -215,6 +215,24 @@ def _get_agent() -> Agent:
     return _agent
 
 
+def build_user_message(thesis_data: dict[str, Any]) -> str:
+    """Build the exact user message sent to the LLM for a thesis.
+
+    Single template shared by generation and the panel preview, so what the
+    reviewer sees is byte-identical to what the model received. Thesis values
+    are data, never instructions (see the system prompt); missing values
+    render empty rather than failing the job.
+    """
+    return f"""Thesis metadata:
+title: {thesis_data.get('title', '')}
+abstract: {thesis_data.get('abstract', '')}
+field: {thesis_data.get('field', '')}
+university: {thesis_data.get('university', '')}
+table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
+author: {thesis_data.get('author', '')}
+supervisor: {thesis_data.get('supervisor', '')}"""
+
+
 async def generate_news(
     thesis_data: dict[str, Any],
     model_name: str | None = None,
@@ -270,14 +288,7 @@ async def generate_news(
         )
         agent = Agent(model, output_type=GeneratedNews, system_prompt=effective_prompt)
 
-    user_message = f"""Thesis metadata:
-title: {thesis_data.get('title', '')}
-abstract: {thesis_data.get('abstract', '')}
-field: {thesis_data.get('field', '')}
-university: {thesis_data.get('university', '')}
-table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
-author: {thesis_data.get('author', '')}
-supervisor: {thesis_data.get('supervisor', '')}"""
+    user_message = build_user_message(thesis_data)
 
     result = await agent.run(user_message)
     return result.output
