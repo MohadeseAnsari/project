@@ -95,7 +95,9 @@
       <div class="body" style="border-top:1px solid var(--line2);display:flex;gap:9px;flex-wrap:wrap">
         <button class="btn btn-primary" name="action" value="approve" type="submit">تأیید و انتشار</button>
         <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیرهٔ ویرایش</button>
-        <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)">رد این خبر</button>
+        {# Rejecting is irreversible and stops delivery: ask first, and say why. #}
+        <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)"
+                onclick="return confirm('این خبر رد شود؟ رد کردن برگشت‌پذیر نیست و خبر هرگز به کانال نمی‌رسد.')">رد این خبر</button>
       </div>
       {% elif record.status in ('approved', 'published') %}
       <div class="body" style="border-top:1px solid var(--line2);display:flex;gap:9px;flex-wrap:wrap;align-items:center">
@@ -110,10 +112,12 @@
       </div>
       {% endif %}
     </form>
+    {# Regenerate replaces existing output: confirm before losing it. #}
     {% if record.status in ('review', 'failed') and record.output_json %}
     <form method="post" action="/records/{{ record.id }}/regenerate">{{ csrf_field(request) | safe }}
       <div class="body" style="border-top:1px solid var(--line2)">
-        <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
+        <button class="btn btn-ghost" type="submit"
+                onclick="return confirm('متن فعلی با خروجی تازهٔ مدل جایگزین شود؟ متن کنونی از دست می‌رود.')">تولید دوباره با مدل</button>
         <div class="hint" style="margin-top:8px">متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
       </div>
     </form>
