@@ -159,6 +159,37 @@
     </div>
 
     <div class="card">
+      <h3>جریان این رکورد</h3>
+      <div class="body">
+        <div class="timeline">
+          {% for t in timeline %}
+          <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ t.title }}</b><small>{{ t.sub }}</small></div></div>
+          {% endfor %}
+        </div>
+        <div class="hint" style="margin-top:9px">ثبت درخواست ← تعیین رشته و دسته ← تولید با مدل/پرامپت ← بازبینی ← ارسال به کانال (با شناسهٔ پیام).</div>
+      </div>
+    </div>
+
+    {# Recovery: a record filed under the wrong category publishes to the
+       wrong channel until an operator re-points it. #}
+    <div class="card">
+      <h3>اصلاح دستهٔ رکورد</h3>
+      <div class="body">
+        <form method="post" action="/records/{{ record.id }}/category">{{ csrf_field(request) | safe }}
+          <div class="field" style="margin:0"><label>دسته</label>
+            <select name="category_id">
+              {% for c in categories %}<option value="{{ c.id }}" {% if c.id == record.category_id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div style="display:flex;gap:9px;align-items:center;margin-top:9px">
+            <button class="btn btn-soft" type="submit">تغییر دسته</button>
+            <span class="hint">مسیر ارسال از دستهٔ رکورد خوانده می‌شود؛ این تغییر فقط روی همین رکورد اثر دارد و دستهٔ رشته را عوض نمی‌کند.</span>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
       <h3>تاریخچهٔ این رکورد</h3>
       <div class="body">
         <div class="timeline">

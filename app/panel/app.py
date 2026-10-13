@@ -503,12 +503,19 @@ async def record_detail(
         info = await record_service.approval_info(session, record)
         if info is not None:
             approved_by = f"{info[0]} · {_jalali(info[1])}"
+    # Timeline of the real flow (submitted -> resolved -> generated ->
+    # reviewed -> delivered), built from columns and audit rows only.
+    timeline = [
+        {"title": step["title"], "sub": f"{step['sub']} · {_jalali(step['at'])}" if step["at"] else step["sub"]}
+        for step in await record_service.record_timeline(session, record)
+    ]
+    categories = await field_service.list_categories(session)
     counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "record_detail.html",
         _ctx(
             request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
-            approved_by=approved_by,
+            approved_by=approved_by, timeline=timeline, categories=categories,
             routed_channels=routed_channels, message_preview=message_preview,
             snapshot_category=overview["snapshot_category"],
             current_category=overview["current_category"],
@@ -568,6 +575,29 @@ async def record_review(
     await audit_service.record_event(
         session, user.id, action, record.id,
         {"approve": "تأیید و انتشار", "reject": "رد رکورد"}.get(action, "ذخیره پیش‌نویس"),
+    )
+    return RedirectResponse(url=f"/records/{record_id}", status_code=302)
+
+
+@panel_app.post("/records/{record_id}/category")
+async def record_reassign_category(
+    request: Request, record_id: int, category_id: int = Form(...),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Re-point one record at another category (operator correction)."""
+    user = await require_login(request, session)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    record = await record_service.get_record(session, record_id)
+    if record is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    try:
+        await record_service.reassign_category(session, record, category_id)
+    except ValueError:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دستهٔ انتخاب‌شده وجود ندارد."), status_code=422)
+    await audit_service.record_event(
+        session, user.id, "reassign_category", record.id,
+        f"category={category_id}",
     )
     return RedirectResponse(url=f"/records/{record_id}", status_code=302)
 

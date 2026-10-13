@@ -11,7 +11,17 @@ from sqlalchemy import func, or_, select
 
 from app.db.models import AuditLog, Channel, Delivery, Main, Model, PanelUser, Prompt
 from app.messaging.dispatcher import confirm_deliveries_for_article
-from app.services.transitions import assert_record_transition
+from app.services.transitions import STATUS_FA, assert_record_transition
+
+#: Persian labels for delivery states in the record timeline.
+_DELIVERY_FA = {
+    "awaiting_confirmation": "در انتظار تأیید انسان",
+    "pending": "در صف ارسال",
+    "sending": "در حال ارسال",
+    "sent": "ارسال شد",
+    "failed": "ناموفق",
+    "deleted_from_channel": "حذف‌شده از کانال",
+}
 
 
 async def create_thesis_record(
@@ -367,6 +377,128 @@ async def needs_review_count(session) -> int:
             select(func.count()).select_from(Main).where(Main.status == "review")
         )
     ).scalar_one()
+
+
+async def reassign_category(session, record: Main, category_id: int) -> Main:
+    """Re-point one record at another category (operator correction).
+
+    The recovery action for a record classified into the wrong category: the
+    sender routes by ``main.category_id``, so until this is fixed the article
+    would keep publishing to the wrong channel.
+
+    Raises:
+        ValueError: ``unknown-category`` when the category does not exist.
+    """
+    from app.db.models import Category
+
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise ValueError("unknown-category")
+    record.category_id = category_id
+    record.updated_at = datetime.utcnow()
+    # No refresh(): with expire_on_commit=False the row is already current,
+    # and refreshing would expire attributes the caller may read afterwards.
+    await session.commit()
+    return record
+
+
+async def record_timeline(session, record: Main) -> list[dict]:
+    """The flow of one record: submitted → resolved → generated → reviewed → delivered.
+
+    Built from real columns and audit rows only — no hardcoded prose — so the
+    timeline reflects what actually happened, including failures and the
+    model/prompt used for generation.
+    """
+    from app.db.models import Category, Channel, Delivery, Field, Model, Prompt
+
+    steps: list[dict] = [
+        {"title": "ثبت درخواست", "sub": _tl_status(record.status), "at": record.created_at}
+    ]
+
+    # field_row stays None when the record has no field link yet (a record can
+    # carry a category without one), so it is initialised before the branch.
+    field_row = None
+    field_name = None
+    if record.field_id is not None:
+        field_row = await session.get(Field, record.field_id)
+        field_name = field_row.name if field_row else None
+    if record.category_id is not None:
+        category = await session.get(Category, record.category_id)
+        if category is not None:
+            detail = f"رشته: {field_name or record.field} · دسته: {category.name}"
+            if field_row is not None and field_row.matched_keyword:
+                detail += f" · کلیدواژه: {field_row.matched_keyword}"
+            steps.append({"title": "تعیین رشته و دسته", "sub": detail, "at": record.claimed_at})
+    elif field_row is not None:
+        steps.append({"title": "تعیین رشته و دسته", "sub": f"رشته: {field_name}", "at": record.claimed_at})
+
+    model_name = prompt_version = None
+    if record.model_id is not None:
+        model_row = await session.get(Model, record.model_id)
+        model_name = model_row.name if model_row else None
+    if record.prompt_id is not None:
+        prompt_row = await session.get(Prompt, record.prompt_id)
+        prompt_version = prompt_row.version if prompt_row else None
+
+    if record.output_json:
+        sub = " · ".join(x for x in (f"مدل: {model_name}" if model_name else "",
+                                     f"پرامپت: {prompt_version}" if prompt_version else "") if x)
+        steps.append({"title": "تولید خروجی", "sub": sub or "خروجی مدل ذخیره شد",
+                      "at": record.updated_at})
+    elif record.error_message:
+        steps.append({"title": "تولید ناموفق", "sub": (record.error_message or "")[:120],
+                      "at": record.updated_at})
+
+    # Human actions come from the audit trail (who + when + what).
+    audits = (
+        await session.execute(
+            select(AuditLog).where(AuditLog.main_id == record.id).order_by(AuditLog.id)
+        )
+    ).scalars().all()
+    for entry in audits:
+        if entry.action not in ("approve", "reject", "save_draft", "regenerate"):
+            continue
+        actor = await session.get(PanelUser, entry.user_id) if entry.user_id else None
+        label = {
+            "approve": "تأیید بازبین", "reject": "رد توسط بازبین",
+            "save_draft": "ویرایش متن خبر", "regenerate": "تولید دوباره",
+        }.get(entry.action, entry.action)
+        steps.append({
+            "title": label,
+            "sub": f"{actor.username if actor else 'سیستم'}",
+            "at": entry.created_at,
+        })
+
+    deliveries = (
+        await session.execute(
+            select(Delivery).where(Delivery.main_id == record.id).order_by(Delivery.id)
+        )
+    ).scalars().all()
+    for delivery in deliveries:
+        channel = await session.get(Channel, delivery.channel_id)
+        name = (channel.username or channel.title or channel.platform) if channel else "—"
+        if delivery.status == "sent":
+            steps.append({
+                "title": f"ارسال به {name}",
+                "sub": f"شناسهٔ پیام: {delivery.platform_message_id}",
+                "at": delivery.sent_at,
+            })
+        elif delivery.status == "deleted_from_channel":
+            steps.append({"title": f"حذف پیام از {name}", "sub": "پیام منتشرشده حذف شد",
+                          "at": delivery.updated_at})
+        elif delivery.status == "failed":
+            steps.append({"title": f"ارسال ناموفق به {name}",
+                          "sub": (delivery.error_message or "")[:120], "at": delivery.updated_at})
+        else:
+            steps.append({"title": f"در انتظار ارسال به {name}",
+                          "sub": _DELIVERY_FA.get(delivery.status, delivery.status),
+                          "at": None})
+    return steps
+
+
+def _tl_status(status: str) -> str:
+    """Persian lifecycle label for a timeline header (from the state machine)."""
+    return f"وضعیت: {STATUS_FA.get(status, status)}"
 
 
 async def approval_info(session, record: Main) -> tuple[str, object] | None:

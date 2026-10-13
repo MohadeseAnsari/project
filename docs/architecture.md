@@ -144,6 +144,13 @@ Records: `ready → processing → review → approved → published`, plus `rej
 and `failed`. Deliveries: `awaiting_confirmation → pending → sending → sent`,
 plus `failed` and `deleted_from_channel`.
 
+Every stuck state has an explicit recovery action in the panel: regenerate
+(record), cancel / retry / release / delete-from-channel (delivery),
+reassign category (record). `records.record_timeline` renders the resulting
+flow per record — submitted → field/category (with the matched keyword) →
+generated with `<model>/<prompt>` → reviewed by `<user>` → delivered to
+`<channel>` with the message id — from real columns and audit rows only.
+
 What the operator sees follows from those states, not from timestamps:
 
 - approving moves the record to `approved`, so it leaves the "needs review"
