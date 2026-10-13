@@ -118,6 +118,34 @@ async def last_failed(session) -> Delivery | None:
     ).scalar_one_or_none()
 
 
+def delivery_info(delivery, channel) -> dict:
+    """Shape one delivery + its channel into the machine-API payload.
+
+    Shared by ``POST /deliveries/{id}/retry`` and ``.../release`` so both
+    endpoints return the identical contract, and neither route needs to load
+    the channel row itself.
+    """
+    return {
+        "id": delivery.id,
+        "channel_id": delivery.channel_id,
+        "main_id": delivery.main_id,
+        "platform": channel.platform if channel else None,
+        "username": channel.username if channel else None,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "error_message": delivery.error_message,
+        "sent_at": delivery.sent_at,
+    }
+
+
+async def delivery_with_channel(session, delivery_id: int) -> tuple[Delivery, Channel] | None:
+    """Fetch a delivery together with its channel, or None when unknown."""
+    delivery = await get_delivery(session, delivery_id)
+    if delivery is None:
+        return None
+    return delivery, await session.get(Channel, delivery.channel_id)
+
+
 async def retry_delivery(session, delivery: Delivery) -> Delivery:
     """Re-queue a ``failed`` delivery as ``pending`` (attempts reset).
 

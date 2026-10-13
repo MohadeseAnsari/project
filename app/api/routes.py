@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.limits import limiter
 from app.auth.secret import verify_secret
 from app.db.connection import get_session
-from app.db.models import Main
 from app.schemas.news import (
     ConnectionTestResponse,
     DeliveryInfo,
@@ -240,7 +239,7 @@ async def get_record(
     return await _record_detail_payload(session, record)
 
 
-async def _record_detail_payload(session: AsyncSession, record: Main) -> dict:
+async def _record_detail_payload(session: AsyncSession, record) -> dict:
     """Build the extended record payload (shared by GET and PATCH)."""
     from app.services import records as record_service
 
@@ -379,7 +378,6 @@ async def retry_delivery(
     an already-sent article is never duplicated by a retry click. Attempts are
     reset to 0 (owner-approved) so the sender's bounded retry budget restarts.
     """
-    from app.db.models import Channel
     from app.services import deliveries as delivery_service
 
     body = payload or {}
@@ -387,26 +385,16 @@ async def retry_delivery(
     if not secret or not verify_secret(secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    delivery = await delivery_service.get_delivery(session, delivery_id)
-    if not delivery:
+    found = await delivery_service.delivery_with_channel(session, delivery_id)
+    if found is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
+    delivery, channel = found
     try:
         delivery = await delivery_service.retry_delivery(session, delivery)
     except ValueError:
         raise HTTPException(status_code=409, detail="Delivery is not retryable")
 
-    channel = await session.get(Channel, delivery.channel_id)
-    return {
-        "id": delivery.id,
-        "channel_id": delivery.channel_id,
-        "main_id": delivery.main_id,
-        "platform": channel.platform if channel else None,
-        "username": channel.username if channel else None,
-        "status": delivery.status,
-        "attempts": delivery.attempts,
-        "error_message": delivery.error_message,
-        "sent_at": delivery.sent_at,
-    }
+    return delivery_service.delivery_info(delivery, channel)
 
 
 @router.post(
@@ -430,7 +418,6 @@ async def release_delivery(
     cannot duplicate a send. Unlike retry, attempts are kept — this is the
     delivery's first release, not a re-queue after failure.
     """
-    from app.db.models import Channel
     from app.services import deliveries as delivery_service
 
     body = payload or {}
@@ -438,26 +425,16 @@ async def release_delivery(
     if not secret or not verify_secret(secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    delivery = await delivery_service.get_delivery(session, delivery_id)
-    if not delivery:
+    found = await delivery_service.delivery_with_channel(session, delivery_id)
+    if found is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
+    delivery, channel = found
     try:
         delivery = await delivery_service.release_delivery(session, delivery)
     except ValueError:
         raise HTTPException(status_code=409, detail="Delivery is not awaiting confirmation")
 
-    channel = await session.get(Channel, delivery.channel_id)
-    return {
-        "id": delivery.id,
-        "channel_id": delivery.channel_id,
-        "main_id": delivery.main_id,
-        "platform": channel.platform if channel else None,
-        "username": channel.username if channel else None,
-        "status": delivery.status,
-        "attempts": delivery.attempts,
-        "error_message": delivery.error_message,
-        "sent_at": delivery.sent_at,
-    }
+    return delivery_service.delivery_info(delivery, channel)
 
 
 @router.get(
@@ -481,18 +458,13 @@ async def get_stats(
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    from sqlalchemy import func, select
-
     from app.services import deliveries as delivery_service
     from app.services import records as record_service
 
-    last_heartbeat = (
-        await session.execute(select(func.max(Main.heartbeat_at)))
-    ).scalar_one_or_none()
     return {
         "records": await record_service.record_status_counts(session),
         "deliveries": await delivery_service.delivery_status_counts(session),
-        "worker_last_heartbeat_at": last_heartbeat,
+        "worker_last_heartbeat_at": await record_service.worker_heartbeat(session),
     }
 
 
