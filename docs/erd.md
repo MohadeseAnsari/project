@@ -169,8 +169,22 @@ decision point. `approved_at`/`published_at` stamp the decision and the first
 publication (first-wins), but the statuses now carry the same facts, so the
 panel never infers "approved" from a timestamp — this is what fixed the
 records that stayed in "نیازمند تأیید" after their deliveries were sent.
-Migration `016` widened the `ck_main_status` CHECK and backfilled
-already-approved/published rows.
+
+Two migrations repair the existing rows (both additive; neither edits an
+applied file):
+
+- `016` widens `ck_main_status` and backfills from the timestamps. That alone
+  left 43 rows still reading `review`, because their deliveries were sent
+  *before* `published_at` existed (added in migration 013).
+- `017` derives the truth from `deliveries`: an article whose deliveries are
+  **all** `sent` becomes `published`, with `published_at` set to the earliest
+  real send time and `approved_at` back-filled from the earliest `approve`
+  audit row. Articles with any delivery still unsent are untouched — for those
+  the state genuinely is not published yet — and `rejected` is never rewritten
+  (a human rejection stays the final word even if a send had happened).
+
+After 017 the invariant holds: no row is `approved`/`review` while all of its
+deliveries are `sent`.
 
 `deliveries.status` is the separate publishing lifecycle:
 `awaiting_confirmation`, `pending`, `sending`, `sent`, `failed`
