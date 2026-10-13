@@ -89,6 +89,13 @@ global `/audit` page.
 - **Rotation.** Replacing a key in the panel immediately changes what the next
   generation uses (each job resolves at claim time). After rotation, run
   "تست اتصال" to see the recorded outcome.
+- **The row name is a label, not a model id.** `name` identifies the row for
+  you; the provider only understands its own id. If the two differ, put the
+  real id in **شناسهٔ مدل در ارائه‌دهنده** (`api_model`) — that is what goes in
+  the request. Activating a model that has never passed "تست اتصال" is
+  refused (409): an id the provider does not know otherwise surfaces much
+  later as `404 ... does not exist` on a record, instead of as a fixable
+  settings problem.
 - Handover flow: admin creates the account, the user logs in and changes
   their password immediately on `/profile`. Deactivate (`toggle`) accounts
   instead of deleting them, so the audit trail keeps its author names.

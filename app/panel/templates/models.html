@@ -107,11 +107,15 @@
   <div class="body">
     <form method="post" action="/models">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:10px">
-        <div class="field"><label>نام (شناسهٔ نمایشی)</label><input type="text" name="name" required style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>نام (برچسب داخلی)</label><input type="text" name="name" required style="direction:ltr;text-align:left">
+          <div class="hint">این فقط نام داخلی مدل است. اگر ارائه‌دهنده شناسهٔ دیگری می‌خواهد، آن را در «شناسهٔ مدل در ارائه‌دهنده» بنویسید.</div></div>
         <div class="field"><label>ارائه‌دهنده</label><input type="text" name="provider" value="openai" required></div>
         <div class="field"><label>نسخه</label><input type="text" name="version" value="latest" required></div>
         <div class="field"><label>نقطهٔ اتصال (اختیاری)</label><input type="text" name="base_url" style="direction:ltr;text-align:left"></div>
-        <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (اختیاری)</label><input type="text" name="api_model" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (اختیاری)</label><input type="text" name="api_model" style="direction:ltr;text-align:left">
+          <div class="hint"><b>اگر نام ارائه‌دهنده یک شناسهٔ واقعی نیست، اینجا بنویسید.</b>
+          نام بالا فقط برچسب داخلی است؛ ارائه‌دهنده معمولاً آن را نمی‌شناسد و با خطای
+          <span dir="ltr">404 model does not exist</span> پاسخ می‌دهد. پس از ساخت، «تست اتصال» را بزنید.</div></div>
         <div class="field"><label>کلید API</label><input type="password" name="api_key" autocomplete="new-password" style="direction:ltr;text-align:left">
           <div class="hint">اگر نقطهٔ اتصال خودش را وارد کنید، کلید خودش <b>اجباری</b> است؛ کلید سراسری به آدرس دیگری ارسال نمی‌شود. رمزنگاری‌شده ذخیره می‌شود.</div></div>
         <div class="field"><label>نام متغیر کلید محیطی (اختیاری)</label><input type="text" name="api_key_env" style="direction:ltr;text-align:left"></div>

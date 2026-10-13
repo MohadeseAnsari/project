@@ -246,6 +246,7 @@ async def generate_news(
     system_prompt: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    api_model: str | None = None,
 ) -> GeneratedNews:
     """Generate a journalistic news item from thesis metadata.
 
@@ -260,6 +261,11 @@ async def generate_news(
             When None, the packaged ``SYSTEM_PROMPT`` is used.
         base_url: Resolved provider endpoint (per-model else config).
         api_key: Resolved provider key (never logged).
+        api_model: The provider's REAL model id when the row defines one
+            (``models.api_model``). It wins over ``model_name``, which is the
+            row's display name. Accepting it here is what lets every caller
+            pass ``resolve_generation_config(...)`` straight through with
+            ``**config``.
 
     Returns:
         A structured ``GeneratedNews`` with Persian ``title``, ``lead`` and
@@ -269,7 +275,8 @@ async def generate_news(
         Exception: Any provider/validation error propagates to the caller
             (the Worker marks the job as ``failed``).
     """
-    effective_model = model_name or settings.llm_model
+    # The provider is called with the real model id when the row has one.
+    effective_model = api_model or model_name or settings.llm_model
     effective_prompt = system_prompt or SYSTEM_PROMPT
     effective_base_url = base_url or settings.avalai_base_url
     # Note: api_key resolution stays here so every path uses the same fallback;

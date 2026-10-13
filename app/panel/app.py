@@ -1204,7 +1204,13 @@ async def panel_model_delete(
 
 @panel_app.post("/models/{model_id}/activate")
 async def panel_model_activate(request: Request, model_id: int, session: AsyncSession = Depends(session_dep)):
-    """Activate one model atomically (exactly one active row)."""
+    """Activate one model atomically (exactly one active row).
+
+    A model is only activated once it has actually answered a connection
+    test: activating a row that was never verified is what produces a runtime
+    "Requested resource <name> does not exist" from the provider, which the
+    owner sees as a failed generation instead of a fixable settings problem.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
@@ -1214,6 +1220,15 @@ async def panel_model_activate(request: Request, model_id: int, session: AsyncSe
     row = await model_service.get_model(session, model_id)
     if not row:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+    if row.last_tested_at is None or not row.last_test_ok:
+        return templates.TemplateResponse(
+            request, "base.html",
+            _ctx(request, user, error=(
+                "این مدل هنوز با موفقیت آزموده نشده است. ابتدا «تست اتصال» را بزنید؛ "
+                "فعال‌سازی مدلی که ارائه‌دهنده نمی‌شناسد باعث خطای ۴۰۴ هنگام تولید خبر می‌شود."
+            )),
+            status_code=409,
+        )
     row = await model_service.activate_model(session, row)
     await audit_service.record_event(session, user.id, "model_activate", None, f"model={row.name}")
     return RedirectResponse(url="/models", status_code=302)
