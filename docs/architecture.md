@@ -155,6 +155,11 @@ What the operator sees follows from those states, not from timestamps:
 - `review`, `approved` and `published` records still queue a delivery for a
   channel routed *later*, created directly as `pending` because the human
   decision already happened.
+- The sender re-reads the record status **at insert time** (not only in its
+  queueing `SELECT`): if a reviewer approves in between, the new delivery is
+  created `pending` instead of `awaiting_confirmation`. Without this the row
+  would be parked forever — the record had left `review`, so no second
+  approval could ever release it.
 
 ## CSRF
 
