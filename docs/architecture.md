@@ -125,7 +125,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Services raise plain `ValueError`s with stable codes (`not-in-review`,
   `duplicate-username`, `not-retryable`, `weak-password`, …); routes map them
   to HTTP statuses and Persian messages. Nothing reaches the browser as a
-  stack trace.
+  stack trace. The mapping lives in `app/services/errors.py`
+  (`ERROR_MESSAGES`, `status_for`, `message_for`, `from_value_error`), so the
+  same code always yields the same status and the same Persian text.
+- Authorization is one module: `app/panel/authz.py` holds the `Action` enum
+  and the `ROLE_ACTIONS` table; routes call `_require_role(user, Action.X)`
+  and map `PermissionDenied` to 403. `tests/test_authz_matrix.py` pins the
+  role × action matrix, fails when a POST route has no guard, and exercises
+  the whole thing over HTTP.
 - Password hashing lives in `app/services/passwords.py` and is called by the
   users service, not by routes: plaintext enters `create_user_with_password`,
   `reset_password` or `change_own_password`, and only the argon2 hash is

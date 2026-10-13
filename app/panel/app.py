@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.panel.auth import ensure_admin_user, session_user_id, verify_password
+from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
+from app.services.errors import PermissionDenied
 from app.services import channels as channel_service
 from app.services import deliveries as delivery_service
 from app.services import dispose_engine
@@ -161,16 +163,28 @@ async def _sidebar_counts(session: AsyncSession) -> dict:
     return {"review_count": review_total or None, "gated_count": gated_total or None}
 
 
+def _role_name(user) -> str | None:
+    """The acting user's role name, or None when unauthenticated/unknown."""
+    return user.role.name if user is not None and user.role is not None else None
+
+
 def _is_admin(user) -> bool:
-    return bool(user.role and user.role.name == "admin")
+    """Whether the user holds the admin role (thin wrapper over the policy)."""
+    return can(_role_name(user), Action.MANAGE_CONFIG)
 
 
 def _can_review(user) -> bool:
-    """Review rights: admin full access, editor/reviewer may approve/reject/retry/submit.
+    """Review rights (approve/reject/retry/submit) per the role policy.
 
-    Viewers are read-only — every mutation returns 403 for them.
+    Thin wrappers over :mod:`app.panel.authz` — the policy lives in exactly
+    one place, so routes cannot drift apart in what they allow.
     """
-    return bool(user.role and user.role.name in ("admin", "editor"))
+    return can(_role_name(user), Action.REVIEW_RECORD)
+
+
+def _require_role(user, action: Action) -> None:
+    """Raise :class:`PermissionDenied` when the user may not perform ``action``."""
+    require(_role_name(user), action)
 
 
 # --------------------------------------------------------------------------
@@ -536,7 +550,9 @@ async def record_regenerate(
     touches a record row directly and no route sets a status by hand.
     """
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     try:
         record = await record_service.regenerate(session, record_id)
@@ -558,7 +574,9 @@ async def record_review(
 ):
     """Apply approve/reject/save_draft from the review form and audit it."""
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     if action not in ("approve", "reject", "save_draft"):
         return RedirectResponse(url=f"/records/{record_id}", status_code=302)
@@ -586,7 +604,9 @@ async def record_reassign_category(
 ):
     """Re-point one record at another category (operator correction)."""
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     record = await record_service.get_record(session, record_id)
     if record is None:
@@ -612,7 +632,9 @@ async def records_bulk_approve(request: Request, session: AsyncSession = Depends
     as the single approve, applied in one pass.
     """
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     form = await request.form()
     ids = []
@@ -702,7 +724,9 @@ async def delivery_retry(
 ):
     """Re-queue a failed delivery (attempts reset) and audit the retry."""
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     delivery = await delivery_service.get_delivery(session, delivery_id)
     if delivery is None:
@@ -721,7 +745,9 @@ async def delivery_release(
 ):
     """Release one gated delivery for sending and audit who released it."""
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     delivery = await delivery_service.get_delivery(session, delivery_id)
     if delivery is None:
@@ -744,7 +770,9 @@ async def delivery_cancel(
     retried, instead of disappearing from the queue without trace.
     """
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     delivery = await delivery_service.get_delivery(session, delivery_id)
     if delivery is None:
@@ -767,7 +795,9 @@ async def delivery_delete_from_channel(
     the row is the history, so it is never removed.
     """
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     delivery = await delivery_service.get_delivery(session, delivery_id)
     if delivery is None:
@@ -805,7 +835,9 @@ async def fields_page(request: Request, session: AsyncSession = Depends(session_
 async def field_confirm(request: Request, field_id: int, session: AsyncSession = Depends(session_dep)):
     """Freeze a field's category as human-curated (reviewers and admins)."""
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
 
     field = await field_service.get_field(session, field_id)
@@ -854,7 +886,9 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
 async def channel_route(request: Request, field_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
     """Route one field to one channel (admin only; row insert, no code change)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     await channel_service.add_field_route(session, field_id=field_id, channel_id=channel_id)
@@ -866,7 +900,9 @@ async def channel_route(request: Request, field_id: int = Form(...), channel_id:
 async def channel_unroute(request: Request, field_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
     """Remove one field→channel route (admin only)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     await channel_service.remove_field_route(session, field_id=field_id, channel_id=channel_id)
@@ -878,7 +914,9 @@ async def channel_unroute(request: Request, field_id: int = Form(...), channel_i
 async def channel_category_route(request: Request, category_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
     """Route one category to one channel (admin only; the primary mapping)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     await channel_service.add_category_route(session, category_id=category_id, channel_id=channel_id)
@@ -890,7 +928,9 @@ async def channel_category_route(request: Request, category_id: int = Form(...),
 async def channel_category_unroute(request: Request, category_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
     """Remove one category→channel route (admin only)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     await channel_service.remove_category_route(session, category_id=category_id, channel_id=channel_id)
@@ -927,7 +967,9 @@ async def routing_page(request: Request, field: str = "", record_id: str = "", s
 async def channel_toggle(request: Request, channel_id: int, session: AsyncSession = Depends(session_dep)):
     """Flip a channel's active switch (admin only)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await channel_service.get_channel(session, channel_id)
@@ -946,7 +988,9 @@ async def channel_update(
 ):
     """Update a channel's display fields (admin only; no tokens on rows)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await channel_service.get_channel(session, channel_id)
@@ -980,7 +1024,9 @@ async def channel_create(
     shown on the channel card right after redirect.
     """
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     target = target.strip()
     try:
@@ -1047,7 +1093,9 @@ async def panel_model_create(
 ):
     """Create a model row from the panel form (admin only)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
@@ -1074,7 +1122,9 @@ async def panel_model_create(
 async def panel_model_activate(request: Request, model_id: int, session: AsyncSession = Depends(session_dep)):
     """Activate one model atomically (exactly one active row)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await model_service.get_model(session, model_id)
@@ -1094,7 +1144,9 @@ async def panel_model_update(
 ):
     """Update the selected model's connection fields (admin only; name fixed)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await model_service.get_model(session, model_id)
@@ -1113,8 +1165,16 @@ async def panel_model_update(
 
 @panel_app.post("/models/{model_id}/test")
 async def panel_model_test(request: Request, model_id: int, session: AsyncSession = Depends(session_dep)):
-    """Probe one model with the shared 1-token helper; the key is never shown."""
+    """Probe one model with the shared 1-token helper; the key is never shown.
+
+    Admin only: the probe spends a real provider call against a configured
+    endpoint, so it is a configuration action, not a viewer capability.
+    """
     user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await model_service.get_model(session, model_id)
     if not row:
@@ -1151,7 +1211,9 @@ async def prompts_page(request: Request, session: AsyncSession = Depends(session
 async def panel_prompt_create(request: Request, version: str = Form(...), system_prompt: str = Form(...), session: AsyncSession = Depends(session_dep)):
     """Create a new prompt version as a new row (never edits in place)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
@@ -1173,7 +1235,9 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
 async def panel_prompt_activate(request: Request, prompt_id: int, session: AsyncSession = Depends(session_dep)):
     """Activate one prompt version atomically (previous stays as history)."""
     user = await require_login(request, session)
-    if not _is_admin(user):
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await prompt_service.get_prompt(session, prompt_id)
@@ -1211,7 +1275,9 @@ async def submit_create(
     """Create a thesis job from the panel form (same flow as POST /submit)."""
 
     user = await require_login(request, session)
-    if not _can_review(user):
+    try:
+        _require_role(user, Action.SUBMIT_RECORD)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     mid = int(model_id) if model_id.strip().isdigit() else None
     pid = int(prompt_id) if prompt_id.strip().isdigit() else None
@@ -1246,19 +1312,47 @@ async def submit_create(
 
 
 def _require_admin_or_403(request: Request, user):
-    """Render the 403 page unless the user is an admin (management pages)."""
-    if not _is_admin(user):
+    """Kept for the users GET page; every other route calls ``_require_role``."""
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     return None
+
+
+#: Path -> the action it protects, for routes whose guard is reached through a
+#: helper (so ``tests/test_authz_matrix.py`` can assert the mapping).
+GUARDED_ROUTES: dict[str, str] = {
+    "/users": "MANAGE_USERS",
+    "/users/{user_id}/role": "MANAGE_USERS",
+    "/users/{user_id}/toggle": "MANAGE_USERS",
+    "/users/{user_id}/password": "MANAGE_USERS",
+    "/users/{user_id}/delete": "MANAGE_USERS",
+    "/audit": "VIEW_AUDIT",
+    "/deliveries/{delivery_id}/retry": "RETRY_DELIVERY",
+    "/deliveries/{delivery_id}/release": "RETRY_DELIVERY",
+    "/deliveries/{delivery_id}/cancel": "RETRY_DELIVERY",
+    "/deliveries/{delivery_id}/delete-from-channel": "RETRY_DELIVERY",
+    "/submit": "SUBMIT_RECORD",
+    "/records/{record_id}/regenerate": "REVIEW_RECORD",
+}
+
+#: Routes whose guard is ``require_login`` rather than a role check: a signed-in
+#: user may always manage their own account, whatever their role. They still
+#: require the current password, which is the real check.
+SELF_SERVICE_ROUTES: frozenset[str] = frozenset({
+    "/profile/password",
+})
 
 
 @panel_app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request, session: AsyncSession = Depends(session_dep)):
     """List console users with the role access matrix (admin only)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     users = await user_service.list_users(session)
     roles = await user_service.list_roles(session)
@@ -1274,9 +1368,10 @@ async def user_create(
 ):
     """Create a console user with an argon2-hashed password (admin only)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     if role not in ("admin", "editor", "viewer"):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
 
@@ -1299,9 +1394,10 @@ async def user_create(
 async def user_change_role(request: Request, user_id: int, role: str = Form(...), session: AsyncSession = Depends(session_dep)):
     """Change a console user's role (admin only)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     if role not in ("admin", "editor", "viewer"):
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
 
@@ -1320,9 +1416,10 @@ async def user_change_role(request: Request, user_id: int, role: str = Form(...)
 async def user_toggle(request: Request, user_id: int, session: AsyncSession = Depends(session_dep)):
     """Activate/deactivate a console user (admin only; never deletes)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await user_service.get_user(session, user_id)
     if not row:
@@ -1339,9 +1436,10 @@ async def user_toggle(request: Request, user_id: int, session: AsyncSession = De
 async def user_reset_password(request: Request, user_id: int, new_password: str = Form(...), session: AsyncSession = Depends(session_dep)):
     """Set any user's password (admin only; audited, never stored plaintext)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await user_service.get_user(session, user_id)
     if not row:
@@ -1406,9 +1504,10 @@ async def user_delete(request: Request, user_id: int, session: AsyncSession = De
     rows and hard-deletes only users with no audit trail.
     """
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.MANAGE_USERS)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     row = await user_service.get_user(session, user_id)
     if not row:
@@ -1434,9 +1533,10 @@ async def audit_page(
 ):
     """Show the immutable audit trail with filters (admin only)."""
     user = await require_login(request, session)
-    denied = _require_admin_or_403(request, user)
-    if denied is not None:
-        return denied
+    try:
+        _require_role(user, Action.VIEW_AUDIT)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
     page = max(1, page)
     page_size = 20
     action_f = action or None

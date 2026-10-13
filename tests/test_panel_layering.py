@@ -22,9 +22,11 @@ PANEL_DIR = Path("app/panel")
 ALLOWED_PANEL_IMPORTS = {
     "app.config",
     "app.panel.auth",
+    "app.panel.authz",
     "app.panel.csrf",
     "app.services",
     "app.services.audit",
+    "app.services.errors",
     "app.services.channels",
     "app.services.deliveries",
     "app.services.fields",

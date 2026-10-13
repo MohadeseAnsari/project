@@ -52,11 +52,23 @@ HttpOnly, Lax, Secure behind the proxy) keeps the login.
 
 ## Roles
 
-| Role | Capabilities |
+The whole policy lives in `app/panel/authz.py`: an `Action` enum, one
+`ROLE_ACTIONS` table, and `can()`/`require()`. Routes never re-implement a
+role check — they call `_require_role(user, Action.X)` and map the raised
+`PermissionDenied` to the 403 page — so "who may do what" has a single
+answer. `tests/test_authz_matrix.py` pins the matrix, fails if any POST
+route lacks a guard, and exercises it over HTTP.
+
+| Role | Actions |
 |---|---|
-| `viewer` (بیننده) | Read-only: views every page, every mutation returns 403 |
-| `editor` (بازبین) | Review: records list/detail (approve/reject/save_draft), delivery retry, submit form |
-| `admin` (ادمین) | Everything above plus models/prompts/channels/users management and the audit trail |
+| `viewer` (بیننده) | `VIEW_RECORDS` only — every page is reachable, every mutation returns 403 |
+| `editor` (بازبین) | + `REVIEW_RECORD`, `RETRY_DELIVERY` (retry/release/cancel/delete-from-channel), `SUBMIT_RECORD`, `FIELD_CURATE` |
+| `admin` (ادمین) | + `MANAGE_CONFIG` (models/prompts/channels/routing/categories, model test), `MANAGE_USERS`, `VIEW_AUDIT` |
+
+Unknown roles fail closed (no permissions). `/profile/password` is
+self-service for any signed-in user (the current password is the real check),
+and `/login` is pre-session; both are listed explicitly in the module rather
+than silently unguarded.
 
 Every review/retry/config change is written to `audit_logs` (who, action,
 record, detail) and shown on the record detail page as history and on the
