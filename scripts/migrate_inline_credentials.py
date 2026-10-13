@@ -71,9 +71,16 @@ async def main() -> int:
 
         await session.commit()
 
+    migrated_any = bool(moved_models or moved_channels)
     print(f"models migrated: {moved_models} (of {cleared_models} inline values cleared)")
     print(f"channels migrated: {moved_channels}")
     print("Rotate every key that was stored inline — it was plaintext in the database.")
+    if migrated_any:
+        print(
+            "Note: if the panel shows '! کلید خودش لازم است' for a migrated row, its "
+            "ciphertext was written under a master key that no longer exists. Re-enter "
+            "that key in the panel (this is the expected, loud failure, not a bug)."
+        )
     return 0
 
 
