@@ -155,17 +155,19 @@ class AuditLog(Base):
 class Main(Base):
     """The thesis/news record and job-state queue entry.
 
-    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``,
-    plus ``rejected`` for an explicit human rejection from ``review``.
+    Status lifecycle (one state machine, ``app/services/transitions.py``):
+    ``ready`` → ``processing`` → ``review`` → ``approved`` → ``published``,
+    plus ``rejected`` (human rejection from ``review``) and ``failed``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
     ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
-    auditability of the classification and generation configuration used.
+    auditability of the classification and generation configuration used;
+    ``approved_at``/``published_at`` record the decision/publication times.
     """
 
     __tablename__ = "main"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('ready', 'processing', 'review', 'failed', 'rejected')",
+            "status IN ('ready', 'processing', 'review', 'approved', 'published', 'failed', 'rejected')",
             name="ck_main_status",
         ),
         Index("ix_main_status_created_at", "status", "created_at"),

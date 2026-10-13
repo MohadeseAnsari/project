@@ -150,13 +150,33 @@ erDiagram
 ```
 
 `main.status` is the generation lifecycle: `ready`, `processing`, `review`,
-`failed`, plus `rejected` (explicit human rejection from `review` via
-`PATCH /records/{id}`). Approval deliberately keeps `status='review'` (no
-state-machine change); `approved_at`/`published_at` timestamps distinguish
-approved and published articles instead — "needs review" means
-`status='review' AND approved_at IS NULL`. `deliveries.status` is the separate publishing lifecycle:
-`pending`, `sending`, `sent`, `failed`, `awaiting_confirmation` (gated initial
-status while `REQUIRE_HUMAN_CONFIRMATION` is on; approval flips it to `pending`).
+`approved`, `published`, `failed`, `rejected` (explicit human rejection from
+`review`). The allowed transitions live in exactly one place,
+`app/services/transitions.py` (`RECORD_TRANSITIONS` / `DELIVERY_TRANSITIONS`),
+and no route sets a status by hand:
+
+```
+ready --claim--> processing --generated--> review --approve--> approved --sent--> published
+                     |                          |                                 (terminal)
+                     | error                    | reject -> rejected (terminal)
+                     v                          +-- regenerate fails -> failed --regenerate--> review
+                   failed
+```
+
+`review -> published` also exists for deployments running with
+`REQUIRE_HUMAN_CONFIRMATION=false`: there the first successful send is the
+decision point. `approved_at`/`published_at` stamp the decision and the first
+publication (first-wins), but the statuses now carry the same facts, so the
+panel never infers "approved" from a timestamp — this is what fixed the
+records that stayed in "نیازمند تأیید" after their deliveries were sent.
+Migration `016` widened the `ck_main_status` CHECK and backfilled
+already-approved/published rows.
+
+`deliveries.status` is the separate publishing lifecycle:
+`awaiting_confirmation`, `pending`, `sending`, `sent`, `failed`
+(and `deleted_from_channel` when an operator deletes the published message):
+`awaiting_confirmation` is the gated initial status while
+`REQUIRE_HUMAN_CONFIRMATION` is on; approving the record flips it to `pending`.
 
 An article reaches a channel through field → category → channels:
 `category_channel_routes` is the primary mapping the sender consults first,

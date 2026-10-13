@@ -111,16 +111,61 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - The browser never talks to PostgreSQL directly: every page is rendered
   server-side, and HTMX partials hit panel routes that query through services.
 - `app/services/` holds one module per domain (`records`, `deliveries`,
-  `models`, `prompts`, `channels`, `fields`, `users`): every shared query
-  and state transition lives there exactly once. Both the panel routes and
-  the machine API routes call the same functions; no route contains ad-hoc
-  SQL.
-- Routes keep HTTP, auth, and response mapping (including Persian display
-  text and audit calls with the acting user); services raise plain
-  `ValueError`s with stable messages that routes map to statuses/pages.
-- Single-row primary-key fetches, auth/session handling, and page assembly
-  stay in routes by design — services own multi-clause domain queries,
-  transitions, and anything both layers need.
+  `models`, `prompts`, `channels`, `routing`, `fields`, `users`, `audit`,
+  `passwords`, `transitions`): every shared query and state transition lives
+  there exactly once. Both the panel routes and the machine API routes call
+  the same functions; no route contains ad-hoc SQL.
+- **The panel is a client of the backend, enforced by tests.** No module under
+  `app/panel/` may import `app/db/connection.py` (`async_session`, `engine`)
+  or any ORM model; routes receive one session per request from
+  `app.services.session_dep` and hand it to services.
+  `tests/test_panel_layering.py` fails on a single violation (AST-based, so
+  even a function-local import is caught) and additionally asserts that every
+  registered panel route calls at least one service function.
+- Services raise plain `ValueError`s with stable codes (`not-in-review`,
+  `duplicate-username`, `not-retryable`, `weak-password`, …); routes map them
+  to HTTP statuses and Persian messages. Nothing reaches the browser as a
+  stack trace.
+- Password hashing lives in `app/services/passwords.py` and is called by the
+  users service, not by routes: plaintext enters `create_user_with_password`,
+  `reset_password` or `change_own_password`, and only the argon2 hash is
+  stored.
+- Services never render and never audit with a UI identity: routes pass the
+  acting `user_id` to `audit_service.record_event`.
+
+## State machine (one place, always reflected in the UI)
+
+`app/services/transitions.py` defines the allowed transitions for both
+lifecycles and raises `InvalidTransition` for anything else; the Workers, the
+machine API and the panel all go through it, and **no route sets a status by
+hand** (diagram in [erd.md](erd.md)).
+
+Records: `ready → processing → review → approved → published`, plus `rejected`
+and `failed`. Deliveries: `awaiting_confirmation → pending → sending → sent`,
+plus `failed` and `deleted_from_channel`.
+
+What the operator sees follows from those states, not from timestamps:
+
+- approving moves the record to `approved`, so it leaves the "needs review"
+  list and KPI immediately and shows who approved it and when;
+- the first successful send moves it to `published` (the fix for records that
+  sat in "نیازمند تأیید" while their deliveries were already sent);
+- rejecting shows `rejected`; the needs-review KPI is a plain count of
+  `status='review'`, so it is exact by construction;
+- `review`, `approved` and `published` records still queue a delivery for a
+  channel routed *later*, created directly as `pending` because the human
+  decision already happened.
+
+## CSRF
+
+Every panel POST form embeds a session-bound CSRF token
+(`app/panel/csrf.py`), validated by the `verify_csrf` FastAPI dependency on
+`panel_app`: Origin/Host always, plus the token outside the documented
+`/login` + `/logout` exemptions. Failures render a Persian 400 page. It is a
+dependency rather than `@app.middleware("http")` on purpose — a middleware
+reads the form on a *different* `Request` object and consumes the ASGI
+stream, after which the endpoint's `Form(...)` parameters arrive empty.
+Session cookies are `HttpOnly` + `SameSite=Lax` (`Secure` behind TLS).
 
 ## Database
 

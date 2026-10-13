@@ -51,11 +51,13 @@ async def test_approve_flips_gated_deliveries(session: AsyncSession):
     async with _client() as client:
         response = await client.patch(f"/records/{row.id}", json=_payload("approve"))
     assert response.status_code == 200
-    assert response.json()["status"] == "review"
+    assert response.json()["status"] == "approved"
     delivery = (
         await session.execute(select(Delivery).where(Delivery.main_id == row.id))
     ).scalar_one()
     assert delivery.status == "pending"
+    await session.refresh(row)
+    assert row.status == "approved"
 
 
 @pytest.mark.asyncio

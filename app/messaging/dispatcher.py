@@ -27,6 +27,7 @@ from app.config import settings
 from app.db.models import CategoryChannelRoute, Channel, Delivery, FieldChannelRoute, Main
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
+from app.services.transitions import assert_delivery_transition, assert_record_transition
 
 logger = logging.getLogger(__name__)
 
@@ -317,8 +318,11 @@ def _has_undelivered_channel():
 async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     """Create pending deliveries for processed articles that lack them.
 
-    An article qualifies when it is ``review`` with a usable ``output_json`` AND
-    at least one channel it resolves to has no delivery row yet.
+    An article qualifies when it is ``review``/``approved``/``published`` with
+    a usable ``output_json`` AND at least one channel it resolves to has no
+    delivery row yet (``approved``/``published`` matter when a channel is
+    routed after the article was already approved — its delivery is created
+    directly as ``pending`` because the human decision already happened).
 
     The "still needs sending" test is an anti-join expressed in SQL, not a
     Python filter applied after ``LIMIT``. That distinction is load-bearing: if
@@ -330,11 +334,12 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     ``LIMIT`` only ever counts articles that have real work to do.
 
     Human gate: when ``settings.require_human_confirmation`` is True (default),
-    new rows are created as ``awaiting_confirmation`` so nothing publishes
-    without explicit approval; approving flips them to ``pending``. When False,
-    rows are created as ``pending`` directly (the pre-gate behaviour). The gate
-    only changes the initial status — the anti-join/LIMIT selection above is
-    unchanged.
+    rows for ``review`` articles are created as ``awaiting_confirmation`` so
+    nothing publishes without explicit approval; approving the record moves it
+    to ``approved`` and flips its gated deliveries to ``pending``. When False
+    (or the article is already approved/published), rows are created as
+    ``pending`` directly. The gate only changes the initial status — the
+    anti-join/LIMIT selection above is unchanged.
 
     The per-article ``already`` set below is kept as a race guard for a second
     sender replica inserting between the SELECT and the INSERT; the unique
@@ -345,7 +350,7 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     """
     result = await session.execute(
         select(Main)
-        .where(Main.status == "review")
+        .where(Main.status.in_(("review", "approved", "published")))
         .where(Main.output_json.isnot(None))
         .where(_has_undelivered_channel())
         .order_by(Main.id)
@@ -374,17 +379,20 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
                     channel.id,
                 )
                 continue
+            # The human gate applies only before the approval decision: a
+            # 'review' article queues as awaiting_confirmation (gate on);
+            # an already-approved/published article queues directly as
+            # pending (the decision already happened).
+            gated = (
+                article.status == "review" and settings.require_human_confirmation
+            )
             session.add(
                 Delivery(
                     main_id=article.id,
                     channel_id=channel.id,
                     category_id=article.category_id,
                     route_source=route_source,
-                    status=(
-                        "awaiting_confirmation"
-                        if settings.require_human_confirmation
-                        else "pending"
-                    ),
+                    status="awaiting_confirmation" if gated else "pending",
                     attempts=0,
                 )
             )
@@ -464,6 +472,7 @@ async def claim_next_delivery(session) -> Delivery | None:
     )
     delivery = result.scalar_one_or_none()
     if delivery:
+        assert_delivery_transition(delivery.status, "sending")
         delivery.status = "sending"
         delivery.attempts += 1
         delivery.claimed_at = now
@@ -497,15 +506,29 @@ async def load_delivery_context(session, delivery: Delivery) -> tuple[Main, Chan
 
 
 async def mark_sent(session, delivery: Delivery, platform_message_id: int) -> None:
-    """Record a successful send; stamp the article published on first send."""
+    """Record a successful send; stamp the article published on first send.
+
+    The record moves to ``published`` (approved -> published when the human
+    gate ran; review -> published when the gate is off and the first send
+    is also the approval-equivalent). ``published_at`` stamps first-wins.
+    """
     from sqlalchemy import update
 
+    assert_delivery_transition(delivery.status, "sent")
     delivery.status = "sent"
     delivery.sent_at = datetime.utcnow()
     delivery.platform_message_id = platform_message_id
     delivery.claimed_at = None
     delivery.error_message = None
     delivery.updated_at = datetime.utcnow()
+    # Move the article to published (only from a pre-publication status).
+    article = await session.get(Main, delivery.main_id)
+    if article is not None and article.status in ("review", "approved"):
+        assert_record_transition(article.status, "published")
+        article.status = "published"
+        if article.published_at is None:
+            article.published_at = datetime.utcnow()
+        article.updated_at = datetime.utcnow()
     await session.execute(
         update(Main)
         .where(Main.id == delivery.main_id)
@@ -528,6 +551,7 @@ async def mark_retry(session, delivery: Delivery, error: str, delay_seconds: flo
     Keeps the attempt count so the backoff grows and the attempt cap can be
     enforced by the caller.
     """
+    assert_delivery_transition(delivery.status, "pending")
     delivery.status = "pending"
     delivery.claimed_at = None
     delivery.error_message = error[:_MAX_ERROR_LENGTH]
@@ -545,6 +569,7 @@ async def mark_retry(session, delivery: Delivery, error: str, delay_seconds: flo
 
 async def mark_failed(session, delivery: Delivery, error: str) -> None:
     """Park a delivery in ``failed`` with its error, for manual inspection."""
+    assert_delivery_transition(delivery.status, "failed")
     delivery.status = "failed"
     delivery.claimed_at = None
     delivery.error_message = error[:_MAX_ERROR_LENGTH]

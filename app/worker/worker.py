@@ -32,6 +32,7 @@ from app.db.models import Category, Field, Main, Model, Prompt
 from app.fields.classification import classify_with_reason
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
+from app.services.transitions import assert_record_transition
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ async def recover_stale_jobs(session) -> int:
         Number of jobs recovered.
     """
     cutoff = datetime.utcnow() - timedelta(minutes=settings.worker_lease_minutes)
+    # processing -> ready is a declared transition (see app.services.transitions).
+    assert_record_transition("processing", "ready")
     result = await session.execute(
         update(Main)
         .where(Main.status == "processing")
@@ -79,6 +82,7 @@ async def claim_next_job(session) -> Main | None:
     )
     job = result.scalar_one_or_none()
     if job:
+        assert_record_transition(job.status, "processing")
         job.status = "processing"
         job.claimed_at = datetime.utcnow()
         job.heartbeat_at = datetime.utcnow()
@@ -246,6 +250,7 @@ async def process_job(session, job: Main) -> None:
         await heartbeat_task
 
     job.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
+    assert_record_transition(job.status, "review")
     job.status = "review"
     job.updated_at = datetime.utcnow()
     await session.commit()
@@ -258,6 +263,8 @@ async def fail_job(session, job: Main, error: str) -> None:
     The error message is truncated to 2000 characters to fit the column and
     never contains secrets (only exception text from the LLM/provider).
     """
+    if job.status != "failed":
+        assert_record_transition(job.status, "failed")
     job.status = "failed"
     job.error_message = error[:2000]
     job.updated_at = datetime.utcnow()

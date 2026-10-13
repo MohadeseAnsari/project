@@ -1,7 +1,7 @@
-"""Tests for the explicit publishing timestamps (no new status).
+"""Tests for the explicit record lifecycle statuses (approved, published).
 
-Approve keeps ``status='review'``; ``approved_at``/``published_at`` tell
-approved and published articles apart from unreviewed ones.
+Approve moves ``status='review' -> 'approved'``; the first successful send
+moves it to ``published``. Timestamps stamp once, first-wins.
 """
 
 from datetime import datetime
@@ -35,25 +35,30 @@ async def _review(session: AsyncSession, **extra) -> Main:
 
 
 @pytest.mark.asyncio
-async def test_approve_stamps_once(session: AsyncSession):
-    """First approval wins; re-approving never rewrites who/when."""
+async def test_approve_stamps_once_and_moves_status(session: AsyncSession):
+    """First approval wins: status becomes 'approved', timestamp never rewritten."""
     row = await _review(session)
     async with _client() as client:
         first = await client.patch(f"/records/{row.id}", json={**_secret(), "action": "approve"})
         assert first.status_code == 200
+        assert first.json()["status"] == "approved"
         assert first.json()["approved_at"] is not None
         stamped = first.json()["approved_at"]
+        # Approving twice is refused (not in review any more) and never rewrites
+        # who/when approved.
         second = await client.patch(f"/records/{row.id}", json={**_secret(), "action": "approve"})
-        assert second.status_code == 200
-        assert second.json()["approved_at"] == stamped
-        assert second.json()["status"] == "review"
+        assert second.status_code == 409
+    await session.refresh(row)
+    assert row.status == "approved"
+    assert row.approved_at is not None
 
 
 @pytest.mark.asyncio
 async def test_records_approved_filter(session: AsyncSession):
-    """approved=true/false splits reviewed rows; omitted means all."""
+    """approved=true/false splits the lifecycle by status; omitted means all."""
     await _review(session)
     approved = await _review(session)
+    approved.status = "approved"
     approved.approved_at = datetime.utcnow()
     await session.commit()
     async with _client() as client:
@@ -64,8 +69,8 @@ async def test_records_approved_filter(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_first_send_stamps_published_once(session: AsyncSession):
-    """mark_sent stamps published_at on first send and never overwrites it."""
+async def test_first_send_publishes_record_once(session: AsyncSession):
+    """mark_sent flips the record to 'published' on first send and never overwrites."""
     from app.messaging.dispatcher import claim_next_delivery, deliver_one
 
     row = await _review(session)
@@ -83,6 +88,7 @@ async def test_first_send_stamps_published_once(session: AsyncSession):
     claimed = await claim_next_delivery(session)
     assert await deliver_one(session, claimed, {"bale": StubClient()}) is True
     await session.refresh(row)
+    assert row.status == "published"
     assert row.published_at is not None
     stamped = row.published_at
 
@@ -92,3 +98,4 @@ async def test_first_send_stamps_published_once(session: AsyncSession):
     assert await deliver_one(session, claimed, {"telegram": StubClient()}) is True
     await session.refresh(row)
     assert row.published_at == stamped
+    assert row.status == "published"

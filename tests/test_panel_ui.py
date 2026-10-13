@@ -637,7 +637,7 @@ async def test_approved_record_leaves_review_list(session: AsyncSession):
     )
     done = Main(
         username="t", title="Done", abstract="A", field="پزشکی", university="U",
-        author="A", supervisor="S", status="review", approved_at=datetime.utcnow(),
+        author="A", supervisor="S", status="approved", approved_at=datetime.utcnow(),
         output_json={"title": "T", "lead": "L", "body": "B"},
     )
     session.add_all([fresh, done])
@@ -695,6 +695,7 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
     for record_id in ids:
         session.expire_all()
         row = await session.get(Main, record_id)
+        assert row.status == "approved"
         assert row.approved_at is not None
     actions = sorted(
         (await session.execute(select(AuditLog.action).where(AuditLog.action == "approve"))).scalars().all()
@@ -742,7 +743,7 @@ async def test_panel_release_is_audited(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_dashboard_review_kpi_excludes_approved(session: AsyncSession):
-    """The 'needs review' KPI counts review rows with approved_at NULL only."""
+    """The 'needs review' KPI counts exactly the 'review' rows (approved left)."""
     from datetime import datetime
 
     from app.db.models import Main
@@ -755,7 +756,7 @@ async def test_dashboard_review_kpi_excludes_approved(session: AsyncSession):
     ))
     session.add(Main(
         username="t", title="Done", abstract="A", field="پزشکی", university="U",
-        author="A", supervisor="S", status="review", approved_at=datetime.utcnow(),
+        author="A", supervisor="S", status="approved", approved_at=datetime.utcnow(),
         output_json={"title": "T", "lead": "L", "body": "B"},
     ))
     await session.commit()

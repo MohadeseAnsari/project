@@ -36,6 +36,12 @@ HttpOnly, Lax, Secure behind the proxy) keeps the login.
   server-side alike. Every other panel route requires login (anonymous
   browsers redirect to `/login`); there are no debug routes and no
   unauthenticated listing endpoints.
+- **CSRF.** Every POST form embeds a session-bound token
+  (`app/panel/csrf.py`) validated by the `verify_csrf` dependency before the
+  endpoint runs; a missing/invalid token or a foreign `Origin` returns a
+  Persian 400. The session cookie is `HttpOnly` + `SameSite=Lax` (`Secure`
+  behind the TLS proxy). `/login` is exempt from the token (pre-session, the
+  Origin check still applies); `/logout` only clears the signed cookie.
 - The app trusts `X-Forwarded-For` / `X-Forwarded-Proto` only from the local
   proxy: loopback peers always, plus networks in `PANEL_TRUSTED_PROXIES`
   (set to the compose bridge subnet, since inside Docker the host proxy
@@ -73,7 +79,8 @@ global `/audit` page.
 | Login | `GET /login`, `POST /login` | `panel_users` + argon2 verify; sets signed cookie; audits `login` |
 | Dashboard | `GET /` | Same `GROUP BY` counts as `GET /stats` (records/deliveries per status) + `MAX(main.heartbeat_at)` + 10 newest records. Shows no timings. |
 | Records list | `GET /records`, `GET /records/table` (HTMX) | SQL `LIMIT/OFFSET + COUNT` with `status/field/university/q/order` filters (same semantics as `GET /records` API) |
-| Record review | `GET /records/{id}`, `POST /records/{id}/review`, `POST /records/bulk-approve` | Editable `title/lead/body` (`output_json`); `approve` flips `awaiting_confirmation→pending` via `confirm_deliveries_for_article` and stamps `approved_at` (first wins); `reject` → `rejected`; `save_draft` edits only. Only from `review` (else 409 page). Review list defaults to needs-review (`approved_at IS NULL`); detail shows stored vs current category and approver/when. Bulk approves eligible rows, skips the rest. Audited. |
+| Record review | `GET /records/{id}`, `POST /records/{id}/review`, `POST /records/bulk-approve` | Editable `title/lead/body` (`output_json`); `approve` moves the record `review -> approved` (status + `approved_at`, first wins) and flips `awaiting_confirmation -> pending` via `confirm_deliveries_for_article`; `reject` -> `rejected`; `save_draft` edits only. Review actions are only legal from `review` (else 409). The review list defaults to undecided rows (status filter, `approved=no`), so an approved record leaves it immediately; detail shows stored vs current category, approver/when, and for a sent article the `published` status. Bulk approves eligible rows, skips the rest. Audited. |
+| Record regenerate | `POST /records/{id}/regenerate` | `record_service.regenerate` — same resolution + generation path as the Worker; success returns the record to `review`, provider errors park it `failed` with the error text. Audited either way. |
 | Deliveries | `GET /deliveries`, `GET /deliveries/table` (HTMX), `POST /deliveries/{id}/retry`, `POST /deliveries/{id}/release` | Filters `status/platform/main_id` with per-row route provenance; retry only `failed` (else 409), resets `attempts=0`; release only `awaiting_confirmation` (else 409, attempts kept). Gate counts explain why nothing was sent yet. Audited. |
 | Submit form | `GET /submit`, `POST /submit` | Creates `main(status='ready')` with validated optional `model_id`/`prompt_id` (same rules as `POST /submit` API). Audited. |
 | Models | `GET /models`, `POST /models`, `POST /models/{id}/activate`, `POST /models/{id}/test` | List/create/detail; single-active activate (atomic); 1-token real connection probe (key never returned/logged). Admin only for mutations. |
@@ -108,20 +115,24 @@ this panel is the only place counts appear.
 
 ## Wiring: one system, not a parallel app
 
-1. **One database.** The panel uses the same PostgreSQL instance and tables
-   through `app/db/connection.py` (`async_session`) and `app/db/models.py`.
-   No second database, schema copy, model set, or cache exists.
-2. **Shared domain logic.** Intake lives in `app/submissions.py`
-   (`create_thesis_record`), used by both `POST /submit` and the panel form.
-   Generation resolution lives in `app/news/generation.py`
-   (`resolve_generation_config`), used by both the Worker and the panel
-   regenerate action; the probe (`probe_model_connection`) is shared by the
-   API test-connection and the panel test button. Route resolution and message
-   preview use the sender's own `channels_for_article` / `render_article`.
-   Nothing is copied between worker and panel.
-3. **Same state machine.** `main`: `ready|processing|review|failed` plus
-   `rejected` (added *with* migration `006`, human reject only); `deliveries`:
-   `pending|sending|sent|failed|awaiting_confirmation`. No other values exist.
+1. **One database, one access path.** The panel reaches PostgreSQL only
+   through `app/services/*`: no module under `app/panel/` may import
+   `app/db/connection.py` or an ORM model, and every panel route must call a
+   service. `tests/test_panel_layering.py` enforces both by parsing the
+   modules (AST, so local imports count).
+2. **Shared domain logic.** Intake lives in `records.create_thesis_record`,
+   used by both `POST /submit` and the panel form. Generation resolution and
+   regeneration live in `records.regenerate` +
+   `app/news/generation.resolve_generation_config`, used by the Worker and the
+   panel; the probe (`models.test_model_connection`) is shared by the API
+   test-connection and the panel test button. Route resolution and message
+   preview use `routing_service.preview` / `render_article`, the same code the
+   sender runs. Password hashing lives in `services/passwords.py`, called by
+   the users service. Nothing is copied between worker and panel.
+3. **Same state machine.** `app/services/transitions.py` defines record
+   (`ready|processing|review|approved|published|failed|rejected`) and delivery
+   (`awaiting_confirmation|pending|sending|sent|failed|deleted_from_channel`)
+   transitions; the panel, the API and both Workers all go through it.
 4. **Panel submit = machine submit.** Both insert `main(status='ready')`; the
    Worker claims it on its next poll with no glue.
 5. **One writer per concern.** The panel never calls Bale/Telegram and never
@@ -134,6 +145,9 @@ this panel is the only place counts appear.
    machine shared secret never reaches the browser.
 8. **Same config.** The panel reads `app/config.py` and the same `.env`,
    adding only `PANEL_SECRET_KEY` (+ panel login credentials).
+9. **CSRF.** Every POST form carries a session-bound token validated by the
+   `verify_csrf` dependency; the session cookie is `SameSite=Lax` and origin
+   is checked. Covered by `tests/test_panel_csrf.py`.
 9. **End-to-end proof.** `tests/test_panel_e2e.py` drives the whole chain
    (panel submit → worker → gated delivery → panel approve → sender → sent,
    LLM + platform stubbed). Live proof on 2026-10-08: panel record 41 went
