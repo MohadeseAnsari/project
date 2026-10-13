@@ -288,10 +288,13 @@ class Delivery(Base):
     sent" answerable: once a field fans out to several channels an article has
     many independent send states, each with its own attempts and error.
 
-    Status lifecycle: ``pending`` → ``sending`` → ``sent`` | ``failed``, with
-    ``pending`` returned after a retryable failure. ``awaiting_confirmation``
-    is the gated initial status when ``REQUIRE_HUMAN_CONFIRMATION`` is on:
-    approval flips it to ``pending``.
+    Status lifecycle (one state machine,
+    ``app/services/transitions.py``): ``awaiting_confirmation`` → ``pending``
+    → ``sending`` → ``sent``, plus ``failed`` (with ``pending`` after a
+    retryable failure or an operator cancel) and ``deleted_from_channel``
+    (the operator removed the published message; the row is kept as history).
+    ``awaiting_confirmation`` is the gated initial status when
+    ``REQUIRE_HUMAN_CONFIRMATION`` is on: approval flips it to ``pending``.
 
     ``category_id``/``route_source`` snapshot which category and which route
     level (``category`` | ``field`` | ``fallback``) produced the row, so a
@@ -306,7 +309,8 @@ class Delivery(Base):
     __tablename__ = "deliveries"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'sending', 'sent', 'failed', 'awaiting_confirmation')",
+            "status IN ('awaiting_confirmation', 'pending', 'sending', 'sent', "
+            "'failed', 'deleted_from_channel')",
             name="ck_deliveries_status",
         ),
         Index("ix_deliveries_status_next_attempt", "status", "next_attempt_at"),

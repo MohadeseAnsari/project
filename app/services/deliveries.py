@@ -8,6 +8,7 @@ error pages.
 from sqlalchemy import func, select
 
 from app.db.models import Channel, Delivery, Main
+from app.services.transitions import assert_delivery_transition
 
 
 def delivery_filters(
@@ -187,6 +188,55 @@ async def release_delivery(session, delivery: Delivery) -> Delivery:
     delivery.updated_at = datetime.utcnow()
     await session.commit()
     await session.refresh(delivery)
+    return delivery
+
+
+async def cancel_delivery(session, delivery: Delivery) -> Delivery:
+    """Cancel a delivery that has not been sent yet.
+
+    The recovery action for a delivery the operator no longer wants to send
+    (wrong channel, duplicate queue, article rejected later). Only rows that
+    have NOT left for the platform can be cancelled — ``sending`` is already
+    in flight, and ``sent`` cannot be un-sent (use
+    :func:`mark_deleted_from_channel` for that).
+
+    Raises:
+        ValueError: ``not-cancellable`` for anything else.
+    """
+    from datetime import datetime
+
+    if delivery.status not in ("awaiting_confirmation", "pending", "failed"):
+        raise ValueError("not-cancellable")
+    assert_delivery_transition(delivery.status, "failed")
+    delivery.status = "failed"
+    delivery.claimed_at = None
+    delivery.error_message = (delivery.error_message or "") + (
+        "" if not delivery.error_message else " | "
+    ) + "cancelled by operator"
+    delivery.next_attempt_at = datetime.utcnow()
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
+    return delivery
+
+
+async def mark_deleted_from_channel(session, delivery: Delivery) -> Delivery:
+    """Record that the operator deleted the published message from the channel.
+
+    Final state of the delivery lifecycle: the message is gone from the
+    channel but the row (and its message id) stays as history — deliveries
+    are never hard-deleted.
+
+    Raises:
+        ValueError: ``not-sent`` when the message was never published.
+    """
+    from datetime import datetime
+
+    if delivery.status != "sent":
+        raise ValueError("not-sent")
+    assert_delivery_transition("sent", "deleted_from_channel")
+    delivery.status = "deleted_from_channel"
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
     return delivery
 
 

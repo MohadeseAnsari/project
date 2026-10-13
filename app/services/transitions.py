@@ -36,9 +36,15 @@ RECORD_TRANSITIONS: dict[str, set[str]] = {
 }
 
 #: Allowed delivery transitions.
+#:
+#: ``awaiting_confirmation -> failed`` and ``pending -> failed`` exist for the
+#: operator's cancel action: an unsent delivery is parked as ``failed`` with a
+#: "cancelled by operator" note (it stays visible and retryable from there,
+#: rather than vanishing). ``sending`` is NOT cancellable — the platform call
+#: is already in flight, so only the outcome can still be recorded.
 DELIVERY_TRANSITIONS: dict[str, set[str]] = {
-    "awaiting_confirmation": {"pending"},
-    "pending": {"sending"},
+    "awaiting_confirmation": {"pending", "failed"},
+    "pending": {"sending", "failed"},
     "sending": {"sent", "failed", "pending"},  # ->pending: retry/backoff/recovery
     "sent": {"deleted_from_channel"},
     "failed": {"pending"},  # retry (manual release)

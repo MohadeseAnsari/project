@@ -16,6 +16,7 @@
         {% elif d.status == 'failed' %}<span class="badge s-failed">! ناموفق</span>
         {% elif d.status == 'pending' %}<span class="badge s-ready">… در صف ارسال</span>
         {% elif d.status == 'sending' %}<span class="badge s-processing">… در حال ارسال</span>
+        {% elif d.status == 'deleted_from_channel' %}<span class="badge s-off">حذف‌شده از کانال</span>
         {% else %}<span class="badge s-off">در انتظار تأیید</span>{% endif %}
       </td>
       <td>
@@ -25,6 +26,13 @@
         <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">آزادسازی</button></form>
         {% else %}
         <a class="rowbtn" href="/records/{{ d.main_id }}" style="text-decoration:none">مشاهدهٔ خبر</a>
+        {% endif %}
+        {# Recovery for every stuck state: cancel anything not yet sent, and
+           delete the message once it has been published. Both confirm first. #}
+        {% if d.status in ('awaiting_confirmation', 'pending') %}
+        <form method="post" action="/deliveries/{{ d.id }}/cancel" style="display:inline" onsubmit="return confirm('این ارسال لغو شود؟ ردیف با وضعیت ناموفق باقی می‌ماند و قابل تلاش مجدد است.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">لغو ارسال</button></form>
+        {% elif d.status == 'sent' %}
+        <form method="post" action="/deliveries/{{ d.id }}/delete-from-channel" style="display:inline" onsubmit="return confirm('پیام منتشرشده از کانال حذف شود؟ این فقط وضعیت را ثبت می‌کند؛ حذف پیام را باید در خود کانال انجام دهید.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف از کانال</button></form>
         {% endif %}
       </td></tr>
     {% endfor %}

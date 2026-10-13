@@ -704,6 +704,55 @@ async def delivery_release(
     return RedirectResponse(url="/deliveries", status_code=302)
 
 
+@panel_app.post("/deliveries/{delivery_id}/cancel")
+async def delivery_cancel(
+    request: Request, delivery_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Cancel a not-yet-sent delivery (wrong channel, unwanted send).
+
+    Parked as ``failed`` with an operator note: it stays visible and can be
+    retried, instead of disappearing from the queue without trace.
+    """
+    user = await require_login(request, session)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    delivery = await delivery_service.get_delivery(session, delivery_id)
+    if delivery is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
+    try:
+        delivery = await delivery_service.cancel_delivery(session, delivery)
+    except ValueError:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال در حال ارسال یا ارسال‌شده قابل لغو نیست."), status_code=409)
+    await audit_service.record_event(session, user.id, "cancel", delivery.main_id, f"delivery={delivery.id}")
+    return RedirectResponse(url="/deliveries", status_code=302)
+
+
+@panel_app.post("/deliveries/{delivery_id}/delete-from-channel")
+async def delivery_delete_from_channel(
+    request: Request, delivery_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Record that the operator deleted the published message from the channel.
+
+    The delivery keeps its message id and moves to ``deleted_from_channel`` —
+    the row is the history, so it is never removed.
+    """
+    user = await require_login(request, session)
+    if not _can_review(user):
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    delivery = await delivery_service.get_delivery(session, delivery_id)
+    if delivery is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
+    try:
+        delivery = await delivery_service.mark_deleted_from_channel(session, delivery)
+    except ValueError:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="فقط ارسال‌های تحویل‌شده را می‌توان از کانال حذف کرد."), status_code=409)
+    await audit_service.record_event(
+        session, user.id, "delete_from_channel", delivery.main_id,
+        f"delivery={delivery.id} message_id={delivery.platform_message_id}",
+    )
+    return RedirectResponse(url="/deliveries", status_code=302)
+
+
 # --------------------------------------------------------------------------
 # reference data
 # --------------------------------------------------------------------------
