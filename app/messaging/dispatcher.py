@@ -383,8 +383,18 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
             # 'review' article queues as awaiting_confirmation (gate on);
             # an already-approved/published article queues directly as
             # pending (the decision already happened).
+            #
+            # The article status is re-read here on purpose. It was read in
+            # the SELECT above, but between that query and this insert a
+            # reviewer can approve the article — and approval releases only
+            # the deliveries that exist at that moment. Queueing a fresh
+            # awaiting_confirmation row afterwards would park it forever: the
+            # record is no longer in 'review', so it can never be approved
+            # again, and nothing else would ever flip it to pending.
+            current = await session.get(Main, article.id)
+            current_status = current.status if current is not None else article.status
             gated = (
-                article.status == "review" and settings.require_human_confirmation
+                current_status == "review" and settings.require_human_confirmation
             )
             session.add(
                 Delivery(
