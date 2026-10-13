@@ -78,8 +78,17 @@ global `/audit` page.
 
 - Never share the admin login: each human gets their own account from the
   Users page (`editor` for reviewers, `viewer` for read-only guests).
-- New passwords (at creation, admin reset, or self-service change on
-  `/profile`) must be at least 8 characters and are stored as argon2 hashes.
+- **Provider keys and bot tokens.** Set them on the Models page (per model,
+  with its own endpoint and optional provider model id) or on the Channels
+  page (per channel). They are encrypted with a master key that is **not** in
+  the database: `CREDENTIALS_KEY` in the environment, or the generated
+  `data/.credentials_key` file (mode 0600, gitignored, shared by all
+  services through the `credentials_data` volume). The panel shows only a
+  masked hint; there is no way to read a key back. If you ever need to see a
+  key, re-enter it — the stored copy is write-only by design.
+- **Rotation.** Replacing a key in the panel immediately changes what the next
+  generation uses (each job resolves at claim time). After rotation, run
+  "تست اتصال" to see the recorded outcome.
 - Handover flow: admin creates the account, the user logs in and changes
   their password immediately on `/profile`. Deactivate (`toggle`) accounts
   instead of deleting them, so the audit trail keeps its author names.
@@ -97,7 +106,7 @@ global `/audit` page.
 | Record flow timeline | part of `GET /records/{id}` | `record_service.record_timeline` builds submitted → field/category (with the matched keyword) → generated with `<model>/<prompt>` → reviewed by `<user>` → delivered to `<channel>` with the message id, straight from columns and audit rows. Failures and `deleted_from_channel` appear as such, and it renders for every state. |
 | Deliveries | `GET /deliveries`, `GET /deliveries/table` (HTMX), `POST /deliveries/{id}/retry`, `POST /deliveries/{id}/release`, `POST /deliveries/{id}/cancel`, `POST /deliveries/{id}/delete-from-channel` | Filters `status/platform/main_id` with per-row route provenance. Recovery action per state: retry only `failed` (else 409, resets `attempts=0`); release only `awaiting_confirmation` (else 409, attempts kept); cancel any not-yet-sent row (`awaiting_confirmation`/`pending`, else 409 — an in-flight or sent message cannot be cancelled) which parks it `failed` with an operator note so it stays visible and retryable; delete-from-channel only for `sent` (else 409) recording `deleted_from_channel` while keeping the message id. Gate counts explain why nothing was sent yet. All audited. |
 | Submit form | `GET /submit`, `POST /submit` | Creates `main(status='ready')` with validated optional `model_id`/`prompt_id` (same rules as `POST /submit` API). Audited. |
-| Models | `GET /models`, `POST /models`, `POST /models/{id}/activate`, `POST /models/{id}/test` | List/create/detail; single-active activate (atomic); 1-token real connection probe (key never returned/logged). Admin only for mutations. |
+| Models | `GET /models`, `POST /models`, `POST /models/{id}`, `POST /models/{id}/activate`, `POST /models/{id}/deactivate`, `POST /models/{id}/delete`, `POST /models/{id}/test`, `POST /models/{id}/clear-key` | Create/edit (api_model, base_url, temperature, max_output_tokens, description, key), test connection, activate, deactivate, delete. **Key handling (PART D):** the field is a masked write-only input — an empty submit keeps the stored key and "پاک کردن کلید" removes it; the value is encrypted before storage and never rendered, returned or logged. A row with its own `base_url` requires its own key and fails loudly rather than sending the global key. **Guards:** the active model cannot be deleted (deactivate first), a model in use by records cannot be deleted, and neither deactivate nor delete may leave zero usable models. The status column reads the recorded probe (`last_tested_at`/`last_test_ok`/`last_test_error`/latency): آزمون نشده / ✓ موفق / ! ناموفق + time + reason. Admin only. |
 | Prompts | `GET /prompts`, `POST /prompts`, `POST /prompts/{id}/activate` | Immutable versions: new version = new row + activate previous off; never edited in place. Admin only for mutations. |
 | Channels + routing | `GET /channels`, `POST /channels`, `POST /channels/route`, `POST /channels/unroute`, `POST /channels/category-route`, `POST /channels/category-unroute` | Destinations by numeric id or @username (validated live via getChat); category→channel mapping is primary (name pickers), field routes stay as named exceptions; per-channel token variable shown as set/unset. Admin only for mutations. |
 | Fields | `GET /fields`, `POST /fields/{id}/confirm` | Read-only table with category, matched keyword (the WHY), human-confirm badge, source, routed channels, plus top-field bars from real record counts. Confirm freezes the category (`curated`, skipped by reclassification forever). Re-classify spreadsheet rows with `scripts/reclassify_fields.py` (dry-run diff first, `--apply` to persist; `main` rows keep their snapshots). |

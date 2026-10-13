@@ -503,6 +503,31 @@ async def routing_preview(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+def _model_response(row):
+    """Build a model response that can never carry a key value.
+
+    The ORM row has ``api_key_encrypted`` (ciphertext); the schema has no
+    field for it and this projection fills only non-secret facts: whether a
+    key exists, where it comes from, and the recorded probe outcome.
+    """
+    from app.schemas.news import ModelResponse
+    from app.services import models as model_service
+
+    creds = model_service.describe(row)
+    return ModelResponse(
+        id=row.id, name=row.name, provider=row.provider, version=row.version,
+        is_active=row.is_active, base_url=creds["base_url"],
+        api_key_env=creds["key_env"], api_model=creds["api_model"],
+        has_key=bool(creds["key_present"]), key_source=creds["key_source"],
+        needs_own_key=bool(creds["needs_own_key"]),
+        temperature=row.temperature, max_output_tokens=row.max_output_tokens,
+        description=row.description, created_at=row.created_at,
+        last_tested_at=row.last_tested_at, last_test_ok=row.last_test_ok,
+        last_test_error=row.last_test_error,
+        last_test_latency_ms=row.last_test_latency_ms,
+    )
+
+
 def _require_secret(body: dict | None) -> None:
     """Reject missing/invalid shared secrets for body-authenticated calls."""
     secret = (body or {}).get("shared_Secret")
@@ -522,7 +547,7 @@ async def list_models(
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
     rows = await model_service.list_models(session)
-    return [ModelResponse.model_validate(r) for r in rows]
+    return [_model_response(r) for r in rows]
 
 
 @router.post("/models", response_model=ModelResponse, status_code=201)
@@ -542,12 +567,13 @@ async def create_model(
         row = await model_service.create_model(
             session, name=data.name, provider=data.provider, version=data.version,
             base_url=data.base_url, api_key_env=data.api_key_env,
+            api_model=data.api_model, api_key=data.api_key,
             temperature=data.temperature, max_output_tokens=data.max_output_tokens,
             description=data.description, is_active=data.is_active,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return ModelResponse.model_validate(row)
+    return _model_response(row)
 
 
 @router.get("/models/{model_id}", response_model=ModelResponse)
@@ -565,7 +591,7 @@ async def get_model(
     row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    return ModelResponse.model_validate(row)
+    return _model_response(row)
 
 
 @router.patch("/models/{model_id}", response_model=ModelResponse)
@@ -591,11 +617,15 @@ async def update_model(
         raise HTTPException(status_code=404, detail="Model not found")
     updates = {
         field: getattr(data, field)
-        for field in ("provider", "version", "base_url", "api_key_env", "temperature", "max_output_tokens", "description")
+        for field in ("provider", "version", "base_url", "api_key_env", "api_model",
+                      "temperature", "max_output_tokens", "description")
         if getattr(data, field) is not None
     }
+    # api_key is write-only: accepted, encrypted, never echoed back.
+    if data.api_key:
+        updates["api_key"] = data.api_key
     row = await model_service.update_model(session, row, updates)
-    return ModelResponse.model_validate(row)
+    return _model_response(row)
 
 
 @router.post("/models/{model_id}/activate", response_model=ModelResponse)
@@ -613,7 +643,7 @@ async def activate_model(
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
     row = await model_service.activate_model(session, row)
-    return ModelResponse.model_validate(row)
+    return _model_response(row)
 
 
 @router.post("/models/{model_id}/test-connection", response_model=ConnectionTestResponse)
@@ -636,8 +666,20 @@ async def test_model_connection(
     row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
+    import time
+
+    started = time.perf_counter()
     ok, error = await model_service.test_model_connection(row)
-    return {"ok": ok, "model": row.name, "error": error}
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    # Same recorded outcome the panel writes, so both surfaces agree.
+    await model_service.record_test_result(session, row, ok=ok, error=error, latency_ms=latency_ms)
+    return {
+        "ok": ok,
+        "model": row.name,
+        "error": error,
+        "latency_ms": latency_ms,
+        "tested_at": row.last_tested_at,
+    }
 
 
 @router.get("/prompts", response_model=list[PromptResponse])

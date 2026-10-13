@@ -57,6 +57,8 @@ services:
       # Add the host you will present from, e.g. "http://example.com:8080".
       DEMO_CORS_ORIGINS: ${DEMO_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       REQUIRE_HUMAN_CONFIRMATION: ${REQUIRE_HUMAN_CONFIRMATION:-true}
+    volumes:
+      - credentials_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,6 +90,8 @@ services:
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
       WORKER_LEASE_MINUTES: ${WORKER_LEASE_MINUTES:-5}
+    volumes:
+      - credentials_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,6 +118,8 @@ services:
       SENDER_REQUEST_TIMEOUT_SECONDS: ${SENDER_REQUEST_TIMEOUT_SECONDS:-20}
       SENDER_LEASE_MINUTES: ${SENDER_LEASE_MINUTES:-5}
       REQUIRE_HUMAN_CONFIRMATION: ${REQUIRE_HUMAN_CONFIRMATION:-true}
+    volumes:
+      - credentials_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,6 +153,8 @@ services:
       AVALAI_API_KEY: ${AVALAI_API_KEY:-}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+    volumes:
+      - credentials_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,3 +164,16 @@ services:
 
 volumes:
   pg_data:
+  # Master key for database-stored credentials (PART D). Every service that
+  # reads or writes an encrypted key must see the SAME file, otherwise the
+  # panel could not decrypt what the API encrypted (each container would
+  # otherwise generate its own key). It is created on first boot inside this
+  # volume with mode 0600.
+  #
+  # To manage it explicitly instead, generate one and put it in .env for
+  # every service:
+  #   python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
+  # then remove the generated file: docker compose exec api rm -f /app/data/.credentials_key
+  # and bring the stack up again. Never commit the key (.gitignore covers it);
+  # without it every stored credential becomes undecryptable.
+  credentials_data:

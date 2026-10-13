@@ -50,18 +50,21 @@ def resolve_base_url(model_base_url: str | None) -> str:
     return model_base_url or settings.avalai_base_url
 
 
-class MissingModelKeyError(ValueError):
-    """A model row points at its own endpoint but no usable key exists.
-
-    Raised (never swallowed) so the failure lands loudly in
-    ``main.error_message`` and on the panel instead of sending another
-    provider's key to a new endpoint. The message names the model, the
-    endpoint, and the missing variable — never a key value.
-    """
+#: Credential resolution lives in one place and is shared by the Worker, the
+#: panel regenerate action, the connection probe and the machine API. Re-exported
+#: here because callers already import from this module.
+from app.credentials_resolve import (  # noqa: E402
+    MissingModelKeyError,
+    describe_credentials as _describe_credentials,
+    resolve_model_credentials,
+)
 
 
 def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str:
     """Resolve the provider key for a model row, explicitly.
+
+    Kept for callers that only have a variable name (the API probe path);
+    full rows should use :func:`app.credentials_resolve.resolve_model_credentials`.
 
     - The row defines ``base_url``: only that endpoint's own key is usable
       (``api_key_env`` read from the environment). A missing variable name,
@@ -90,23 +93,10 @@ def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str
 def describe_model_credentials(model_row) -> dict[str, object]:
     """Describe a model row's resolved endpoint/key WITHOUT key values.
 
-    Returns ``base_url`` (row or global fallback), ``key_env`` (the variable
-    name, or ``None``), ``key_present`` (whether a usable key exists right
-    now), and ``uses_global_key``. The panel renders source + present/missing
-    badges from this; nothing here can leak a secret.
+    Thin alias to :func:`app.credentials_resolve.describe_credentials`, which
+    is the single implementation used by the panel and the API.
     """
-    base_url = model_row.base_url or settings.avalai_base_url
-    key_env = model_row.api_key_env or None
-    if model_row.base_url:
-        present = bool(key_env and os.environ.get(key_env))
-    else:
-        present = bool((key_env and os.environ.get(key_env)) or settings.avalai_api_key)
-    return {
-        "base_url": base_url,
-        "key_env": key_env,
-        "key_present": present,
-        "uses_global_key": not bool(model_row.base_url),
-    }
+    return _describe_credentials(model_row)
 
 
 def resolve_generation_config(
@@ -123,17 +113,23 @@ def resolve_generation_config(
     """
     override_base = getattr(model_override, "base_url", None)
     active_base = getattr(active_model, "base_url", None)
-    override_env = getattr(model_override, "api_key_env", None)
-    active_env = getattr(active_model, "api_key_env", None)
     effective_base = override_base or active_base
-    # The key always travels with the row that provides the endpoint: a
-    # base_url without its own usable key fails loudly (MissingModelKeyError)
-    # instead of borrowing another row's — or the global — key.
-    effective_env = override_env if override_base else (active_env if active_base else (override_env or active_env))
-    base_url = resolve_base_url(effective_base)
-    # Key resolution may raise MissingModelKeyError: the caller (Worker fail
-    # path, panel regenerate, connection probe) surfaces it loudly instead of
-    # sending the wrong provider's key to this endpoint.
+
+    # The row that owns the endpoint also owns the key (PART D3). A row with its
+    # own base_url and no usable key raises MissingModelKeyError instead of
+    # borrowing another provider's key — the bug that produced HTTP 401.
+    credential_row = None
+    if override_base:
+        credential_row = model_override
+    elif active_base:
+        credential_row = active_model
+    elif model_override is not None:
+        credential_row = model_override
+    elif active_model is not None:
+        credential_row = active_model
+
+    resolved = resolve_model_credentials(credential_row) if credential_row is not None else None
+
     return {
         "model_name": resolve_model_name(
             getattr(model_override, "name", None),
@@ -143,13 +139,18 @@ def resolve_generation_config(
             getattr(prompt_override, "system_prompt", None),
             getattr(active_prompt, "system_prompt", None),
         ),
-        "base_url": base_url,
-        "api_key": resolve_api_key(effective_env, effective_base or None),
+        "base_url": resolved.base_url if resolved else resolve_base_url(None),
+        "api_key": resolved.api_key if resolved else settings.avalai_api_key,
+        # The provider's real model id when the row defines one.
+        "api_model": resolved.api_model if resolved else None,
     }
 
 
 async def probe_model_connection(
-    model_name: str, base_url: str | None = None, api_key_env: str | None = None
+    model_name: str,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[bool, str | None]:
     """Make a real minimal 1-token provider call; return ``(ok, error)``.
 
@@ -158,12 +159,18 @@ async def probe_model_connection(
     the resolved key/base_url are exercised, and a missing key reports its
     real reason instead of raising. The key value is never included in the
     error text or logged anywhere.
+
+    ``api_key`` lets a row's own stored (encrypted) key be used; callers that
+    only have a variable name keep using ``api_key_env``.
     """
+    effective_base_url = base_url or settings.avalai_base_url
     try:
-        effective_key = resolve_api_key(api_key_env, base_url)
+        if api_key:
+            effective_key = api_key
+        else:
+            effective_key = resolve_api_key(api_key_env, base_url)
     except MissingModelKeyError as e:
         return False, str(e)
-    effective_base_url = base_url or settings.avalai_base_url
     if not effective_key:
         return False, "no API key configured"
     try:

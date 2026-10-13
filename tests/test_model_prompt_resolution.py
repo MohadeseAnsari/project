@@ -69,18 +69,24 @@ def test_describe_model_credentials_never_contains_key(monkeypatch):
 
     monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
     described = describe_model_credentials(
-        _Row(base_url="https://custom/v1", api_key_env="CUSTOM_TEST_KEY_ENV")
+        _Row(base_url="https://custom/v1", api_key_env="CUSTOM_TEST_KEY_ENV", api_key_encrypted=None)
     )
-    assert described == {
-        "base_url": "https://custom/v1",
-        "key_env": "CUSTOM_TEST_KEY_ENV",
-        "key_present": True,
-        "uses_global_key": False,
-    }
+    # The facts the panel renders: endpoint, where the key comes from, whether
+    # one is usable, and a masked hint (last 4 only).
+    assert described["base_url"] == "https://custom/v1"
+    assert described["key_env"] == "CUSTOM_TEST_KEY_ENV"
+    assert described["key_present"] is True
+    assert described["uses_global_key"] is False
+    assert described["key_source"] == "env"
+    assert described["key_hint"] == "••••alue"
+    assert described["api_model"] is None
+
     missing = describe_model_credentials(
-        _Row(base_url="https://custom/v1", api_key_env="DEFINITELY_MISSING_ENV_VAR")
+        _Row(base_url="https://custom/v1", api_key_env="DEFINITELY_MISSING_ENV_VAR", api_key_encrypted=None)
     )
     assert missing["key_present"] is False
+    assert missing["needs_own_key"] is True, "a row with its own endpoint must be told it needs a key"
+    # The secret itself never appears — only the last four characters.
     assert "secret-value" not in str(described) + str(missing)
 
 

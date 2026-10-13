@@ -229,7 +229,12 @@ class RecordListResponse(BaseModel):
 
 
 class ModelResponse(BaseModel):
-    """One model row (never includes a key value, only the env var name)."""
+    """One model row. NEVER includes a key value (PART D2).
+
+    Reports where the credential comes from and whether one is usable, plus
+    the recorded connection-probe outcome. No ciphertext, no plaintext, no
+    masked hint of the secret itself.
+    """
 
     id: int
     name: str
@@ -238,10 +243,18 @@ class ModelResponse(BaseModel):
     is_active: bool
     base_url: str | None = None
     api_key_env: str | None = None
+    api_model: str | None = None
+    has_key: bool = False
+    key_source: str | None = None
+    needs_own_key: bool = False
     temperature: float | None = None
     max_output_tokens: int | None = None
     description: str | None = None
     created_at: datetime | None = None
+    last_tested_at: datetime | None = None
+    last_test_ok: bool | None = None
+    last_test_error: str | None = None
+    last_test_latency_ms: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -255,6 +268,8 @@ class ModelCreateRequest(BaseModel):
     version: str = Field(min_length=1, max_length=50)
     base_url: str | None = Field(default=None, max_length=500)
     api_key_env: str | None = Field(default=None, max_length=100)
+    api_model: str | None = Field(default=None, max_length=200)
+    api_key: str | None = Field(default=None, max_length=500)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
     description: str | None = None
@@ -262,13 +277,19 @@ class ModelCreateRequest(BaseModel):
 
 
 class ModelUpdateRequest(BaseModel):
-    """Body for ``PATCH /models/{id}`` (is_active only via activate)."""
+    """Body for ``PATCH /models/{id}`` (is_active only via activate).
+
+    ``api_key`` is write-only: it is encrypted on the way in and never
+    returned. Omitting it keeps the stored key; ``clear_api_key`` removes it.
+    """
 
     shared_Secret: str = Field(description="Authentication secret.")
     provider: str | None = Field(default=None, min_length=1, max_length=50)
     version: str | None = Field(default=None, min_length=1, max_length=50)
     base_url: str | None = Field(default=None, max_length=500)
     api_key_env: str | None = Field(default=None, max_length=100)
+    api_model: str | None = Field(default=None, max_length=200)
+    api_key: str | None = Field(default=None, max_length=500)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_output_tokens: int | None = Field(default=None, ge=1, le=32000)
     description: str | None = None

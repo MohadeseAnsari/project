@@ -7,6 +7,7 @@ every review/retry/config change is written to ``audit_logs`` for history.
 """
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1088,10 +1089,16 @@ async def models_page(request: Request, model_id: int | None = None, session: As
 async def panel_model_create(
     request: Request, name: str = Form(...), provider: str = Form(...), version: str = Form(...),
     base_url: str = Form(""), api_key_env: str = Form(""), temperature: str = Form(""),
-    max_output_tokens: str = Form(""), description: str = Form(""),
+    max_output_tokens: str = Form(""), description: str = Form(""), api_key: str = Form(""),
+    api_model: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Create a model row from the panel form (admin only)."""
+    """Create a model row from the panel form (admin only).
+
+    A pasted ``api_key`` is encrypted before it reaches the row and is never
+    echoed back. A row with its own ``base_url`` requires its own key: the
+    global key is never sent to an endpoint the row introduced.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
@@ -1105,16 +1112,93 @@ async def panel_model_create(
             temperature=float(temperature) if temperature.strip() else None,
             max_output_tokens=int(max_output_tokens) if max_output_tokens.strip() else None,
             description=description.strip() or None, is_active=False,
+            api_key=api_key.strip() or None, api_model=api_model.strip() or None,
         )
-    except ValueError:
+    except ValueError as exc:
+        message = {
+            "duplicate-name": "نام مدل تکراری است.",
+            "bad-credential": "برای مدلی با نقطهٔ اتصال اختصاصی، کلید خودش لازم است؛ کلید سراسری به این آدرس ارسال نمی‌شود.",
+        }.get(str(exc), "ایجاد مدل ناموفق بود.")
         rows = await model_service.list_models(session)
         selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
         _attach_creds(rows)
         counts_ctx = await _sidebar_counts(session)
         return templates.TemplateResponse(request, "models.html",
             _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
-                 test_result=None, error="نام مدل تکراری است."), status_code=422)
-    await audit_service.record_event(session, user.id, "model_create", None, f"name={name}")
+                 test_result=None, error=message), status_code=422)
+    await audit_service.record_event(
+        session, user.id, "model_create", None,
+        f"name={name} base_url={'yes' if base_url.strip() else 'no'} key={'set' if api_key.strip() else 'none'}",
+    )
+    return RedirectResponse(url="/models", status_code=302)
+
+
+@panel_app.post("/models/{model_id}/clear-key")
+async def panel_model_clear_key(
+    request: Request, model_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Remove a model's stored key (the explicit "پاک کردن کلید" action)."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    row = await model_service.get_model(session, model_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+    await model_service.clear_api_key(session, row)
+    await audit_service.record_event(session, user.id, "model_clear_key", None, f"model={row.name}")
+    return RedirectResponse(url=f"/models?model_id={model_id}", status_code=302)
+
+
+@panel_app.post("/models/{model_id}/deactivate")
+async def panel_model_deactivate(
+    request: Request, model_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Deactivate a model, refusing to leave zero usable models."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    row = await model_service.get_model(session, model_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+    try:
+        await model_service.deactivate_model(session, row)
+    except ValueError as exc:
+        message = "این تنها مدل قابل استفاده است؛ حذف یا غیرفعال‌سازی آن تولید را متوقف می‌کند." if str(exc) == "last-usable-model" else "غیرفعال‌سازی ناموفق بود."
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "model_deactivate", None, f"model={row.name}")
+    return RedirectResponse(url="/models", status_code=302)
+
+
+@panel_app.post("/models/{model_id}/delete")
+async def panel_model_delete(
+    request: Request, model_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Delete an inactive model, with the "never leave zero usable" guard."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    row = await model_service.get_model(session, model_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+    name = row.name
+    try:
+        await model_service.delete_model(session, row)
+    except ValueError as exc:
+        message = {
+            "model-active": "مدل فعال قابل حذف نیست؛ ابتدا غیرفعال کنید.",
+            "last-usable-model": "این تنها مدل قابل استفاده است؛ حذف آن تولید را متوقف می‌کند.",
+            "model-in-use": "این مدل در رکوردهای تولیدشده استفاده شده و برای حفظ تاریخچه حذف نمی‌شود.",
+        }.get(str(exc), "حذف مدل ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "model_delete", None, f"model={name}")
     return RedirectResponse(url="/models", status_code=302)
 
 
@@ -1140,9 +1224,14 @@ async def panel_model_update(
     request: Request, model_id: int, base_url: str = Form(""),
     api_key_env: str = Form(""), temperature: str = Form(""),
     max_output_tokens: str = Form(""), description: str = Form(""),
+    api_key: str = Form(""), api_model: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Update the selected model's connection fields (admin only; name fixed)."""
+    """Update the selected model's connection fields (admin only; name fixed).
+
+    An empty ``api_key`` field KEEPS the stored key (the service only
+    encrypts a non-empty value); clearing it is the explicit clear action.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
@@ -1155,11 +1244,17 @@ async def panel_model_update(
     row = await model_service.update_model(session, row, {
         "base_url": base_url.strip() or None,
         "api_key_env": api_key_env.strip() or None,
+        "api_model": api_model.strip() or None,
         "temperature": float(temperature) if temperature.strip() else None,
         "max_output_tokens": int(max_output_tokens) if max_output_tokens.strip() else None,
         "description": description.strip() or None,
+        # Non-empty replaces the stored key; empty keeps it.
+        "api_key": api_key.strip() or None,
     })
-    await audit_service.record_event(session, user.id, "model_create", None, f"update model={row.name}")
+    await audit_service.record_event(
+        session, user.id, "model_update", None,
+        f"model={row.name} key={'replaced' if api_key.strip() else 'unchanged'}",
+    )
     return RedirectResponse(url=f"/models?model_id={model_id}", status_code=302)
 
 
@@ -1179,11 +1274,19 @@ async def panel_model_test(request: Request, model_id: int, session: AsyncSessio
     row = await model_service.get_model(session, model_id)
     if not row:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="مدل یافت نشد."), status_code=404)
+    started = time.perf_counter()
     ok, error = await model_service.test_model_connection(row)
-    test_result = {"ok": ok, "model": row.name, "error": error}
-    ok_msg = f"اتصال مدل {row.name} موفق بود." if ok else None
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    # Persist the outcome on the row so the table's status column is real
+    # recorded data (never tested / ok / failed + time + reason), not a claim.
+    await model_service.record_test_result(session, row, ok=ok, error=error, latency_ms=latency_ms)
+    test_result = {"ok": ok, "model": row.name, "error": error, "latency_ms": latency_ms}
+    ok_msg = f"اتصال مدل {row.name} موفق بود ({latency_ms} میلی‌ثانیه)." if ok else None
     missing_key = error == "no API key configured"
-    await audit_service.record_event(session, user.id, "model_test", None, f"model={row.name} ok={ok}")
+    await audit_service.record_event(
+        session, user.id, "model_test", None,
+        f"model={row.name} ok={ok} latency_ms={latency_ms} error={(error or '')[:120]}",
+    )
     rows = await model_service.list_models(session)
     selected = row
     _attach_creds(rows)

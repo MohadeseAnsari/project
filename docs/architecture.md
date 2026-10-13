@@ -175,6 +175,38 @@ What the operator sees follows from those states, not from timestamps:
   would be parked forever — the record had left `review`, so no second
   approval could ever release it.
 
+## Credential policy
+
+Provider keys and bot tokens are managed **in the panel** and stored in the
+database **encrypted**; no secret lives in an environment variable or a
+plaintext column any more.
+
+- `models.api_key_encrypted` and `channels.bot_token_encrypted` hold Fernet
+  ciphertext (`app/credentials.py`). `models.api_model` holds the provider's
+  real model id when it differs from the display name.
+- **The master key is never in the database.** It comes from
+  `CREDENTIALS_KEY`; when unset it is generated once on first boot into
+  `data/.credentials_key`, mode `0600`, gitignored. All four services mount the
+  same `credentials_data` volume — one key the panel cannot read would break
+  credential management. A warning names the file so the operator backs it up:
+  without it every stored credential is undecryptable.
+- **Write-only in the panel and the API.** The key field is a masked password
+  input: an empty submit keeps the stored value, and a separate
+  "پاک کردن کلید" action removes it. No response, page, audit row or log
+  contains a key value — `tests/test_credentials.py` asserts each surface.
+- **One resolution order** (`app/credentials_resolve.py`), used by the Worker,
+  the panel regenerate action, the connection probe and the machine API:
+  `base_url` row → global; `api_model` row → row name → global; key = row's
+  decrypted key → `api_key_env` → global.
+- **A row that defines its own `base_url` with no usable key FAILS LOUDLY**
+  (`MissingModelKeyError`) instead of borrowing the global key. This is the
+  fix for the HTTP 401 seen when a second provider was added: the row now
+  gets its own credential, and until it does, generation fails with a clear
+  message instead of sending the wrong provider's key to the new endpoint.
+- Every probe records `last_tested_at`, `last_test_ok`, `last_test_error`
+  (endpoint + HTTP status, never the key) and latency. The panel's status
+  column reads those columns, so it is recorded data rather than a claim.
+
 ## CSRF
 
 Every panel POST form embeds a session-bound CSRF token

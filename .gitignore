@@ -16,3 +16,9 @@ build.log
 .DS_Store
 data/*.xlsx
 !data/fields.xlsx
+
+# Master key for database-stored credentials (generated on first boot, 0600).
+# NEVER commit this: without it every stored API key / bot token is
+# undecryptable. Set CREDENTIALS_KEY in the environment instead.
+data/.credentials_key
+data/credentials_key*

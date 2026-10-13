@@ -94,6 +94,17 @@ class Model(Base):
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
+    #: Fernet ciphertext of the provider key (never plaintext). Managed from
+    #: the panel; the master key lives in CREDENTIALS_KEY, never in the DB.
+    api_key_encrypted = Column(Text, nullable=True)
+    #: The provider's real model id, when it differs from the display ``name``.
+    api_model = Column(String(200), nullable=True)
+    #: Connection-probe outcome (endpoint + HTTP status only, never the key).
+    last_tested_at = Column(DateTime, nullable=True)
+    last_test_ok = Column(Boolean, nullable=True)
+    last_test_error = Column(Text, nullable=True)
+    last_test_latency_ms = Column(Integer, nullable=True)
+
     main_records = relationship("Main", back_populates="model")
 
 
@@ -234,6 +245,8 @@ class Channel(Base):
     username = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
     bot_token_env = Column(String(100), nullable=True)
+    #: Fernet ciphertext of this channel's own bot token, when it has one.
+    bot_token_encrypted = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
