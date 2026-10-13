@@ -7,18 +7,14 @@ come from environment variables only (``PANEL_ADMIN_PASSWORD`` /
 
 import logging
 
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import Request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
-from sqlalchemy import select
 
 from app.config import settings
-from app.db.models import PanelUser, Role
+from app.services.passwords import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
-_ph = PasswordHasher()
 _cookie_name = "panel_session"
 
 #: Loopback peers are always the trusted proxy path.
@@ -91,21 +87,6 @@ def forwarded_proto(request: Request) -> str:
 def _serializer() -> URLSafeTimedSerializer:
     """Cookie signer bound to the configured panel secret."""
     return URLSafeTimedSerializer(settings.panel_secret_key, salt="panel-session")
-
-
-def hash_password(password: str) -> str:
-    """Hash a plaintext password for storage (argon2, never reversible)."""
-    return _ph.hash(password)
-
-
-def verify_password(password_hash: str, password: str) -> bool:
-    """Check a password against its stored hash (constant-time via argon2)."""
-    try:
-        return _ph.verify(password_hash, password)
-    except VerifyMismatchError:
-        return False
-    except Exception:
-        return False
 
 
 def set_session_cookie(response, user_id: int, *, secure: bool) -> None:
@@ -200,44 +181,14 @@ def clear_login_failures(ip: str) -> None:
     _login_locked_until.pop(ip, None)
 
 
-async def audit(session, user_id: int | None, action: str, main_id: int | None = None, detail: str | None = None) -> None:
-    """Record who did what (review/retry/config) for the record history page."""
-    from app.db.models import AuditLog
-
-    session.add(AuditLog(user_id=user_id, action=action, main_id=main_id, detail=detail))
-    await session.commit()
-
-
 async def ensure_admin_user() -> None:
     """Create the first admin from env vars when no users exist yet.
 
-    Runs at panel startup only. The password comes from ``PANEL_ADMIN_PASSWORD``
-    and is hashed before storage; when the variable is empty nothing is created
-    and login stays disabled until it is configured.
+    Thin delegation to the users service: the panel layer performs no
+    database access of its own (enforced by ``tests/test_panel_layering.py``).
     """
-    from app.db.connection import async_session
+    from app.services import users as user_service
 
-    if not settings.panel_admin_password:
-        logger.warning("PANEL_ADMIN_PASSWORD is empty; panel login is disabled")
-        return
-    async with async_session() as session:
-        existing = (await session.execute(select(PanelUser).limit(1))).scalars().first()
-        if existing:
-            return
-        role = (
-            await session.execute(select(Role).where(Role.name == "admin"))
-        ).scalar_one_or_none()
-        if not role:
-            role = Role(name="admin", description="Full access")
-            session.add(role)
-            await session.flush()
-        session.add(
-            PanelUser(
-                username=settings.panel_admin_username,
-                password_hash=hash_password(settings.panel_admin_password),
-                role_id=role.id,
-                is_active=True,
-            )
-        )
-        await session.commit()
-        logger.info("Created initial panel admin username=%s", settings.panel_admin_username)
+    await user_service.ensure_initial_admin(
+        settings.panel_admin_username, settings.panel_admin_password
+    )

@@ -9,6 +9,7 @@ stable messages; routes map them to error pages.
 from sqlalchemy import func, select
 
 from app.db.models import AuditLog, PanelUser, Role
+from app.services.passwords import hash_password, verify_password
 
 
 async def list_users(session) -> list[dict]:
@@ -39,6 +40,70 @@ async def get_user(session, user_id: int) -> PanelUser | None:
     return await session.get(PanelUser, user_id)
 
 
+async def get_user_by_username(session, username: str) -> PanelUser | None:
+    """Look a user up by exact username (panel login form)."""
+    return (
+        await session.execute(select(PanelUser).where(PanelUser.username == username))
+    ).scalar_one_or_none()
+
+
+async def get_active_user_with_role(session, user_id: int) -> PanelUser | None:
+    """Load a logged-in user with its role attached, or None.
+
+    Panel session resolution: an unknown, inactive, or role-less user is
+    treated as anonymous. The role object is loaded explicitly because the
+    panel renders it after the session closes (no lazy loading there).
+    """
+    user = await session.get(PanelUser, user_id)
+    if not user or not user.is_active:
+        return None
+    role = await session.get(Role, user.role_id)
+    if role is None:
+        return None
+    user.role = role
+    return user
+
+
+async def ensure_initial_admin(username: str, password: str) -> str | None:
+    """Create the first admin from env values when no users exist yet.
+
+    Runs at panel startup only. The password is hashed before storage
+    (argon2, never plaintext); when no password is configured nothing is
+    created and login stays disabled until it is. Returns the created
+    username, or None when nothing was done.
+    """
+    import logging
+
+    from app.db.connection import async_session
+
+    logger = logging.getLogger(__name__)
+    if not password:
+        logger.warning("PANEL_ADMIN_PASSWORD is empty; panel login is disabled")
+        return None
+    async with async_session() as session:
+        existing = (await session.execute(select(PanelUser).limit(1))).scalars().first()
+        if existing:
+            return None
+        role = (
+            await session.execute(select(Role).where(Role.name == "admin"))
+        ).scalar_one_or_none()
+        if not role:
+            role = Role(name="admin", description="Full access")
+            session.add(role)
+            await session.flush()
+        session.add(
+            PanelUser(
+                username=username,
+                password_hash=hash_password(password),
+                role_id=role.id,
+                is_active=True,
+            )
+        )
+        await session.commit()
+        logger.info("Created initial panel admin username=%s", username)
+        return username
+
+
 async def _role_or_raise(session, role: str) -> Role:
     if role not in ("admin", "editor", "viewer"):
         raise ValueError("bad-role")
@@ -65,6 +130,61 @@ async def create_user(session, *, username: str, password_hash: str, role: str) 
         await session.rollback()
         raise ValueError("duplicate-username")
     await session.refresh(row)
+    return row
+
+
+async def create_user_with_password(session, *, username: str, password: str, role: str) -> PanelUser:
+    """Create a user from a plaintext password; hashing happens HERE.
+
+    The panel (and the machine API) never hold the hashing step: plaintext
+    enters this function and only the argon2 hash is ever stored.
+
+    Raises:
+        ValueError: ``weak-password`` (min length), ``bad-role`` /
+            ``role-not-found``, ``duplicate-username``.
+    """
+    if len(password or "") < 8:
+        raise ValueError("weak-password")
+    return await create_user(
+        session, username=username, password_hash=hash_password(password), role=role
+    )
+
+
+async def reset_password(session, row: PanelUser, new_password: str) -> PanelUser:
+    """Set a new password (admin reset); hashing happens HERE.
+
+    No ``session.refresh()`` on purpose: the session uses
+    ``expire_on_commit=False`` so the row is already current, and refreshing
+    would expire the ``role`` relationship — which the panel reads while
+    rendering, outside async context (lazy loading would raise).
+
+    Raises:
+        ValueError: ``weak-password`` when shorter than 8 characters.
+    """
+    if len(new_password or "") < 8:
+        raise ValueError("weak-password")
+    row.password_hash = hash_password(new_password)
+    await session.commit()
+    return row
+
+
+async def change_own_password(
+    session, row: PanelUser, *, current_password: str, new_password: str
+) -> PanelUser:
+    """Self-service password change after proving the current one.
+
+    See :func:`reset_password` for why the row is not refreshed.
+
+    Raises:
+        ValueError: ``bad-current-password`` when the current one is wrong,
+            ``weak-password`` when the new one is shorter than 8 characters.
+    """
+    if not verify_password(row.password_hash, current_password or ""):
+        raise ValueError("bad-current-password")
+    if len(new_password or "") < 8:
+        raise ValueError("weak-password")
+    row.password_hash = hash_password(new_password)
+    await session.commit()
     return row
 
 

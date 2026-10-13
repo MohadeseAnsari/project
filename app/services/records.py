@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.models import AuditLog, Channel, Delivery, Main, Model, PanelUser, Prompt
 from app.messaging.dispatcher import confirm_deliveries_for_article
+from app.services.transitions import assert_record_transition
 
 
 async def create_thesis_record(
@@ -67,14 +68,19 @@ def record_filters(
     q: str | None = None,
     approved: bool | None = None,
 ) -> list:
-    """Build the shared WHERE clauses for record listings (panel + API)."""
+    """Build the shared WHERE clauses for record listings (panel + API).
+
+    ``approved`` is now status-based (the lifecycle owns the truth):
+    True -> statuses ``approved``/``published``; False -> everything else
+    (still undecided or failed/rejected).
+    """
     filters = []
     if status:
         filters.append(Main.status == status)
     if approved is True:
-        filters.append(Main.approved_at.isnot(None))
+        filters.append(Main.status.in_(("approved", "published")))
     elif approved is False:
-        filters.append(Main.approved_at.is_(None))
+        filters.append(Main.status.notin_(("approved", "published")))
     if field:
         filters.append(Main.field.ilike(f"%{field}%"))
     if university:
@@ -194,8 +200,12 @@ async def apply_review(
 ) -> Main:
     """Apply approve/reject/save_draft with optional output edits.
 
-    Approve stamps ``approved_at`` (first wins) and releases gated
-    deliveries; reject moves to ``rejected``; save_draft edits only.
+    Transitions run through the ONE state machine
+    (``app.services.transitions``): approve moves the record
+    ``review -> approved`` (stamping ``approved_at``, first wins) and
+    releases gated deliveries; reject moves to ``rejected``; save_draft
+    edits only. The status column now tells the operator the truth — an
+    approved record leaves the needs-review list immediately.
 
     Raises:
         ValueError: ``bad-action`` for unknown actions, ``not-in-review``
@@ -215,9 +225,13 @@ async def apply_review(
             current["body"] = body
         record.output_json = current
     if action == "approve":
+        # review -> approved (one place defines this: transitions module).
+        assert_record_transition(record.status, "approved")
+        record.status = "approved"
         if record.approved_at is None:
             record.approved_at = datetime.utcnow()
     elif action == "reject":
+        assert_record_transition(record.status, "rejected")
         record.status = "rejected"
     record.updated_at = datetime.utcnow()
     await session.commit()
@@ -250,13 +264,107 @@ async def record_status_counts(session) -> dict[str, int]:
     return {status: count for status, count in rows}
 
 
+async def filter_options(session, limit: int = 50) -> dict[str, list[str]]:
+    """Distinct field/university names for the list-page pickers.
+
+    Panel list page (its own SQL, previously inline in the route) and any
+    other caller of the shared filter vocabulary.
+    """
+    fields = [
+        r[0] for r in (
+            await session.execute(select(Main.field).distinct().order_by(Main.field).limit(limit))
+        ).all() if r[0]
+    ]
+    universities = [
+        r[0] for r in (
+            await session.execute(
+                select(Main.university).distinct().order_by(Main.university).limit(limit)
+            )
+        ).all() if r[0]
+    ]
+    return {"fields": fields, "universities": universities}
+
+
+async def worker_heartbeat(session) -> object | None:
+    """Latest ``main.heartbeat_at`` — the Worker freshness marker (dashboard).
+
+    None when nothing was ever processed; the dashboard then reports the
+    Worker as not-fresh rather than showing a stale timestamp.
+    """
+    return (
+        await session.execute(select(func.max(Main.heartbeat_at)))
+    ).scalar_one_or_none()
+
+
+async def regenerate(session, record_id: int) -> Main:
+    """Re-run LLM generation for a ``review``/``failed`` record (panel action).
+
+    Uses the exact same resolution + generation path as the Worker
+    (``get_active_*`` + shared ``resolve_generation_config`` +
+    ``generate_news``), so a regenerated article is indistinguishable from
+    one the Worker produced. Success stores the new output and returns the
+    record to ``review`` (``failed -> review``, a declared transition);
+    provider errors park it ``failed`` with the error text.
+
+    Raises:
+        ValueError: ``not-regenerable`` for a record outside
+            ``review``/``failed`` (routes map to 409); any provider error
+            propagates after the failure has been recorded on the record.
+    """
+    from app.news.generation import generate_news, resolve_generation_config
+    from app.worker.worker import get_active_model, get_active_prompt
+
+    record = await get_record(session, record_id)
+    if record is None or record.status not in ("review", "failed"):
+        raise ValueError("not-regenerable")
+
+    active_model = await get_active_model(session)
+    active_prompt = await get_active_prompt(session)
+    # Same gap-fill as the Worker: keep per-record overrides, fill the rest.
+    orig_model_id = record.model_id
+    orig_prompt_id = record.prompt_id
+    if record.model_id is None and active_model:
+        record.model_id = active_model.id
+    if record.prompt_id is None and active_prompt:
+        record.prompt_id = active_prompt.id
+    override_model = await session.get(Model, orig_model_id) if orig_model_id else None
+    override_prompt = await session.get(Prompt, orig_prompt_id) if orig_prompt_id else None
+    config = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
+
+    thesis = {
+        "title": record.title, "abstract": record.abstract, "field": record.field,
+        "university": record.university, "table_of_contents": record.table_of_contents,
+        "author": record.author, "supervisor": record.supervisor,
+    }
+    try:
+        output = await generate_news(thesis, **config)
+    except Exception as e:
+        assert_record_transition(record.status, "failed")
+        record.status = "failed"
+        record.error_message = str(e)[:2000]
+        record.updated_at = datetime.utcnow()
+        await session.commit()
+        raise
+    record.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
+    assert_record_transition(record.status, "review")
+    record.status = "review"
+    record.error_message = None
+    record.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
 async def needs_review_count(session) -> int:
-    """Records awaiting a human: ``review`` with ``approved_at`` NULL."""
+    """Records awaiting a human decision: exactly the ``review`` rows.
+
+    Approval moves the row to ``approved`` (and sending to ``published``),
+    so this count is exact by construction — an approved record can never
+    still appear as needing review.
+    """
     return (
         await session.execute(
-            select(func.count()).select_from(Main)
-            .where(Main.status == "review")
-            .where(Main.approved_at.is_(None))
+            select(func.count()).select_from(Main).where(Main.status == "review")
         )
     ).scalar_one()
 

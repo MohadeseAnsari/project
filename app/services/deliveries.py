@@ -69,6 +69,55 @@ async def get_delivery(session, delivery_id: int) -> Delivery | None:
     return result.scalar_one_or_none()
 
 
+def delivery_rows(pairs) -> list[dict]:
+    """Shape ``(delivery, channel, article)`` triples for list templates.
+
+    One builder for the full page and the HTMX partial so both show the same
+    columns. Category names are attached by :func:`attach_category_names`
+    (kept out of this pure shape step so it stays trivially testable).
+    """
+    return [
+        {
+            "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
+            "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
+            "channel_name": c.username or c.title or c.platform,
+            "category_id": d.category_id, "route_source": d.route_source,
+            "category_name": "—",
+        }
+        for d, c, m in pairs
+    ]
+
+
+async def attach_category_names(session, items: list[dict]) -> list[dict]:
+    """Fill ``category_name`` on shaped delivery rows (routing provenance)."""
+    from app.db.models import Category
+
+    ids = [item["category_id"] for item in items if item["category_id"]]
+    if ids:
+        cats = (
+            await session.execute(select(Category).where(Category.id.in_(ids)))
+        ).scalars().all()
+        names = {c.id: c.name for c in cats}
+        for item in items:
+            if item["category_id"]:
+                item["category_name"] = names.get(item["category_id"], "—")
+    return items
+
+
+async def delivery_items(session, pairs) -> list[dict]:
+    """Shape + enrich delivery rows for the panel tables (one shared builder)."""
+    return await attach_category_names(session, delivery_rows(pairs))
+
+
+async def last_failed(session) -> Delivery | None:
+    """The most recent failed delivery (for the page's last-error note)."""
+    return (
+        await session.execute(
+            select(Delivery).where(Delivery.status == "failed").order_by(Delivery.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def retry_delivery(session, delivery: Delivery) -> Delivery:
     """Re-queue a ``failed`` delivery as ``pending`` (attempts reset).
 

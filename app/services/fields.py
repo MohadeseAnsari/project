@@ -58,6 +58,11 @@ async def field_total(session) -> int:
     return (await session.execute(select(func.count()).select_from(Field))).scalar_one()
 
 
+async def get_field(session, field_id: int) -> Field | None:
+    """Fetch one field row by id (panel routes never touch the ORM directly)."""
+    return await session.get(Field, field_id)
+
+
 async def confirm_category(session, field: Field) -> Field:
     """Freeze a field's category as human-curated (reclassification skips it).
 
