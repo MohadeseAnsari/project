@@ -393,6 +393,15 @@ windows/panes instead of background shell jobs you cannot reattach to.
 - The panel records `deleted_from_channel` only after the platform confirms the
   delete, so the row can never claim a message is gone while it is still in the
   channel; a refusal leaves it `sent` and retryable.
+- Fan-out delete is per channel, not all-or-nothing: removing one article from
+  several channels calls each platform separately and reports the ones that
+  refused, because a single uncooperative channel must not strand the rest.
+- A platform "message not found" counts as a successful delete, not a refusal.
+  The postcondition ("this message is no longer published") already holds, and
+  treating it as a failure would leave the row `sent` forever for a message
+  that is gone. It is told apart from a genuine refusal (no rights, wrong
+  chat) by the provider's own description, since the HTTP status differs
+  between Bale (404) and Telegram (400).
 - A field with no route falls back to all active channels: fields discovered at
   runtime have no route row, and silently dropping their articles would be worse
   than publishing them to the current channel set.

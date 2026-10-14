@@ -221,6 +221,61 @@ async def cancel_delivery(session, delivery: Delivery) -> Delivery:
     return delivery
 
 
+async def _delete_one_from_platform(session, delivery: Delivery, channel) -> str | None:
+    """Remove one published message at the platform and record it.
+
+    Returns ``None`` on success, or the failure code — it never raises for an
+    expected platform outcome, so a batch over several channels can carry on
+    and report the ones that would not go. The row moves to
+    ``deleted_from_channel`` only once the message is confirmed absent; a real
+    refusal leaves it ``sent`` because the message is still in the channel.
+
+    A platform "message not found" counts as success, not a refusal: the
+    message is not published, which is exactly the postcondition. Otherwise a
+    message removed by hand (or in an earlier run) would leave the row
+    permanently un-clearable. It is reported as ``already-gone`` so the audit
+    trail stays honest.
+    """
+    from app.messaging.platforms import (
+        DeliveryError,
+        MessageGoneError,
+        PermanentDeliveryError,
+        client_for_channel,
+        configured_clients,
+    )
+
+    if delivery.status != "sent":
+        return "not-sent"
+    if not delivery.platform_message_id:
+        return "missing-message-id"
+    if channel is None:
+        return "channel-not-found"
+
+    # The channel's OWN token wins (so a channel added from the panel deletes
+    # without any environment change); otherwise the platform-wide token — the
+    # same one that published the message, and the only one allowed to.
+    client, token_error = client_for_channel(channel, configured_clients())
+    if client is None:
+        # The reason names the platform or the variable, never a token value.
+        return f"no-token: {token_error}"
+
+    already_gone = False
+    try:
+        await client.delete_message(channel.chat_id, delivery.platform_message_id)
+    except MessageGoneError:
+        already_gone = True
+    except PermanentDeliveryError as e:
+        return f"delete-refused: {e}"
+    except DeliveryError as e:
+        return f"delete-unavailable: {e}"
+
+    assert_delivery_transition("sent", "deleted_from_channel")
+    delivery.status = "deleted_from_channel"
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
+    return "already-gone" if already_gone else None
+
+
 async def delete_published_message(session, delivery: Delivery) -> Delivery:
     """Delete the published message AT THE PLATFORM, then record it (PART B).
 
@@ -229,56 +284,79 @@ async def delete_published_message(session, delivery: Delivery) -> Delivery:
     after the platform confirms does the row move to
     ``deleted_from_channel`` (the message id stays — the row is the history).
 
-    The platform error is translated into a code here, so callers never
-    import the messaging layer and the operator sees one message per cause.
-    A refused delete leaves the row ``sent``: the message is still there, and
-    a retry is meaningful.
-
     Raises:
-        ValueError: ``not-sent`` when nothing was published,
-            ``missing-message-id`` when the row has no platform message id,
-            ``channel-not-found`` when the destination row is gone,
-            ``no-token`` when the channel has no usable bot token,
-            ``delete-refused`` when the platform will not delete it
-            (too old, wrong chat, no rights) — retrying cannot help,
+        ValueError: the code from :func:`_delete_one_from_platform` —
+            ``not-sent`` when nothing was published, ``missing-message-id``
+            when the row has no platform message id, ``channel-not-found``
+            when the destination row is gone, ``no-token`` when the channel
+            has no usable bot token, ``delete-refused`` when the platform will
+            not delete it (no rights, wrong chat — a retry cannot help),
             ``delete-unavailable`` on a transport/server failure.
     """
     from app.db.models import Channel as _Channel
-    from app.messaging.platforms import (
-        DeliveryError,
-        PermanentDeliveryError,
-        client_for_channel,
-        configured_clients,
+
+    channel = await session.get(_Channel, delivery.channel_id)
+    failure = await _delete_one_from_platform(session, delivery, channel)
+    # "already-gone" is success: the row was recorded, the caller has no
+    # error to report.
+    if failure not in (None, "already-gone"):
+        raise ValueError(failure)
+    return delivery
+
+
+async def deliveries_for_article(session, article_id: int) -> list[Delivery]:
+    """Every delivery row for one article, oldest first (id order).
+
+    An article fans out to a row per routed channel, so deleting "the news"
+    means acting on all of them.
+    """
+    return list(
+        (
+            await session.execute(
+                select(Delivery).where(Delivery.main_id == article_id).order_by(Delivery.id)
+            )
+        ).scalars().all()
     )
 
-    if delivery.status != "sent":
-        raise ValueError("not-sent")
-    if not delivery.platform_message_id:
-        raise ValueError("missing-message-id")
-    channel = await session.get(_Channel, delivery.channel_id)
-    if channel is None:
-        raise ValueError("channel-not-found")
 
-    # The channel's OWN token wins (so a channel added from the panel deletes
-    # without any environment change); otherwise the platform-wide token — the
-    # same one that published the message, and the only one allowed to.
-    client, token_error = client_for_channel(channel, configured_clients())
-    if client is None:
-        # The reason names the platform or the variable, never a token value.
-        raise ValueError(f"no-token: {token_error}")
+async def delete_article_everywhere(session, article_id: int) -> dict:
+    """Delete one article's published messages from EVERY channel (PART B).
 
-    try:
-        await client.delete_message(channel.chat_id, delivery.platform_message_id)
-    except PermanentDeliveryError as e:
-        raise ValueError(f"delete-refused: {e}")
-    except DeliveryError as e:
-        raise ValueError(f"delete-unavailable: {e}")
+    The owner's single action for "remove this news": each channel is a
+    separate platform call, so they are handled independently — a channel that
+    refuses does not stop the others, and its row stays ``sent`` so the
+    operator can see the message is still there and retry just that one.
 
-    assert_delivery_transition("sent", "deleted_from_channel")
-    delivery.status = "deleted_from_channel"
-    delivery.updated_at = datetime.utcnow()
-    await session.commit()
-    return delivery
+    Returns a report:
+        ``deleted`` — channel names whose message was really removed now
+        ``already_gone`` — channel names whose message was not published any
+            more (removed by hand, or in an earlier run); counted as done
+        ``failed``  — ``(channel_name, code)`` per channel that refused with
+            the message still there
+        ``skipped`` — channel names with nothing published to remove
+    """
+    from app.db.models import Channel
+
+    rows = await deliveries_for_article(session, article_id)
+    report: dict = {"deleted": [], "already_gone": [], "failed": [], "skipped": []}
+    for delivery in rows:
+        channel = await session.get(Channel, delivery.channel_id)
+        name = (
+            (channel.username or channel.title or channel.platform)
+            if channel is not None
+            else f"#{delivery.channel_id}"
+        )
+        if delivery.status != "sent":
+            report["skipped"].append(name)
+            continue
+        outcome = await _delete_one_from_platform(session, delivery, channel)
+        if outcome is None:
+            report["deleted"].append(name)
+        elif outcome == "already-gone":
+            report["already_gone"].append(name)
+        else:
+            report["failed"].append((name, outcome))
+    return report
 
 
 async def mark_deleted_from_channel(session, delivery: Delivery) -> Delivery:

@@ -166,7 +166,8 @@ async def test_delete_from_channel_refusal_keeps_the_row_sent(session: AsyncSess
 
     class _Refusing:
         async def delete_message(self, chat_id: int, message_id: int) -> bool:
-            raise PermanentDeliveryError("deleteMessage: message to delete not found")
+            # A real refusal: the message is still there, the bot has no rights.
+            raise PermanentDeliveryError("deleteMessage: not enough rights")
 
     monkeypatch.setattr(
         platforms, "client_for_channel", lambda channel, clients: (_Refusing(), None)

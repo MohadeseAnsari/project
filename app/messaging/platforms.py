@@ -50,6 +50,24 @@ class TransientDeliveryError(DeliveryError):
         super().__init__(message, retryable=True)
 
 
+class MessageGoneError(PermanentDeliveryError):
+    """The message is not in the chat any more.
+
+    Raised only by :meth:`PlatformClient.delete_message`, and it is NOT a
+    failure of the delete: the postcondition the caller asked for ("this
+    message is no longer published") already holds. The platforms report it as
+    a plain refusal — Bale with ``error_code`` 404, Telegram with 400 and
+    "message to delete not found" — so it has to be told apart from a real
+    refusal such as "not enough rights", where the message is still there.
+    """
+
+
+#: Phrases the providers use for "that message does not exist here". Checked
+#: against the provider's own description, because the HTTP status differs
+#: between them (Bale 404, Telegram 400).
+_GONE_PHRASES = ("message not found", "message to delete not found", "message to be deleted not found")
+
+
 # HTTP statuses worth another attempt: 408/425 are request timeouts, 429 is a
 # rate limit, and anything >=500 is a provider-side fault.
 _RETRYABLE_STATUSES = {408, 425, 429}
@@ -96,11 +114,20 @@ class PlatformClient:
         bare ``true`` on both platforms, so only the envelope is checked.
 
         Raises:
-            PermanentDeliveryError: the platform refuses (message too old,
-                wrong chat, no rights) — a retry cannot help.
+            MessageGoneError: the message is not in the chat — the deletion
+                already holds, so callers should treat it as done rather than
+                as a refusal they must retry forever.
+            PermanentDeliveryError: a real refusal (no rights, wrong chat) —
+                the message is still published and a retry cannot help.
             TransientDeliveryError: transport or server-side failure.
         """
-        await self._post_result("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        try:
+            await self._post_result("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        except PermanentDeliveryError as e:
+            description = str(e).lower()
+            if any(phrase in description for phrase in _GONE_PHRASES):
+                raise MessageGoneError(str(e)) from e
+            raise
         return True
 
     async def _get(self, method: str, params: dict) -> dict:

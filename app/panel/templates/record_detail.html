@@ -51,6 +51,7 @@
       </div>
     </div>
     {% elif tab == 'delivery' %}
+    {% if delete_note %}<div class="note">{{ delete_note }}</div>{% endif %}
     <table>
       <thead><tr><th>کانال</th><th>دسته / مسیر</th><th>وضعیت</th><th>تلاش</th><th>شناسهٔ پیام</th></tr></thead>
       <tbody>
@@ -62,6 +63,16 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if published_count %}
+    {# One action removes the message from EVERY channel this article reached.
+       Channels are independent: a refusal on one does not stop the others. #}
+    <div class="body" style="border-top:1px solid var(--line2)">
+      <form method="post" action="/records/{{ record.id }}/delete-everywhere" onsubmit="return confirm('پیام این خبر از {{ published_count|fa }} کانال حذف شود؟ این حذف واقعی روی خود سکو انجام می‌شود و برگشت‌پذیر نیست.');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger btn-sm" type="submit">حذف پیام از همهٔ کانال‌ها ({{ published_count|fa }})</button>
+        <span class="hint">اگر یک کانال پیام را حذف نکند، بقیه حذف می‌شوند و وضعیت آن‌ها «ارسال‌شده» می‌ماند.</span>
+      </form>
+    </div>
+    {% endif %}
     {% if message_preview %}
     <div class="body">
       <div class="preview">

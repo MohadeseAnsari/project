@@ -37,6 +37,7 @@ class FakeAsyncClient:
     """Stands in for httpx.AsyncClient and records POSTed methods/payloads."""
 
     status = 200
+    text = ""
     payload = {"ok": True, "result": True}
     raises: Exception | None = None
     last_post: tuple | None = None
@@ -58,7 +59,7 @@ class FakeAsyncClient:
         if FakeAsyncClient.raises:
             raise FakeAsyncClient.raises
         if FakeAsyncClient.status != 200:
-            return FakeResponse(FakeAsyncClient.status, text="message to delete not found")
+            return FakeResponse(FakeAsyncClient.status, text=FakeAsyncClient.text or "refused")
         return FakeResponse(200, FakeAsyncClient.payload)
 
 
@@ -66,6 +67,7 @@ class FakeAsyncClient:
 def stub_post(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     FakeAsyncClient.status = 200
+    FakeAsyncClient.text = ""
     FakeAsyncClient.raises = None
     FakeAsyncClient.payload = {"ok": True, "result": True}
     FakeAsyncClient.last_post = None
@@ -96,7 +98,40 @@ async def test_delete_message_refusal_is_permanent(stub_post):
 
 
 @pytest.mark.asyncio
-async def test_delete_message_transport_failure_is_retryable(stub_post):
+async def test_delete_message_not_found_is_reported_as_gone(stub_post):
+    """A missing message is not a failure of the delete — the goal already holds.
+
+    Bale says 404 "message not found"; Telegram says 400 "message to delete
+    not found". Both must become MessageGoneError so the caller records the
+    row instead of leaving it 'sent' forever.
+    """
+    from app.messaging.platforms import MessageGoneError, build_client
+
+    stub_post.status = 404
+    stub_post.text = "Bad Request: message not found"
+    with pytest.raises(MessageGoneError):
+        await build_client("bale", "token").delete_message(1, 2)
+
+    stub_post.status = 400
+    stub_post.text = "Bad Request: message to delete not found"
+    with pytest.raises(MessageGoneError):
+        await build_client("telegram", "token").delete_message(1, 2)
+
+
+@pytest.mark.asyncio
+async def test_a_real_refusal_is_not_confused_with_a_gone_message(stub_post):
+    """No rights is a genuine refusal: the message is still there."""
+    from app.messaging.platforms import MessageGoneError, PermanentDeliveryError, build_client
+
+    stub_post.status = 403
+    stub_post.text = "Forbidden: bot was blocked by the user"
+    with pytest.raises(PermanentDeliveryError) as excinfo:
+        await build_client("bale", "token").delete_message(1, 2)
+    assert not isinstance(excinfo.value, MessageGoneError)
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_is_retryable(stub_post):
     from app.messaging.platforms import TransientDeliveryError, build_client
 
     stub_post.raises = httpx.ConnectTimeout("timed out")

@@ -536,6 +536,13 @@ async def record_detail(
     ]
     categories = await field_service.list_categories(session)
     counts_ctx = await _sidebar_counts(session)
+    # How many messages are really out there, for the bulk delete button.
+    published_count = sum(1 for d in deliveries if d.status == "sent")
+    delete_note = {
+        "all": "پیام این خبر از همهٔ کانال‌ها حذف شد.",
+        "partial": "بعضی کانال‌ها پیام را حذف نکردند و وضعیتشان «ارسال‌شده» ماند؛ در ستون شناسهٔ پیام قابل تلاش مجدد هستند.",
+        "none": "هیچ پیام منتشرشده‌ای برای حذف نبود.",
+    }.get(request.query_params.get("deleted", ""), None)
     return templates.TemplateResponse(request, "record_detail.html",
         _ctx(
             request, user, active="records", **counts_ctx, record=record, deliveries=deliveries,
@@ -545,6 +552,7 @@ async def record_detail(
             snapshot_category=overview["snapshot_category"],
             current_category=overview["current_category"],
             field_keyword=overview["field_keyword"], prompt_preview=prompt_preview,
+            published_count=published_count, delete_note=delete_note,
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )
@@ -829,6 +837,63 @@ async def delivery_delete_from_channel(
         f"delivery={delivery.id} message_id={delivery.platform_message_id}",
     )
     return RedirectResponse(url="/deliveries", status_code=303)
+
+
+@panel_app.post("/records/{record_id}/delete-everywhere")
+async def record_delete_everywhere(
+    request: Request, record_id: int, confirm: str = Form(""),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Delete one article's published message from EVERY channel it reached.
+
+    An article fans out to a delivery row per routed channel, so removing
+    "the news" means acting on all of them. Each channel is a separate
+    platform call and they are handled independently: a channel that refuses
+    does not stop the others, and its row stays ``sent`` so the operator can
+    see the message is still there and retry just that one.
+
+    Requires an explicit ``confirm`` — this is a bulk, irreversible removal.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    article = await record_service.get_record(session, record_id)
+    if article is None:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    if confirm.strip() != "yes":
+        return RedirectResponse(url=f"/records/{record_id}?tab=delivery", status_code=303)
+
+    report = await delivery_service.delete_article_everywhere(session, record_id)
+    await audit_service.record_event(
+        session, user.id, "delete_from_channel", record_id,
+        f"record={record_id} deleted={len(report['deleted'])} "
+        f"already_gone={len(report['already_gone'])} failed={len(report['failed'])}",
+    )
+    for name, code in report["failed"]:
+        # The per-channel reason (refused/unavailable/no-token) is what the
+        # operator needs to know which message is still out there.
+        await audit_service.record_event(session, user.id, "delete_from_channel_failed", record_id,
+                                         f"record={record_id} channel={name} error={code}")
+    notice = _delete_notice(report)
+    return RedirectResponse(url=f"/records/{record_id}?tab=delivery&deleted={notice}",
+                            status_code=303)
+
+
+def _delete_notice(report: dict) -> str:
+    """One short, safe summary of a fan-out delete for the redirect note.
+
+    Only a flag: no platform error text is carried in a query string, and the
+    per-channel detail lives in the audit log.
+    """
+    if report["failed"]:
+        return "partial"
+    if report["deleted"] or report["already_gone"]:
+        return "all"
+    return "none"
 
 
 @panel_app.post("/deliveries/{delivery_id}/mark-deleted")
@@ -1548,6 +1613,7 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
+    "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",
 }
 
 #: Routes whose guard is ``require_login`` rather than a role check: a signed-in
