@@ -311,7 +311,15 @@ def test_configured_clients_skips_platforms_without_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_channels_for_article_uses_field_routes(session: AsyncSession):
+async def test_every_active_channel_is_a_target_even_with_a_legacy_field_route(
+    session: AsyncSession,
+):
+    """A field->channel row no longer narrows delivery (item 6).
+
+    It used to be the whole resolution: an article went only to the channels
+    its field was routed to. Both channels now receive it, because the rule is
+    "the news goes to all channels".
+    """
     field = await _field(session)
     bale = await _channel(session, "bale", 100)
     telegram = await _channel(session, "telegram", 200)
@@ -320,21 +328,14 @@ async def test_channels_for_article_uses_field_routes(session: AsyncSession):
 
     article = await _article(session, field)
     channels = await channels_for_article(session, article)
-    assert [c.id for c in channels] == [bale.id]
-    assert telegram.id not in [c.id for c in channels]
+    assert [c.id for c in channels] == [bale.id, telegram.id]
 
 
 @pytest.mark.asyncio
-async def test_channels_for_article_supports_many_to_many(session: AsyncSession):
+async def test_channels_for_article_covers_every_active_channel(session: AsyncSession):
     field = await _field(session)
     first = await _channel(session, "bale", 100)
     second = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
-    )
     await session.commit()
 
     article = await _article(session, field)
@@ -342,14 +343,14 @@ async def test_channels_for_article_supports_many_to_many(session: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_channels_for_article_falls_back_to_active_channels(session: AsyncSession):
+async def test_only_inactive_channels_are_excluded(session: AsyncSession):
     field = await _field(session)
     active = await _channel(session, "bale", 100)
     inactive = Channel(platform="bale", chat_id=300, is_active=False)
     session.add(inactive)
     await session.commit()
 
-    article = await _article(session, field)  # field has no routes
+    article = await _article(session, field)
     channels = await channels_for_article(session, article)
     assert [c.id for c in channels] == [active.id]
 

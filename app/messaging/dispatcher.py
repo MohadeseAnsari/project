@@ -24,7 +24,7 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import CategoryChannelRoute, Channel, Delivery, FieldChannelRoute, Main
+from app.db.models import CategoryChannelRoute, Channel, Delivery, Main
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
 from app.services.transitions import assert_delivery_transition, assert_record_transition
@@ -134,15 +134,17 @@ async def preview_routing(
 async def channels_for_article(session, article: Main) -> list[Channel]:
     """Return the active channels this article must be published to.
 
-    Resolution order (the business chain, single-sourced):
-    1. The article's category routes (``category_channel_routes``).
-    2. If the category has no route — or none to an *active* channel — the
-       article's field routes (``field_channel_routes``, kept as the
-       field-level exception table).
-    3. If neither resolves, every active channel. This deliberate fallback
-       (not a silent drop) covers runtime-discovered fields and unmapped
-       categories: losing their articles would be worse than publishing them
-       to the current channel set.
+    The owner's core rule (item 6): **every active channel** receives the
+    news. The previous chain (category route, else field route, else all
+    active) meant that adding one category->channel mapping silently stopped
+    delivery to every other channel, which is the opposite of what was asked
+    for.
+
+    ``category_channel_routes`` no longer FILTERS. It records which channel is
+    each category's designated news channel, and that is reported as the
+    delivery's provenance so the panel can show where a channel came from.
+
+    A channel switched off is the only way to stop delivery to it.
     """
     return [channel for channel, _ in await channels_for_article_with_source(session, article)]
 
@@ -150,40 +152,39 @@ async def channels_for_article(session, article: Main) -> list[Channel]:
 async def resolve_channels(
     session, category_id: int | None, field_id: int | None
 ) -> list[tuple[Channel, str]]:
-    """Resolve ``(channel, route_source)`` for a category/field pair.
+    """Resolve ``(channel, route_source)`` for one article.
 
-    The neutral core shared by the sender (via articles), the routing
-    preview, and the panel: one chain, three levels (``category`` | ``field``
-    | ``fallback``), so every surface agrees on where an article will go.
+    The neutral core shared by the sender (via articles), the routing preview
+    endpoint and the panel, so every surface agrees on where an article goes.
+
+    Every active channel is a target. The source is ``category`` when the
+    article's category is mapped to that channel and ``all`` when it is
+    reached by broadcast, which is what the row records for provenance.
     """
-    if category_id is not None:
-        result = await session.execute(
-            select(Channel)
-            .join(CategoryChannelRoute, CategoryChannelRoute.channel_id == Channel.id)
-            .where(CategoryChannelRoute.category_id == category_id)
-            .where(Channel.is_active.is_(True))
-            .order_by(Channel.id)
-        )
-        routed = list(result.scalars().all())
-        if routed:
-            return [(channel, "category") for channel in routed]
-
-    if field_id is not None:
-        result = await session.execute(
-            select(Channel)
-            .join(FieldChannelRoute, FieldChannelRoute.channel_id == Channel.id)
-            .where(FieldChannelRoute.field_id == field_id)
-            .where(Channel.is_active.is_(True))
-            .order_by(Channel.id)
-        )
-        routed = list(result.scalars().all())
-        if routed:
-            return [(channel, "field") for channel in routed]
-
-    result = await session.execute(
-        select(Channel).where(Channel.is_active.is_(True)).order_by(Channel.id)
+    active = list(
+        (
+            await session.execute(
+                select(Channel).where(Channel.is_active.is_(True)).order_by(Channel.id)
+            )
+        ).scalars().all()
     )
-    return [(channel, "fallback") for channel in list(result.scalars().all())]
+    if not active:
+        return []
+    designated: set[int] = set()
+    if category_id is not None:
+        designated = set(
+            (
+                await session.execute(
+                    select(CategoryChannelRoute.channel_id).where(
+                        CategoryChannelRoute.category_id == category_id
+                    )
+                )
+            ).scalars().all()
+        )
+    return [
+        (channel, "category" if channel.id in designated else "all")
+        for channel in active
+    ]
 
 
 async def channels_for_article_with_source(
@@ -191,99 +192,29 @@ async def channels_for_article_with_source(
 ) -> list[tuple[Channel, str]]:
     """Resolve ``(channel, route_source)`` pairs for an article.
 
-    Same chain as :func:`channels_for_article`, additionally reporting which
-    level produced each channel (``category`` | ``field`` | ``fallback``) so
-    the delivery row can snapshot its provenance at queue time.
+    Same rule as :func:`channels_for_article`, additionally reporting whether
+    the channel is this category's designated one (``category``) or was simply
+    reached by the broadcast (``all``), so the delivery row can snapshot its
+    provenance at queue time.
     """
     return await resolve_channels(session, article.category_id, article.field_id)
 
 
 def _has_undelivered_channel():
-    """SQL predicate: the article resolves to some active channel with no delivery.
+    """SQL predicate: the article has an active channel with no delivery yet.
 
-    Mirrors ``channels_for_article`` exactly, because the two must agree or the
-    batch query would either skip articles the resolver would route (silent
-    non-delivery) or keep returning articles the resolver has nothing to do
-    for (the starvation this replaces).
+    Mirrors :func:`channels_for_article` exactly — every active channel is a
+    target — because the two must agree or the batch query would either skip
+    articles the resolver would route (silent non-delivery) or keep returning
+    articles the resolver has nothing to do for.
 
-    An active channel ``c`` is a target when either:
-
-    - the article's category routes to ``c``, or
-    - the category routes nowhere and the field routes to ``c``, or
-    - neither routes anywhere, in which case every active channel is a
-      target (the documented fallback).
-
-    ``c`` still needs sending when no ``deliveries`` row exists for
-    ``(article, c)``. Note this is per-channel, not per-article: an article
-    already sent to one channel but not another must still be returned.
+    That agreement is now simple enough to state in one sentence, which is
+    the point: the old version had to re-express the three-level chain in SQL
+    and carried a comment explaining how easy it was to get subtly wrong.
     """
-    # Does this category route to ANY active channel? Distinguishes "routed
-    # somewhere" from "has no active route", which is what makes the field
-    # level (and then the fallback) fire in `channels_for_article`.
-    #
-    # `.correlate(Main)` is required, not decorative: without it SQLAlchemy adds
-    # `main` to this subquery's own FROM and renders
-    # `category_channel_routes.category_id = main.category_id` as a
-    # self-comparison that is true for any category with any route, making the
-    # predicate global rather than per-article.
-    category_has_active_route = exists(
-        select(1)
-        .select_from(CategoryChannelRoute)
-        .join(Channel, Channel.id == CategoryChannelRoute.channel_id)
-        .where(
-            and_(
-                CategoryChannelRoute.category_id == Main.category_id,
-                Channel.is_active.is_(True),
-            )
-        )
-        .correlate(Main)
-    )
-    # Does this field route to ANY active channel? Distinguishes "routed
-    # somewhere" from "has no active route", which is what makes the fallback
-    # fire in `channels_for_article`.
-    #
-    # `.correlate(Main)` is required, not decorative: without it SQLAlchemy adds
-    # `main` to this subquery's own FROM and renders
-    # `field_channel_routes.field_id = main.field_id` as a self-comparison that
-    # is true for any field with any route, making the predicate global rather
-    # than per-article.
-    field_has_active_route = exists(
-        select(1)
-        .select_from(FieldChannelRoute)
-        .join(Channel, Channel.id == FieldChannelRoute.channel_id)
-        .where(
-            and_(
-                FieldChannelRoute.field_id == Main.field_id,
-                Channel.is_active.is_(True),
-            )
-        )
-        .correlate(Main)
-    )
-
-    # One row per active channel this article could go to, LEFT JOINed to its
-    # category route, its field route (is_routed) and to its delivery
-    # (delivered). Kept as a single join level rather than nested EXISTS on
-    # an aliased Channel: a nested correlated subquery re-renders its own
-    # `channels_1` alias instead of binding the outer one, which silently
-    # turns a per-channel test into a per-article one. `.correlate(Main)`
-    # then keeps the outer article bound.
     return exists(
         select(1)
         .select_from(Channel)
-        .outerjoin(
-            CategoryChannelRoute,
-            and_(
-                CategoryChannelRoute.category_id == Main.category_id,
-                CategoryChannelRoute.channel_id == Channel.id,
-            ),
-        )
-        .outerjoin(
-            FieldChannelRoute,
-            and_(
-                FieldChannelRoute.field_id == Main.field_id,
-                FieldChannelRoute.channel_id == Channel.id,
-            ),
-        )
         .outerjoin(
             Delivery,
             and_(
@@ -294,21 +225,7 @@ def _has_undelivered_channel():
         .where(
             and_(
                 Channel.is_active.is_(True),
-                # No delivery row for (this article, this channel).
                 Delivery.id.is_(None),
-                # Category route wins; without one the field route applies;
-                # without either the fallback applies.
-                or_(
-                    CategoryChannelRoute.channel_id.isnot(None),
-                    and_(
-                        ~category_has_active_route,
-                        FieldChannelRoute.channel_id.isnot(None),
-                    ),
-                    and_(
-                        ~category_has_active_route,
-                        ~field_has_active_route,
-                    ),
-                ),
             )
         )
         .correlate(Main)

@@ -158,14 +158,13 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   platform-wide one, is never rendered back, and is what lets a channel be
   added with no environment change.
 - **category_channel_routes** — the primary category → channel mapping,
-  `(category_id, channel_id)` primary key, cascading deletes. The sender
-  consults it first; seeded permissively (every category to every active
-  channel) so publishing behavior never changes on deploy — the owner
-  narrows it per category in the panel.
-- **field_channel_routes** — the field → channel exception table,
-  `(field_id, channel_id)` primary key, cascading deletes. Fires only when
-  the article's category has no route; unmapped categories fall back to all
-  active channels rather than dropping the article.
+  `(category_id, channel_id)` primary key, cascading deletes. Since item 6 this
+  records each category's *designated* news channel and the delivery's
+  provenance; it does **not** filter delivery, because the rule is that every
+  active channel receives the news.
+- **field_channel_routes** — retired from the delivery decision (item 6) and no
+  longer written by the panel. The table is kept so existing rows and the
+  history they explain are not lost.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
@@ -402,9 +401,11 @@ windows/panes instead of background shell jobs you cannot reattach to.
   that is gone. It is told apart from a genuine refusal (no rights, wrong
   chat) by the provider's own description, since the HTTP status differs
   between Bale (404) and Telegram (400).
-- A field with no route falls back to all active channels: fields discovered at
-  runtime have no route row, and silently dropping their articles would be worse
-  than publishing them to the current channel set.
+- Delivery to EVERY active channel rather than a routed subset: the owner
+  redefined the core rule, and the previous chain meant that adding one
+  category mapping silently stopped delivery to all the other channels. A
+  channel is excluded only by switching it off, which is explicit and
+  reversible.
 - `awaiting_confirmation` is the gated initial delivery status when
   `REQUIRE_HUMAN_CONFIRMATION=true` (default): queued by the sender but never
   claimed until approval flips it to `pending`. With the flag off, queueing

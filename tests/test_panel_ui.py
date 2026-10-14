@@ -471,7 +471,6 @@ async def test_all_panel_pages_render(session: AsyncSession):
         "/submit": "ثبت پایان‌نامه",
         "/users": "کاربران و نقش‌ها",
         "/audit": "رویدادها",
-        "/routing": "پیش‌نمایش مسیریابی",
         "/profile": "حساب من",
     }
     async with _client() as client:

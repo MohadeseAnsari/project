@@ -31,12 +31,14 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Recovers stale `processing` jobs on startup and each loop iteration
 
 ### Sender Worker (Channel Delivery)
-- Polls for processed articles (`main.status = 'review'`) that have no delivery for a routed channel
+- Polls for processed articles (`main.status = 'review'`) that have no delivery for an active channel
 - Creates one `deliveries` row per (article, channel) — the unit of work
-- Resolves channels through the category chain: `category_channel_routes`
-  first, then `field_channel_routes` (field-level exceptions), then all
-  active channels as fallback; each delivery snapshots `category_id` +
-  `route_source` so sends stay explainable
+- Resolves channels for an article: **every active channel** is a target
+  (item 6). `category_channel_routes` records which channel is a category's
+  designated news channel and is reported as the delivery's provenance
+  (`route_source='category'` vs `'all'`); it does **not** narrow delivery, and
+  a channel is excluded only by being switched off. Each delivery also
+  snapshots `category_id`, so sends stay explainable
 - Renders the message (`app/messaging/formatting.py`): emoji-headed title in bold, lead, body, and the destination channel handle
 - Claims one due delivery at a time with `FOR UPDATE SKIP LOCKED`
 - Sends through the platform client for the channel (`Bale`, `Telegram`) using the bot token from configuration

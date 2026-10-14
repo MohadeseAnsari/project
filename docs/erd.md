@@ -35,6 +35,11 @@ erDiagram
         VARCHAR category_source
         TIMESTAMP created_at
     }
+    # fields.category_id is the ONE place a field's category is decided. It is
+    # assigned once — by hand from the panel, or by the classification rules
+    # when the field is first seen — and read from then on, never re-derived
+    # per submission (item 15). category_source records which: 'manual' or
+    # 'rules'.
 
     models {
         SERIAL id PK
@@ -133,12 +138,19 @@ erDiagram
         INTEGER channel_id PK,FK
         TIMESTAMP created_at
     }
+    # Retired from the delivery decision (item 6) and no longer written by the
+    # panel. Kept so existing rows and the history they explain are not lost;
+    # dropping the table would be a destructive migration for no gain.
 
     category_channel_routes {
         INTEGER category_id PK,FK
         INTEGER channel_id PK,FK
         TIMESTAMP created_at
     }
+    # One designated news channel per category. Since item 6 this does NOT
+    # filter delivery — every active channel receives the news. It records the
+    # pairing shown in the panel and becomes the delivery's
+    # route_source='category' provenance.
 
     deliveries {
         SERIAL id PK

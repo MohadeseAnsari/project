@@ -58,6 +58,55 @@ async def field_total(session) -> int:
     return (await session.execute(select(func.count()).select_from(Field))).scalar_one()
 
 
+async def field_category_rows(session) -> list[dict]:
+    """Every field with its category, for the "field → category" editor.
+
+    The owner's requirement (item 15): the assignment is stored once in the
+    database and edited by hand here, instead of a ruleset being re-applied on
+    every submission. ``category_source`` records whether the current value was
+    set by hand or came from the automatic rules, so the panel can show it.
+
+    Returned as plain dicts so the template needs no ORM access.
+    """
+    rows = (
+        await session.execute(
+            select(Field, Category.name)
+            .outerjoin(Category, Category.id == Field.category_id)
+            .order_by(Category.name.is_(None), Category.name, Field.name)
+        )
+    ).all()
+    return [
+        {
+            "id": field.id,
+            "name": field.name,
+            "category_id": field.category_id,
+            "category_name": category_name or "—",
+            "matched_keyword": field.matched_keyword,
+            "category_source": field.category_source,
+        }
+        for field, category_name in rows
+    ]
+
+
+async def assign_field_category(session, field: Field, category_id: int) -> Field:
+    """Pin a field to a category by hand (item 15).
+
+    Sets ``category_source='manual'`` so it is visibly an operator decision and
+    is not overwritten by the next automatic classification pass.
+
+    Raises:
+        ValueError: ``unknown-category`` when the category does not exist.
+    """
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise ValueError("unknown-category")
+    field.category_id = category.id
+    field.category_source = "manual"
+    await session.commit()
+    await session.refresh(field)
+    return field
+
+
 async def get_field(session, field_id: int) -> Field | None:
     """Fetch one field row by id (panel routes never touch the ORM directly)."""
     return await session.get(Field, field_id)
