@@ -1,32 +1,99 @@
 {% extends "base.html" %}
-{% block title %}رشته‌ها{% endblock %}
-{% block h1 %}رشته‌ها{% endblock %}
-{% block crumb %}کنسول › تنظیمات › رشته‌ها{% endblock %}
+{% block title %}رشته‌ها و دسته‌ها{% endblock %}
+{% block h1 %}رشته‌ها و دسته‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › رشته‌ها و دسته‌ها{% endblock %}
 {% block content %}
-<div class="two">
-  <div class="card">
-    <h3>رشته‌های تعریف‌شده<span class="grow"></span><span class="badge s-off">{{ total|fa }} رشته</span></h3>
-    <table>
-      <thead><tr><th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:150px">دسته</th><th style="width:130px">کلیدواژه</th><th style="width:110px">تأیید</th><th style="width:110px">کانال مسیرشده</th></tr></thead>
-      <tbody>
-        {% for f in fields %}
-        <tr><td class="num">{{ f.id|fa }}</td><td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
-          <td>{{ f.category_name or '—' }}</td><td>{{ f.matched_keyword or '—' }}</td>
-          <td>{% if f.category_source == 'curated' %}<span class="badge s-sent">انسانی</span>
+<div class="note">
+  یک رشته، یک دسته و کلیدواژهٔ تطبیقش یک چیز واحد هستند، پس در یک صفحه و در یک ردیف آمده‌اند.
+  دستهٔ هر رشته همین‌جا تعیین می‌شود و یک‌بار ذخیره می‌شود؛ در ثبت‌های بعدی دوباره محاسبه نمی‌شود.
+</div>
+
+<div class="card">
+  <div class="filters" style="border-bottom:1px solid var(--line2);padding-bottom:12px;margin-bottom:0">
+    <div class="seg">
+      <a href="/fields" style="text-decoration:none;color:inherit"><span class="{% if tab != 'categories' %}on{% endif %}">رشته‌ها</span></a>
+      <a href="/fields?tab=categories" style="text-decoration:none;color:inherit"><span class="{% if tab == 'categories' %}on{% endif %}">دسته‌ها و کلیدواژه‌ها</span></a>
+    </div>
+    <form method="get" action="/fields" style="display:flex;gap:9px;align-items:center;flex:1">
+      {% if tab == 'categories' %}<input type="hidden" name="tab" value="categories">{% endif %}
+      <input type="text" name="q" placeholder="جست‌وجو در نام {{ 'دسته' if tab == 'categories' else 'رشته' }}…" value="{{ q or '' }}" style="flex:1">
+      <button class="btn btn-primary btn-sm" type="submit">جست‌وجو</button>
+      {% if q %}<a class="btn btn-ghost btn-sm" href="/fields{% if tab == 'categories' %}?tab=categories{% endif %}">پاک‌کردن</a>{% endif %}
+    </form>
+    <span class="pill">{% if tab == 'categories' %}{{ categories|length|fa }} دسته{% else %}{{ total|fa }} رشته{% endif %}</span>
+  </div>
+
+  {% if tab == 'categories' %}
+  {# Tab 2: categories, with the fields that belong to each one. #}
+  <div class="two" style="padding:14px 22px">
+    {% for c in categories %}
+    <div class="card" style="margin:0"><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+      <div class="body"><div class="chips">
+        {% for f in c.field_names %}<span class="chip">{{ f }}</span>{% endfor %}
+      </div>
+      {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
+      <div class="hint" style="margin-top:10px">برای تغییر دستهٔ یک رشته، به تب «رشته‌ها» بروید.</div></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  {# Tab 1: every field as a row, with its category editable in place. #}
+  <table>
+    <thead><tr>
+      <th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:200px">دسته</th>
+      <th style="width:150px">کلیدواژهٔ تطبیق</th><th style="width:110px">منبع</th><th style="width:110px">تأیید</th>
+    </tr></thead>
+    <tbody>
+      {% for f in fields %}
+      <tr>
+        <td class="num">{{ f.id|fa }}</td>
+        <td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
+        <td>
+          <form method="post" action="/fields/{{ f.id }}/category" style="display:flex;gap:7px;align-items:center">{{ csrf_field(request) | safe }}
+            <select name="category_id" style="min-width:150px">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
+            <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
+          </form>
+        </td>
+        <td><small class="num">{{ f.matched_keyword or '—' }}</small></td>
+        <td><span class="badge {% if f.category_source == 'manual' %}s-sent{% elif f.category_source == 'curated' %}s-ready{% else %}s-off{% endif %}">{{ {'manual': 'دستی', 'curated': 'تأییدشده', 'llm': 'مدل', 'rules': 'قواعد'}.get(f.category_source, f.category_source) }}</span></td>
+        <td>{% if f.category_source == 'curated' or f.category_source == 'manual' %}<span class="badge s-sent">تأیید</span>
             {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
-          <td>{{ f.channel_names or 'بدون کانال' }}</td></tr>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="two">
+  <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+    {% for t in top %}
+    <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>{{ t.name }}</span><span class="num">{{ t.pct|fa }}٪</span></div><div class="bar"><i style="width:{{ t.pct }}%"></i></div></div>
+    {% endfor %}
+  </div></div>
+  <div class="card"><h3>دسته‌ها و کانال متناظر</h3><div class="body">
+    <table>
+      <thead><tr><th>دسته</th><th style="width:110px">رشته</th><th>کانال متناظر</th></tr></thead>
+      <tbody>
+        {% for c in categories %}
+        <tr>
+          <td class="title">{{ c.name }}</td>
+          <td class="num">{{ c.field_count|fa }}</td>
+          <td>
+            <form method="post" action="/channels/category-channel" style="display:flex;gap:7px;align-items:center">{{ csrf_field(request) | safe }}
+              <select name="channel_id" style="min-width:170px">
+                <option value="">— تعیین نشده —</option>
+                {% for ch in channels %}<option value="{{ ch.id }}" {% if c.channel_id == ch.id %}selected{% endif %}>{{ ch.title or ch.username or ch.platform }}</option>{% endfor %}
+              </select>
+              <input type="hidden" name="category_id" value="{{ c.id }}">
+              <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
+            </form>
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
-  </div>
-
-  <div style="display:flex;flex-direction:column;gap:14px">
-    <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
-      {% for t in top %}
-      <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>{{ t.name }}</span><span class="num">{{ t.pct|fa }}٪</span></div><div class="bar"><i style="width:{{ t.pct }}%"></i></div></div>
-      {% endfor %}
-    </div></div>
-    <div class="note">تطبیق رشته با نرمال‌سازی نام و قوانین کلیدواژه انجام می‌شود؛ رشته‌های تازهٔ دیده‌شده با منبع runtime ثبت می‌شوند.</div>
-  </div>
+    <div class="hint" style="margin-top:9px">ارسال به همهٔ کانال‌های فعال انجام می‌شود؛ این نگاشت فقط مشخص می‌کند کانال خبریِ هر دسته کدام است.</div>
+  </div></div>
 </div>
 {% endblock %}

@@ -463,8 +463,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
         "/": "داشبورد",
         "/records": "رکوردها و بازبینی",
         "/deliveries": "ارسال‌ها و تحویل",
-        "/fields": "رشته‌ها",
-        "/categories": "دسته‌ها",
+        "/fields": "رشته‌ها و دسته‌ها",
         "/channels": "کانال‌ها و مسیرها",
         "/models": "مدل‌ها",
         "/prompts": "پرامپت‌ها",
@@ -479,6 +478,13 @@ async def test_all_panel_pages_render(session: AsyncSession):
             response = await client.get(path)
             assert response.status_code == 200, path
             assert title in response.text, path
+        # The categories page was merged into /fields (item 4); its old
+        # address redirects rather than 404ing. Asserted here so a future
+        # removal of the redirect breaks a test, not a bookmark.
+        merged = await client.get("/categories", follow_redirects=False)
+        assert merged.status_code in (301, 302), "/categories must not 404"
+        landed = await client.get(merged.headers["location"])
+        assert landed.status_code == 200
         detail = await client.get(f"/records/{row.id}")
         assert detail.status_code == 200
         assert "دستهٔ ثبت‌شده" in detail.text

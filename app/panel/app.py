@@ -937,16 +937,44 @@ async def delivery_mark_deleted(
 
 
 @panel_app.get("/fields", response_class=HTMLResponse)
-async def fields_page(request: Request, session: AsyncSession = Depends(session_dep)):
-    """List known thesis fields with categories, routes, and top-field bars."""
+async def fields_page(
+    request: Request, tab: str = "", q: str = "",
+    session: AsyncSession = Depends(session_dep),
+):
+    """Fields, categories and keywords on ONE page (item 4).
+
+    They were three pages because they were written at different times, not
+    because the concepts differ: a field is a row, its category is a column on
+    that row, and the matched keyword is why the column holds what it holds.
+    One page with two tabs, and the field table carries the category as an
+    editable select so a change and its consequence are visible together.
+
+    ``/categories`` redirects here rather than 404ing, so old links survive.
+    """
     user = await require_login(request, session)
+    if tab not in ("", "categories"):
+        tab = ""
 
     fields = await field_service.list_fields(session)
     total = await field_service.field_total(session)
     top = await field_service.top_fields(session)
+    categories, category_total = await field_service.category_cards(session, q)
+    if q.strip():
+        # The search box filters whatever tab is open, so the category tab must
+        # search categories while the field tab searches fields.
+        fields = [f for f in fields if q.strip() in f["name"]]
+    channels = await channel_service.list_channels(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "fields.html",
-        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top))
+        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top,
+             tab=tab, q=q, categories=categories, category_total=category_total,
+             channels=channels))
+
+
+@panel_app.get("/categories")
+async def categories_page_merged(request: Request, session: AsyncSession = Depends(session_dep)):
+    """The standalone categories page is merged into ``/fields`` (item 4)."""
+    return RedirectResponse(url="/fields?tab=categories", status_code=301)
 
 
 @panel_app.post("/fields/{field_id}/confirm")
@@ -963,18 +991,7 @@ async def field_confirm(request: Request, field_id: int, session: AsyncSession =
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
     field = await field_service.confirm_category(session, field)
     await audit_service.record_event(session, user.id, "curate", None, f"field={field.name}")
-    return RedirectResponse(url="/fields", status_code=302)
-
-
-@panel_app.get("/categories", response_class=HTMLResponse)
-async def categories_page(request: Request, q: str = "", session: AsyncSession = Depends(session_dep)):
-    """List categories as cards with their real field names as chips."""
-    user = await require_login(request, session)
-
-    categories, total = await field_service.category_cards(session, q)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "categories.html",
-        _ctx(request, user, active="categories", **counts_ctx, categories=categories, total=total, q=q))
+    return RedirectResponse(url="/fields", status_code=303)
 
 
 @panel_app.get("/channels", response_class=HTMLResponse)
@@ -1054,7 +1071,7 @@ async def channel_set_category_channel(
             status_code=422)
     await audit_service.record_event(session, user.id, "route", None,
                                      f"category={category_id} channel={channel_id or 'none'} {outcome}")
-    return RedirectResponse(url="/channels", status_code=303)
+    return RedirectResponse(url="/fields", status_code=303)
 
 
 @panel_app.post("/fields/{field_id}/category")

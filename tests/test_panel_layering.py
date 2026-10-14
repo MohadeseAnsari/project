@@ -137,6 +137,7 @@ def test_every_panel_route_calls_a_service(path, methods, handler):
         "login_page",  # anonymous GET, renders the form
         "lifespan",  # startup hook
         "routing_page_removed",  # permanent redirect; the page it replaced is gone
+        "categories_page_merged",  # permanent redirect; merged into /fields (item 4)
     }:
         return
     source = ast.parse(_source_of(handler))
