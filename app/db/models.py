@@ -145,6 +145,10 @@ class PanelUser(Base):
     password_hash = Column(Text, nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    #: Set when an admin deletes the account. The row is kept so
+    #: ``audit_logs.user_id`` keeps resolving an author, but it is filtered out
+    #: of every panel listing and can no longer log in.
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     role = relationship("Role", back_populates="users")

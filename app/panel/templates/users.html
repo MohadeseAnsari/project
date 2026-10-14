@@ -26,26 +26,47 @@
       </tbody>
     </table>
     <div class="body" style="border-top:1px solid var(--line2)">
-      <div class="hint">توصیه: به‌جای حذف، غیرفعال کنید. حذف، ردیف‌های دارای تاریخچه را فقط غیرفعال نگه می‌دارد و فقط کاربران بدون تاریخچه را کاملاً پاک می‌کند.</div>
+      <div class="hint">توصیه: به‌جای حذف، غیرفعال کنید. حذف، حساب را از پنل برمی‌دارد و دیگر دیده یا وارد نمی‌شود، ولی نامش در تاریخچهٔ رویدادها می‌ماند.</div>
     </div>
-    <div class="body" style="border-top:1px solid var(--line2)">
-      <div class="hint">تغییر نقش هر کاربر از همین جدول انجام می‌شود:</div>
-      {% for u in users %}
-      <form method="post" action="/users/{{ u.id }}/role" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">{{ csrf_field(request) | safe }}
-        <span style="font-size:12.5px">{{ u.username }}</span>
-        <select name="role">
-          <option value="viewer" {% if u.role=='viewer' %}selected{% endif %}>بیننده — فقط دیدن</option>
-          <option value="editor" {% if u.role=='editor' %}selected{% endif %}>بازبین — ویرایش و تأیید خبر</option>
-          <option value="admin" {% if u.role=='admin' %}selected{% endif %}>ادمین — همهٔ دسترسی‌ها</option>
-        </select>
-        <button class="btn btn-ghost btn-sm" type="submit">ثبت نقش</button>
+  </div>
+
+  {# ONE settings block for every user: pick someone, then act. Previously this
+     looped a role form and a password form per user, so the page grew a pair
+     of sections for each account added. #}
+  <div class="card">
+    <h3>تنظیمات کاربر</h3>
+    <div class="body">
+      <form method="get" action="/users" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="margin:0">
+          <label>کاربر</label>
+          <select name="user_id" onchange="this.form.submit()">
+            {% for u in users %}
+            <option value="{{ u.id }}" {% if selected_user and selected_user.id == u.id %}selected{% endif %}>{{ u.username }} — {{ {'admin': 'ادمین', 'editor': 'بازبین', 'viewer': 'بیننده'}.get(u.role, u.role) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% if not users %}<div class="hint">کاربری برای تنظیم وجود ندارد.</div>{% endif %}
       </form>
-      <form method="post" action="/users/{{ u.id }}/password" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">{{ csrf_field(request) | safe }}
-        <span style="font-size:12.5px">{{ u.username }}</span>
-        <input type="password" name="new_password" placeholder="گذرواژهٔ تازه (حداقل ۸ نویسه)" required minlength="8" style="max-width:230px">
+      {% if selected_user %}
+      <div class="hint" style="margin:12px 0 9px">تنظیمات <b>{{ selected_user.username }}</b> — همین‌جا اعمال می‌شود و بخش تازه‌ای به صفحه اضافه نمی‌شود.</div>
+      <form method="post" action="/users/{{ selected_user.id }}/role" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap">{{ csrf_field(request) | safe }}
+        <div class="field" style="margin:0"><label>نقش</label>
+          <select name="role">
+            <option value="viewer" {% if selected_user.role=='viewer' %}selected{% endif %}>بیننده — فقط دیدن</option>
+            <option value="editor" {% if selected_user.role=='editor' %}selected{% endif %}>بازبین — ویرایش و تأیید خبر</option>
+            <option value="admin" {% if selected_user.role=='admin' %}selected{% endif %}>ادمین — همهٔ دسترسی‌ها</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-sm" type="submit">ثبت نقش</button>
+      </form>
+      <form method="post" action="/users/{{ selected_user.id }}/password" style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-top:10px">{{ csrf_field(request) | safe }}
+        <div class="field" style="margin:0"><label>گذرواژهٔ تازه</label><input type="password" name="new_password" placeholder="حداقل ۸ نویسه" required minlength="8" style="max-width:230px"></div>
         <button class="btn btn-ghost btn-sm" type="submit">ثبت گذرواژه</button>
       </form>
-      {% endfor %}
+      <form method="post" action="/users/{{ selected_user.id }}/toggle" style="margin-top:10px">{{ csrf_field(request) | safe }}
+        <button class="btn btn-ghost btn-sm" type="submit">{% if selected_user.is_active %}غیرفعال‌سازی این کاربر{% else %}فعال‌سازی این کاربر{% endif %}</button>
+      </form>
+      {% endif %}
     </div>
   </div>
 

@@ -13,8 +13,17 @@ from app.services.passwords import hash_password, verify_password
 
 
 async def list_users(session) -> list[dict]:
-    """All console users with role names for the management table."""
-    rows = (await session.execute(select(PanelUser).order_by(PanelUser.id))).scalars().all()
+    """Live console users with role names, for the management table.
+
+    Deleted accounts are excluded: the owner asked that a deleted user stops
+    appearing in the panel. The row itself is kept (see ``delete_user``) so
+    the audit trail keeps its author names.
+    """
+    rows = (
+        await session.execute(
+            select(PanelUser).where(PanelUser.deleted_at.is_(None)).order_by(PanelUser.id)
+        )
+    ).scalars().all()
     users = []
     for user in rows:
         role = await session.get(Role, user.role_id)
@@ -50,12 +59,12 @@ async def get_user_by_username(session, username: str) -> PanelUser | None:
 async def get_active_user_with_role(session, user_id: int) -> PanelUser | None:
     """Load a logged-in user with its role attached, or None.
 
-    Panel session resolution: an unknown, inactive, or role-less user is
-    treated as anonymous. The role object is loaded explicitly because the
+    Panel session resolution: an unknown, inactive, deleted, or role-less user
+    is treated as anonymous. The role object is loaded explicitly because the
     panel renders it after the session closes (no lazy loading there).
     """
     user = await session.get(PanelUser, user_id)
-    if not user or not user.is_active:
+    if not user or not user.is_active or user.deleted_at is not None:
         return None
     role = await session.get(Role, user.role_id)
     if role is None:
@@ -238,7 +247,7 @@ async def active_admin_count(session) -> int:
 
 
 async def user_audit_count(session, user_id: int) -> int:
-    """Audit rows authored by a user (decides deactivate vs hard-delete)."""
+    """Audit rows authored by a user (how much history a deleted account leaves)."""
     return (
         await session.execute(
             select(func.count()).select_from(AuditLog).where(AuditLog.user_id == user_id)
@@ -298,20 +307,29 @@ async def audit_usernames(session) -> list[str]:
 
 
 async def delete_user(session, row: PanelUser, *, actor_id: int) -> str:
-    """Delete a console user with safeguards; return ``deactivated``/``deleted``.
+    """Delete a console user: they stop appearing in the panel entirely.
 
-    An admin cannot delete their own account, and the last remaining active
-    admin cannot be deleted. Because ``audit_logs.user_id`` is ``ON DELETE
-    SET NULL``, a user WITH audit history is kept as a deactivated row so
-    the trail keeps its author names; only history-free users are
-    hard-deleted.
+    The account is tombstoned (``deleted_at``) rather than removed. A hard
+    delete would null out ``audit_logs.user_id`` (ON DELETE SET NULL) and
+    lose who approved what, so the row stays and every panel listing and the
+    login path filter it out. The owner asked for exactly that: a deleted
+    user is not seen in the panel any more.
+
+    Safeguards are unchanged: an admin cannot delete their own account, and
+    the last remaining active admin cannot be deleted.
+
+    Returns ``deleted`` (or ``already-deleted`` when repeated).
 
     Raises:
         ValueError: ``self-delete`` for one's own account, ``last-admin``
             when no active admin would remain.
     """
+    from datetime import datetime
+
     if row.id == actor_id:
         raise ValueError("self-delete")
+    if row.deleted_at is not None:
+        return "already-deleted"
     role = await session.get(Role, row.role_id)
     if (
         role is not None
@@ -320,11 +338,8 @@ async def delete_user(session, row: PanelUser, *, actor_id: int) -> str:
         and await active_admin_count(session) <= 1
     ):
         raise ValueError("last-admin")
-    if await user_audit_count(session, row.id) > 0:
-        row.is_active = False
-        await session.commit()
-        await session.refresh(row)
-        return "deactivated"
-    await session.delete(row)
+    row.deleted_at = datetime.utcnow()
+    row.is_active = False
     await session.commit()
+    await session.refresh(row)
     return "deleted"

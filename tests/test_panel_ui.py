@@ -801,7 +801,7 @@ async def test_final_prompt_tab_shows_exact_messages(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_user_delete_safeguards(session: AsyncSession):
-    """Self-delete and last-admin delete are refused; history decides deactivate vs erase."""
+    """Self-delete and last-admin delete are refused; every delete tombstones."""
     from sqlalchemy import select
 
     from app.db.models import AuditLog, PanelUser
@@ -814,20 +814,25 @@ async def test_user_delete_safeguards(session: AsyncSession):
         await _login(client, "panel-admin")
         assert (await client.post(f"/users/{admin.id}/delete", follow_redirects=False)).status_code == 422
         assert (await client.post("/users/999999/delete", follow_redirects=False)).status_code == 404
-        # Editor has no audit history: hard-deleted, row gone.
         assert (await client.post(f"/users/{editor.id}/delete", follow_redirects=False)).status_code == 302
     session.expunge_all()
-    assert await session.get(PanelUser, editor.id) is None
+    row = await session.get(PanelUser, editor.id)
+    # Deleted accounts are tombstoned, never erased: audit_logs.user_id is
+    # ON DELETE SET NULL, so erasing the row would lose its author name.
+    assert row is not None
+    assert row.deleted_at is not None
+    assert row.is_active is False
     # Last active admin cannot be deleted even with a second admin present-but-inactive.
     assert (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one().is_active is True
 
 
 @pytest.mark.asyncio
-async def test_user_delete_keeps_audited_row_deactivated(session: AsyncSession):
-    """A user with audit history is kept as a deactivated row, never erased."""
+async def test_a_deleted_user_disappears_from_the_panel(session: AsyncSession):
+    """The owner's requirement: a deleted user is not seen in the panel again."""
     from sqlalchemy import select
 
     from app.db.models import AuditLog, PanelUser
+    from app.services import users as user_service
 
     await _user(session, "panel-admin")
     await _user_with_role(session, "panel-editor", "editor")
@@ -845,12 +850,27 @@ async def test_user_delete_keeps_audited_row_deactivated(session: AsyncSession):
         await _login(client, "panel-admin")
         response = await client.post(f"/users/{editor.id}/delete", follow_redirects=False)
         assert response.status_code == 302
+        page = await client.get("/users")
     session.expunge_all()
     row = await session.get(PanelUser, editor.id)
-    assert row is not None
+    assert row is not None, "the row is kept so history keeps its author"
+    assert row.deleted_at is not None
     assert row.is_active is False
-    actions = (await session.execute(select(AuditLog.action).where(AuditLog.detail.contains("panel-editor")))).scalars().all()
+    assert "panel-editor" not in page.text, "a deleted user must not appear in the panel"
+    # And they cannot log back in.
+    async with _client() as client:
+        login = await client.post(
+            "/login", data={"username": "panel-editor", "password": "rotated99"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 401
+    # The trail still names them.
+    actions = (await session.execute(
+        select(AuditLog.action).where(AuditLog.detail.contains("panel-editor"))
+    )).scalars().all()
     assert "user_delete" in actions
+    listed = {u["username"] for u in await user_service.list_users(session)}
+    assert "panel-editor" not in listed
 
 
 @pytest.mark.asyncio

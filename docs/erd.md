@@ -96,8 +96,12 @@ erDiagram
         TEXT password_hash
         INTEGER role_id FK
         BOOLEAN is_active
+        TIMESTAMP deleted_at
         TIMESTAMP created_at
     }
+    # deleted_at tombstones a removed console account (migration 020): the row
+    # is kept so audit_logs.user_id keeps resolving the author, but every
+    # panel listing and the login path filter it out.
 
     audit_logs {
         SERIAL id PK
