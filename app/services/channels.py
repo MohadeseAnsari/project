@@ -28,16 +28,34 @@ async def get_channel(session, channel_id: int) -> Channel | None:
 
 
 async def channels_with_route_counts(session) -> list[Channel]:
-    """Channels with ``route_count`` attached for the overview cards."""
+    """Channels with ``route_count`` and ``sent_count`` attached.
+
+    Two grouped queries for every channel rather than one per channel, so the
+    dashboard does not fan out into N queries as channels are added.
+    """
+    from app.db.models import Delivery
+
     channels = await list_channels(session)
-    for channel in channels:
-        channel.route_count = (
+    route_counts = dict(
+        (
             await session.execute(
-                select(func.count()).select_from(FieldChannelRoute).where(
-                    FieldChannelRoute.channel_id == channel.id
-                )
+                select(FieldChannelRoute.channel_id, func.count())
+                .group_by(FieldChannelRoute.channel_id)
             )
-        ).scalar_one()
+        ).all()
+    )
+    sent_counts = dict(
+        (
+            await session.execute(
+                select(Delivery.channel_id, func.count())
+                .where(Delivery.status == "sent")
+                .group_by(Delivery.channel_id)
+            )
+        ).all()
+    )
+    for channel in channels:
+        channel.route_count = route_counts.get(channel.id, 0)
+        channel.sent_count = sent_counts.get(channel.id, 0)
     return channels
 
 
@@ -338,77 +356,85 @@ async def has_deliveries(session, channel_id: int) -> bool:
     return bool(count)
 
 
-async def add_field_route(session, *, field_id: int, channel_id: int) -> bool:
-    """Insert a field exception route; False when it already exists."""
-    session.add(FieldChannelRoute(field_id=field_id, channel_id=channel_id))
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        return False
-    return True
+async def category_channel_matrix(session) -> list[dict]:
+    """Each category with the channel designated for it (item 6).
+
+    This is the "which news channel corresponds to this category" half of the
+    owner's configuration. Since delivery broadcasts to every active channel,
+    this pairing is a LABEL and a provenance marker, not a filter — the panel
+    says so on the row.
+
+    ``channel_id`` is None when the category has no designated channel, and 0
+    when it has one that was since deleted.
+    """
+    from app.db.models import Delivery, Field
+
+    categories = (
+        await session.execute(select(Category).order_by(Category.name))
+    ).scalars().all()
+    field_counts = dict(
+        (
+            await session.execute(
+                select(Field.category_id, func.count()).group_by(Field.category_id)
+            )
+        ).all()
+    )
+    designated = {
+        row.category_id: row.channel_id
+        for row in (
+            await session.execute(select(CategoryChannelRoute).order_by(CategoryChannelRoute.channel_id))
+        ).scalars().all()
+    }
+    return [
+        {
+            "id": category.id,
+            "name": category.name,
+            "description": category.description,
+            "field_count": field_counts.get(category.id, 0),
+            "channel_id": designated.get(category.id),
+        }
+        for category in categories
+    ]
 
 
-async def remove_field_route(session, *, field_id: int, channel_id: int) -> bool:
-    """Remove a field exception route; False when there was none."""
-    row = await session.get(FieldChannelRoute, (field_id, channel_id))
-    if not row:
-        return False
-    await session.delete(row)
+async def set_category_channel(session, *, category_id: int, channel_id: int | None) -> str:
+    """Set (or clear) the channel designated for one category (item 6).
+
+    A category gets exactly one designated channel, so setting a new one
+    replaces the previous pairing for that category and leaves other
+    categories' pairings alone. Passing ``channel_id=None`` clears it.
+
+    Returns ``"set"`` or ``"cleared"``.
+
+    Raises:
+        ValueError: ``unknown-category`` / ``unknown-channel`` when the row
+            does not exist, so a stale form cannot write a dangling route.
+    """
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise ValueError("unknown-category")
+    existing = list(
+        (
+            await session.execute(
+                select(CategoryChannelRoute).where(CategoryChannelRoute.category_id == category_id)
+            )
+        ).scalars().all()
+    )
+    if channel_id is None:
+        for route in existing:
+            await session.delete(route)
+        if existing:
+            await session.commit()
+        return "cleared"
+    channel = await session.get(Channel, channel_id)
+    if channel is None:
+        raise ValueError("unknown-channel")
+    for route in existing:
+        if route.channel_id != channel_id:
+            await session.delete(route)
+    if not any(route.channel_id == channel_id for route in existing):
+        session.add(CategoryChannelRoute(category_id=category_id, channel_id=channel_id))
     await session.commit()
-    return True
+    return "set"
 
 
-async def add_category_route(session, *, category_id: int, channel_id: int) -> bool:
-    """Insert a category route (the primary mapping); False if it exists."""
-    session.add(CategoryChannelRoute(category_id=category_id, channel_id=channel_id))
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        return False
-    return True
-
-
-async def remove_category_route(session, *, category_id: int, channel_id: int) -> bool:
-    """Remove a category route; False when there was none."""
-    row = await session.get(CategoryChannelRoute, (category_id, channel_id))
-    if not row:
-        return False
-    await session.delete(row)
-    await session.commit()
-    return True
-
-
-async def field_route_matrix(session, limit: int = 30) -> list[dict]:
-    """Field→channel tick matrix rows (``field_name``, ``channel_ids``)."""
-    fields = (await session.execute(select(Field).order_by(Field.id).limit(limit))).scalars().all()
-    matrix = []
-    for field in fields:
-        ids = set(
-            (
-                await session.execute(
-                    select(FieldChannelRoute.channel_id).where(FieldChannelRoute.field_id == field.id)
-                )
-            ).scalars().all()
-        )
-        matrix.append({"field_name": field.name, "channel_ids": ids})
-    return matrix
-
-
-async def category_route_matrix(session) -> tuple[list[Category], list[dict]]:
-    """All categories plus their routed channel ids for the primary matrix."""
-    categories = (await session.execute(select(Category).order_by(Category.id))).scalars().all()
-    routes = []
-    for category in categories:
-        ids = set(
-            (
-                await session.execute(
-                    select(CategoryChannelRoute.channel_id).where(
-                        CategoryChannelRoute.category_id == category.id
-                    )
-                )
-            ).scalars().all()
-        )
-        routes.append({"category_id": category.id, "category_name": category.name, "channel_ids": ids})
-    return categories, routes

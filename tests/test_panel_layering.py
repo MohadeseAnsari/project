@@ -28,6 +28,7 @@ ALLOWED_PANEL_IMPORTS = {
     "app.services.audit",
     "app.services.errors",
     "app.services.channels",
+    "app.services.dashboard",
     "app.services.deliveries",
     "app.services.fields",
     "app.services.models",
@@ -135,6 +136,7 @@ def test_every_panel_route_calls_a_service(path, methods, handler):
         "logout",  # clears a signed cookie; no data access
         "login_page",  # anonymous GET, renders the form
         "lifespan",  # startup hook
+        "routing_page_removed",  # permanent redirect; the page it replaced is gone
     }:
         return
     source = ast.parse(_source_of(handler))

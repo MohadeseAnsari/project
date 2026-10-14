@@ -7,11 +7,11 @@
 <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
 {% endblock %}
 {% block content %}
-<div class="kpis">
-  <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی انسانی</div></div></div>
-  <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف / در حال پردازش</div></div></div>
-  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده در کانال‌ها</div></div></div>
-  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق — نیازمند بررسی</div></div></div>
+{# Counters and health re-fetch themselves every settings.panel_dashboard_refresh_seconds
+   (item 19), so an operator watching a run sees it move without reloading. The
+   chart, timeline and channel table are stable over that window and stay put. #}
+<div id="dash-live" hx-get="/dashboard/live" hx-trigger="load, every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "dashboard_live.html" %}
 </div>
 
 <div class="side3">
@@ -23,33 +23,6 @@
         <div style="height:{{ day.pct }}%"><span>{{ day.label }}</span></div>
         {% endfor %}
       </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>سلامت سامانه</h3>
-    <div class="body" style="display:flex;flex-direction:column;gap:11px">
-      <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">API</b><span class="grow"></span><span class="badge s-sent">ok</span></div>
-      <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">پایگاه‌داده</b><span class="grow"></span><span class="badge s-sent">connected</span></div>
-      {# The model that actually writes the news. Its state is computed in the
-         service layer, so this row and any other consumer cannot disagree. #}
-      {% set m = model_health %}
-      {% set m_state = m.state %}
-      <div style="display:flex;align-items:center;gap:8px">
-        <span class="dot{% if m_state not in ('connected',) %} a{% endif %}"></span>
-        <b style="font-size:13px">مدل فعال (تولید خبر)</b>
-        <span class="grow"></span>
-        <span class="badge {% if m_state == 'connected' %}s-sent{% elif m_state == 'untested' %}s-ready{% else %}s-failed{% endif %}">
-          {{ {'connected': 'Connected', 'untested': 'Checking', 'disconnected': 'Disconnected', 'degraded': 'Degraded', 'missing': 'Not configured'}[m_state] }}
-        </span>
-      </div>
-      <div class="hint" style="margin-top:-6px">
-        {% if m.name %}<span class="num" style="direction:ltr;display:inline-block">{{ m.api_model }}</span> ·
-        {% endif %}{% if m.tested_at %}آخرین بررسی: {{ m.tested_at|jalali }}{% else %}هنوز بررسی نشده{% endif %}{% if m.latency_ms %} · {{ m.latency_ms|fa }} میلی‌ثانیه{% endif %}
-        {%- if m.error %} · {{ m.error }}{% endif %}
-      </div>
-      <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if not worker_fresh %} a{% endif %}"></span><b style="font-size:13px">worker تولید</b><span class="grow"></span><span class="badge {% if worker_fresh %}s-sent{% else %}s-ready{% endif %}">{{ 'Active' if worker_fresh else 'Idle' }}</span></div>
-      <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if pending_deliveries %} a{% endif %}"></span><b style="font-size:13px">worker ارسال</b><span class="grow"></span><span class="badge {% if pending_deliveries %}s-ready{% else %}s-sent{% endif %}">{{ ('صف ' ~ pending_deliveries ~ ' مورد') if pending_deliveries else 'صف خالی' }}</span></div>
     </div>
   </div>
 </div>
@@ -70,10 +43,10 @@
     <h3>وضعیت کانال‌ها و مسیرها</h3>
     <div class="body">
       <table>
-        <thead><tr><th>کانال</th><th>رشته‌های مسیرشده</th><th>حالت</th></tr></thead>
+        <thead><tr><th>کانال</th><th>خبرهای منتشرشده</th><th>حالت</th></tr></thead>
         <tbody>
           {% for c in channels %}
-          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.route_count|fa }} رشته</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
+          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.sent_count|fa }} خبر</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
           {% endfor %}
         </tbody>
       </table>

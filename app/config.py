@@ -34,6 +34,29 @@ class Settings(BaseSettings):
     worker_heartbeat_interval_seconds: float = 30.0
     worker_lease_minutes: int = 5
 
+    # Panel (console) live updates.
+    #
+    # The dashboard's counters and health card are re-fetched on this cadence
+    # so an operator watching a generate→approve→publish run sees it move
+    # without reloading. It is deliberately slower than the workers' own poll
+    # loops: this is a human-facing readout, not a control loop, and the
+    # figures are cheap `GROUP BY` counts.
+    panel_dashboard_refresh_seconds: int = 15
+
+    # Field -> category classification.
+    #
+    # OFF by default and the default is deliberate: the deterministic rules in
+    # ``app/fields/classification.py`` are instant, free, auditable (they
+    # report the matched keyword) and never fail. Turning this on asks the
+    # active model to choose a category instead, which can place a field the
+    # rules have never seen — at the cost of a network call per NEW field, a
+    # non-deterministic answer, and no keyword to explain it.
+    #
+    # Either way the result is stored ONCE on the field row (item 15) and read
+    # from then on, so this flag affects only the first sighting of a field.
+    use_llm_for_categorization: bool = False
+    llm_classification_timeout_seconds: float = 20.0
+
     # Outbound delivery (sender Worker).
     #
     # One token per platform, not per channel: a deployment publishes through

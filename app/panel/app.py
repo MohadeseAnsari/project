@@ -24,6 +24,7 @@ from app.panel.auth import ensure_admin_user, session_user_id, verify_password
 from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
+from app.services import dashboard as dashboard_service
 from app.services.errors import PermissionDenied, from_value_error
 from app.services import channels as channel_service
 from app.services import deliveries as delivery_service
@@ -32,7 +33,6 @@ from app.services import fields as field_service
 from app.services import models as model_service
 from app.services import prompts as prompt_service
 from app.services import records as record_service
-from app.services import routing as routing_service
 from app.services import session_dep as service_session_dep
 from app.services import users as user_service
 from app.services.transitions import STATUS_FA
@@ -166,12 +166,6 @@ def _ctx(request: Request, user: object | None, **extra):
     return base
 
 
-async def _sidebar_counts(session: AsyncSession) -> dict:
-    """Sidebar badges: records awaiting review + deliveries needing attention."""
-    review_total = await record_service.needs_review_count(session)
-    counts = await delivery_service.delivery_status_counts(session)
-    gated_total = counts.get("failed", 0) + counts.get("awaiting_confirmation", 0)
-    return {"review_count": review_total or None, "gated_count": gated_total or None}
 
 
 def _role_name(user) -> str | None:
@@ -289,12 +283,8 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
 
     user = await require_login(request, session)
 
-    counts = await record_service.record_status_counts(session)
-    delivery_counts = await delivery_service.delivery_status_counts(session)
-    kpi_review = await record_service.needs_review_count(session)
-    kpi_queued = counts.get("ready", 0) + counts.get("processing", 0)
-    kpi_sent = delivery_counts.get("sent", 0)
-    kpi_failed = counts.get("failed", 0) + delivery_counts.get("failed", 0)
+    live = await dashboard_service.live_counters(session)
+    refresh_seconds = settings.panel_dashboard_refresh_seconds
 
     # Real 7-day series: records created per day, heights normalized.
     today = datetime.utcnow().date()
@@ -308,12 +298,6 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
         }
         for d, n in per_day
     ]
-
-    heartbeat = await record_service.worker_heartbeat(session)
-    worker_fresh = bool(
-        heartbeat and (datetime.utcnow() - heartbeat).total_seconds() < settings.worker_lease_minutes * 60
-    )
-    pending_deliveries = delivery_counts.get("pending", 0)
 
     # Timeline: latest human/system events from the audit trail.
     timeline = []
@@ -329,22 +313,40 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
         )
 
     channels = await channel_service.channels_with_route_counts(session)
-    # The model that actually writes the news, and whether it is reachable.
-    model_health = await model_service.active_model_health(session)
 
+    delivery_counts = await delivery_service.delivery_status_counts(session)
     failed_note = None
     if delivery_counts.get("failed", 0):
         failed_note = f"{_fa(delivery_counts['failed'])} تحویل ناموفق در صف اقدام دستی است؛ از صفحهٔ ارسال‌ها «تلاش مجدد» را بزنید."
 
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     now_label = jdatetime.datetime.now().strftime("%H:%M")
     return templates.TemplateResponse(request, "dashboard.html",
         _ctx(
-            request, user, active="dashboard", **counts_ctx,
-            kpi_review=kpi_review, kpi_queued=kpi_queued, kpi_sent=kpi_sent, kpi_failed=kpi_failed,
-            chart=chart, worker_fresh=worker_fresh, pending_deliveries=pending_deliveries,
-            timeline=timeline, channels=channels, failed_note=failed_note, now_label=now_label,
-            model_health=model_health,
+            request, user, active="dashboard", **counts_ctx, **live,
+            chart=chart, timeline=timeline, channels=channels, failed_note=failed_note,
+            now_label=now_label, refresh_seconds=refresh_seconds,
+        ),
+    )
+
+
+@panel_app.get("/dashboard/live", response_class=HTMLResponse)
+async def dashboard_live(request: Request, session: AsyncSession = Depends(session_dep)):
+    """The dashboard's counters and health card, for HTMX polling (item 19).
+
+    Only the volatile region: four GROUP BY counts, the worker leases and the
+    active model's connection state. The 7-day chart and the event timeline
+    are deliberately excluded — they do not change over the poll window, and
+    re-rendering them would only add flicker.
+    """
+    user = await require_login(request, session)
+    live = await dashboard_service.live_counters(session)
+    sidebar = await dashboard_service.sidebar_badges(session)
+    return templates.TemplateResponse(
+        request, "dashboard_live.html",
+        _ctx(
+            request, user, **sidebar, **live,
+            refresh_seconds=settings.panel_dashboard_refresh_seconds,
         ),
     )
 
@@ -407,7 +409,7 @@ async def records_page(
         order=order, approved=approved_flag,
     )
     needs_review = await record_service.needs_review_count(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
@@ -538,7 +540,7 @@ async def record_detail(
         for step in await record_service.record_timeline(session, record)
     ]
     categories = await field_service.list_categories(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     # How many messages are really out there, for the bulk delete button.
     published_count = sum(1 for d in deliveries if d.status == "sent")
     delete_note = {
@@ -702,7 +704,7 @@ async def deliveries_page(
         if newest_failure and newest_failure.error_message else None
     )
     delivery_counts = await delivery_service.delivery_status_counts(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
     return templates.TemplateResponse(request, "deliveries.html",
         _ctx(
@@ -942,7 +944,7 @@ async def fields_page(request: Request, session: AsyncSession = Depends(session_
     fields = await field_service.list_fields(session)
     total = await field_service.field_total(session)
     top = await field_service.top_fields(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "fields.html",
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top))
 
@@ -970,14 +972,20 @@ async def categories_page(request: Request, q: str = "", session: AsyncSession =
     user = await require_login(request, session)
 
     categories, total = await field_service.category_cards(session, q)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx, categories=categories, total=total, q=q))
 
 
 @panel_app.get("/channels", response_class=HTMLResponse)
 async def channels_page(request: Request, channel_id: int | None = None, new: str = "", session: AsyncSession = Depends(session_dep)):
-    """List channels with route matrix and the selected channel settings."""
+    """Channels, plus the two assignments the owner configures (item 6).
+
+    No route MATRIX here any more. Delivery broadcasts to every active
+    channel, so what this page configures is (1) which category each field
+    belongs to and (2) which channel is each category's designated news
+    channel. A channel is kept out of delivery by switching it off.
+    """
     user = await require_login(request, session)
 
     channels = await channel_service.channels_with_route_counts(session)
@@ -986,108 +994,106 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
         selected = await channel_service.get_channel(session, channel_id)
     if selected is None:
         selected = channels[0] if channels else None
-    matrix = await channel_service.field_route_matrix(session)
-    _, cat_routes = await channel_service.category_route_matrix(session)
-    categories = await field_service.list_categories(session)
-    all_fields = await field_service.list_field_options(session)
+    categories = await channel_service.category_channel_matrix(session)
+    field_rows = await field_service.field_category_rows(session)
     usage = await channel_service.channel_usage(session)
+    cat_channel_counts = {
+        row["id"]: sum(1 for c in categories if c["channel_id"] == row["id"])
+        for row in categories
+    }
     for channel in channels:
         channel.usage = usage.get(
             channel.id,
             {"deliveries": 0, "sent": 0, "field_routes": 0, "category_routes": 0},
         )
-    counts_ctx = await _sidebar_counts(session)
+        channel.category_count = cat_channel_counts.get(channel.id, 0)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             matrix=matrix, cat_routes=cat_routes, categories=categories, all_fields=all_fields,
-             show_new=bool(new)))
+             categories=categories, field_rows=field_rows,
+             # With no channels at all there is nothing to edit, so the empty
+             # state must offer the add form — otherwise the page has no form
+             # on it and a first-time operator is stuck.
+             show_new=bool(new) or not channels))
 
 
 
-@panel_app.post("/channels/route")
-async def channel_route(request: Request, field_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
-    """Route one field to one channel (admin only; row insert, no code change)."""
+@panel_app.get("/routing")
+async def routing_page_removed(request: Request):
+    """The routing-preview page is gone (item 5).
+
+    Its old address redirects to the channels page, which is where the
+    field/category/channel configuration lives now, so bookmarks and any link
+    typed earlier keep working instead of 404ing.
+    """
+    return RedirectResponse(url="/channels", status_code=301)
+
+
+@panel_app.post("/channels/category-channel")
+async def channel_set_category_channel(
+    request: Request, category_id: int = Form(...), channel_id: int = Form(0),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Record which channel is a category's designated news channel (item 6).
+
+    Delivery broadcasts to every active channel, so this pairing is a label and
+    a provenance marker rather than a filter. ``channel_id=0`` clears it.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
     except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    try:
+        outcome = await channel_service.set_category_channel(
+            session, category_id=category_id, channel_id=channel_id or None
+        )
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "تعیین کانال دسته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(session, user.id, "route", None,
+                                     f"category={category_id} channel={channel_id or 'none'} {outcome}")
+    return RedirectResponse(url="/channels", status_code=303)
 
-    await channel_service.add_field_route(session, field_id=field_id, channel_id=channel_id)
-    await audit_service.record_event(session, user.id, "route", None, f"field={field_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
 
+@panel_app.post("/fields/{field_id}/category")
+async def field_set_category(
+    request: Request, field_id: int, category_id: int = Form(...),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Pin a field to a category once, by hand (item 15).
 
-@panel_app.post("/channels/unroute")
-async def channel_unroute(request: Request, field_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
-    """Remove one field→channel route (admin only)."""
+    The assignment is stored on the row and marked ``manual``, so the
+    automatic ruleset does not quietly overwrite an operator's decision on the
+    next classification pass.
+    """
     user = await require_login(request, session)
     try:
-        _require_role(user, Action.MANAGE_CONFIG)
+        _require_role(user, Action.FIELD_CURATE)
     except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-
-    await channel_service.remove_field_route(session, field_id=field_id, channel_id=channel_id)
-    await audit_service.record_event(session, user.id, "unroute", None, f"field={field_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
-
-
-@panel_app.post("/channels/category-route")
-async def channel_category_route(request: Request, category_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
-    """Route one category to one channel (admin only; the primary mapping)."""
-    user = await require_login(request, session)
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    row = await field_service.get_field(session, field_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
     try:
-        _require_role(user, Action.MANAGE_CONFIG)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-
-    await channel_service.add_category_route(session, category_id=category_id, channel_id=channel_id)
-    await audit_service.record_event(session, user.id, "route", None, f"category={category_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
-
-
-@panel_app.post("/channels/category-unroute")
-async def channel_category_unroute(request: Request, category_id: int = Form(...), channel_id: int = Form(...), session: AsyncSession = Depends(session_dep)):
-    """Remove one category→channel route (admin only)."""
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.MANAGE_CONFIG)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-
-    await channel_service.remove_category_route(session, category_id=category_id, channel_id=channel_id)
-    await audit_service.record_event(session, user.id, "unroute", None, f"category={category_id} channel={channel_id}")
-    return RedirectResponse(url="/channels", status_code=302)
-
-
-@panel_app.get("/routing", response_class=HTMLResponse)
-async def routing_page(request: Request, field: str = "", record_id: str = "", session: AsyncSession = Depends(session_dep)):
-    """Show the auditable routing chain for a field name or a record."""
-    user = await require_login(request, session)
-    preview = None
-    error = None
-    if field.strip() or record_id.strip():
-        try:
-            preview = await routing_service.preview(
-                session,
-                field=field.strip() or None,
-                record_id=int(record_id.strip()) if record_id.strip().isdigit() else None,
-            )
-        except ValueError:
-            error = "فقط یکی از نام رشته یا شناسهٔ رکورد را وارد کنید."
-            preview = None
-        except LookupError:
-            error = "رکورد یافت نشد."
-            preview = None
-    counts_ctx = await _sidebar_counts(session)
-    return templates.TemplateResponse(request, "routing.html",
-        _ctx(request, user, active="routing", **counts_ctx, field=field, record_id=record_id,
-             preview=preview, error=error))
+        row = await field_service.assign_field_category(session, row, category_id)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "تعیین دسته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(session, user.id, "route", None,
+                                     f"field={field_id} category={row.category_id} source=manual")
+    return RedirectResponse(url="/channels", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
 async def channel_toggle(request: Request, channel_id: int, session: AsyncSession = Depends(session_dep)):
-    """Flip a channel's active switch (admin only)."""
+    """Flip a channel's active switch (admin only).
+
+    Switching a channel OFF is now the only way to stop delivery to it, since
+    every active channel is a target (item 6).
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
@@ -1238,7 +1244,7 @@ async def models_page(request: Request, model_id: int | None = None, session: As
     if selected is None:
         selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
     _attach_creds(rows)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "models.html",
         _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected, test_result=None))
 
@@ -1280,7 +1286,7 @@ async def panel_model_create(
         rows = await model_service.list_models(session)
         selected = next((m for m in rows if m.is_active), rows[0] if rows else None)
         _attach_creds(rows)
-        counts_ctx = await _sidebar_counts(session)
+        counts_ctx = await dashboard_service.sidebar_badges(session)
         return templates.TemplateResponse(request, "models.html",
             _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
                  test_result=None, error=message), status_code=422)
@@ -1463,7 +1469,7 @@ async def panel_model_test(request: Request, model_id: int, session: AsyncSessio
     rows = await model_service.list_models(session)
     selected = row
     _attach_creds(rows)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "models.html",
         _ctx(request, user, active="models", **counts_ctx, models=rows, selected=selected,
              test_result=test_result,
@@ -1478,7 +1484,7 @@ async def prompts_page(request: Request, session: AsyncSession = Depends(session
 
     rows = await prompt_service.list_prompts(session)
     selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "prompts.html",
         _ctx(request, user, active="prompts", **counts_ctx, prompts=rows, selected=selected))
 
@@ -1499,7 +1505,7 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
     except ValueError:
         rows = await prompt_service.list_prompts(session)
         selected = next((p for p in rows if p.is_active), rows[0] if rows else None)
-        counts_ctx = await _sidebar_counts(session)
+        counts_ctx = await dashboard_service.sidebar_badges(session)
         return templates.TemplateResponse(request, "prompts.html",
             _ctx(request, user, active="prompts", **counts_ctx, prompts=rows, selected=selected,
                  error="نسخه تکراری است."), status_code=422)
@@ -1536,7 +1542,7 @@ async def submit_page(request: Request, session: AsyncSession = Depends(session_
 
     models = await model_service.list_models(session)
     prompts = await prompt_service.list_prompts(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "submit.html",
         _ctx(request, user, active="submit", **counts_ctx, models=models, prompts=prompts))
 
@@ -1574,7 +1580,7 @@ async def submit_create(
         }.get(str(e), "مدل/پرامپت انتخاب‌شده وجود ندارد.")
         models = await model_service.list_models(session)
         prompts = await prompt_service.list_prompts(session)
-        counts_ctx = await _sidebar_counts(session)
+        counts_ctx = await dashboard_service.sidebar_badges(session)
         return templates.TemplateResponse(request, "submit.html",
             _ctx(request, user, active="submit", **counts_ctx, models=models, prompts=prompts,
                  error=message),
@@ -1614,6 +1620,8 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}": "MANAGE_CONFIG",
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
+    "/channels/category-channel": "MANAGE_CONFIG",
+    "/fields/{field_id}/category": "FIELD_CURATE",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
     "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",
@@ -1650,7 +1658,7 @@ async def users_page(
     if selected_user is None and users:
         # Default to the first account so the block is never a dead form.
         selected_user = users[0]
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "users.html",
         _ctx(request, user, active="users", **counts_ctx, users=users, roles=roles,
              selected_user=selected_user))
@@ -1754,7 +1762,7 @@ async def profile_page(request: Request, session: AsyncSession = Depends(session
     """Show the logged-in user's own account (every role)."""
     user = await require_login(request, session)
     target = await user_service.get_active_user_with_role(session, user.id)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "profile.html",
         _ctx(request, user, active="", **counts_ctx, target=target or user))
 
@@ -1767,7 +1775,7 @@ async def profile_change_password(
     """Let any user change their own password after proving the current one."""
     user = await require_login(request, session)
     row = await user_service.get_user(session, user.id)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     if row is None:
         return templates.TemplateResponse(request, "profile.html",
             _ctx(request, user, active="", **counts_ctx, target=user,
@@ -1845,7 +1853,7 @@ async def audit_page(
     for event in events:
         event["action"] = _ACTION_FA.get(event["action"], event["action"])
     users = await user_service.audit_usernames(session)
-    counts_ctx = await _sidebar_counts(session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
     from urllib.parse import urlencode
 
     query = urlencode({k: v for k, v in {"action": action, "username": username, "main_id": main_id}.items() if v})
