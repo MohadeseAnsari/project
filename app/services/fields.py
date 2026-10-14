@@ -6,7 +6,7 @@ cards with real field names. Classification itself stays in
 the ``category_source`` column exists (migration 015).
 """
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.db.models import Category, Channel, Field, FieldChannelRoute, Main
 
@@ -58,34 +58,56 @@ async def field_total(session) -> int:
     return (await session.execute(select(func.count()).select_from(Field))).scalar_one()
 
 
-async def field_category_rows(session) -> list[dict]:
-    """Every field with its category, for the "field → category" editor.
+async def field_category_rows(
+    session, q: str = "", page: int = 1, page_size: int = 50
+) -> tuple[list[dict], int]:
+    """Fields with their category, for the "field → category" editor.
 
     The owner's requirement (item 15): the assignment is stored once in the
     database and edited by hand here, instead of a ruleset being re-applied on
     every submission. ``category_source`` records whether the current value was
     set by hand or came from the automatic rules, so the panel can show it.
 
-    Returned as plain dicts so the template needs no ORM access.
+    Returns ``(rows, total)`` as plain dicts, SEARCHED and PAGINATED. A
+    deployment has hundreds of fields, and rendering every one of them as a
+    row made the page unusable — the control an operator needs is as rare as
+    the ones they want to change.
+
+    Only ``category_source='manual'`` rows are protected from reclassification;
+    the rest are listed so the whole mapping is inspectable.
     """
+    base = select(Field, Category.name).outerjoin(Category, Category.id == Field.category_id)
+    count_query = select(func.count()).select_from(Field)
+    term = q.strip()
+    if term:
+        pattern = f"%{term}%"
+        base = base.where(or_(Field.name.ilike(pattern), Field.normalized_name.ilike(pattern)))
+        count_query = count_query.where(
+            or_(Field.name.ilike(pattern), Field.normalized_name.ilike(pattern))
+        )
+    total = (await session.execute(count_query)).scalar_one()
+    page = max(1, page)
     rows = (
         await session.execute(
-            select(Field, Category.name)
-            .outerjoin(Category, Category.id == Field.category_id)
-            .order_by(Category.name.is_(None), Category.name, Field.name)
+            base.order_by(Category.name.is_(None), Category.name, Field.name)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
     ).all()
-    return [
-        {
-            "id": field.id,
-            "name": field.name,
-            "category_id": field.category_id,
-            "category_name": category_name or "—",
-            "matched_keyword": field.matched_keyword,
-            "category_source": field.category_source,
-        }
-        for field, category_name in rows
-    ]
+    return (
+        [
+            {
+                "id": field.id,
+                "name": field.name,
+                "category_id": field.category_id,
+                "category_name": category_name or "—",
+                "matched_keyword": field.matched_keyword,
+                "category_source": field.category_source,
+            }
+            for field, category_name in rows
+        ],
+        total,
+    )
 
 
 async def assign_field_category(session, field: Field, category_id: int) -> Field:

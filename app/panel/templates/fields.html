@@ -50,6 +50,7 @@
         <td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
         <td>
           <form method="post" action="/fields/{{ f.id }}/category" style="display:flex;gap:7px;align-items:center">{{ csrf_field(request) | safe }}
+            <input type="hidden" name="return_to" value="fields">
             <select name="category_id" style="min-width:150px">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
             <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
           </form>

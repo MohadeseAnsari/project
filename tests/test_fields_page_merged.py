@@ -184,8 +184,9 @@ async def test_search_filters_the_merged_page(session: AsyncSession):
 async def test_field_rows_expose_everything_the_table_needs(session: AsyncSession):
     """The table renders from plain dicts, so the service supplies them all."""
     await _seed(session)
-    rows = await field_service.field_category_rows(session)
+    rows, total = await field_service.field_category_rows(session)
     by_name = {r["name"]: r for r in rows}
+    assert total == 3
     assert set(by_name) == {"هوش مصنوعی", "قلب", "عصب"}
     assert by_name["قلب"]["matched_keyword"] == "قلب"
     assert by_name["عصب"]["matched_keyword"] is None

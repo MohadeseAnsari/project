@@ -48,6 +48,20 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .btn-soft{background:var(--primary-soft);color:var(--primary-d)}
 .btn-ok{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
 .btn-danger{background:var(--red-soft);color:var(--red);border:1px solid #FECDD3}
+/* Channel row on the channels page: the switch and the edit link must not
+   drift apart when a long title wraps, so the controls are fixed-width and
+   the text column is the only flexible one. */
+.chan-row{display:flex;align-items:center;gap:11px;padding:11px;border:1px solid var(--line);border-radius:12px;transition:background .12s,border-color .12s}
+.chan-row:hover{background:#FAFAFC}
+.chan-row.on{border-color:var(--primary);background:var(--primary-soft)}
+.chan-row>.b{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}
+/* An inline editor: a select and its button belong to one unit. */
+.inline-edit{display:flex;gap:7px;align-items:center}
+.inline-edit select{flex:1;min-width:0}
+/* Destructive actions are visually separated so a stray click on the save
+   button above cannot reach them by muscle memory. */
+.danger-zone{margin-top:16px;padding-top:13px;border-top:1px solid var(--line2)}
+.danger-zone .hint{margin:5px 0 8px}
 .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
 .wrap{padding:18px 22px;display:flex;flex-direction:column;gap:14px}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}

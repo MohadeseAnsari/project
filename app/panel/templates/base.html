@@ -9,7 +9,7 @@
     <nav>
       <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
       <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if review_count %}<span class="cnt">{{ review_count|fa }}</span>{% endif %}</a>
-      <a href="/deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
+      <a href="/records?tab=deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
       <div class="sep">تنظیمات</div>
       <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها و دسته‌ها</a>
       <a href="/fields?tab=categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>

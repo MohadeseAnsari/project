@@ -1,0 +1,37 @@
+{# The searchable, paginated field → category table (part of the channels page).
+
+   Kept as its own partial so paging swaps only the table, not the whole page —
+   the operator loses their place in the channel settings otherwise. #}
+<table>
+  <thead><tr>
+    <th>رشته</th><th style="width:230px">دسته</th><th style="width:150px">کلیدواژهٔ تطبیق</th><th style="width:120px">منبع</th>
+  </tr></thead>
+  <tbody>
+    {% for f in field_rows %}
+    <tr>
+      <td class="title">{{ f.name }}</td>
+      <td>
+        <form method="post" action="/fields/{{ f.id }}/category" class="inline-edit">{{ csrf_field(request) | safe }}
+          <input type="hidden" name="return_to" value="channels">
+          <select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
+          <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
+        </form>
+      </td>
+      <td><small class="num">{{ f.matched_keyword or '—' }}</small></td>
+      <td><span class="badge {% if f.category_source == 'manual' %}s-sent{% elif f.category_source == 'curated' %}s-ready{% else %}s-off{% endif %}">{{ {'manual': 'دستی', 'curated': 'تأییدشده', 'llm': 'مدل', 'rules': 'قواعد'}.get(f.category_source, f.category_source) }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="hint" style="text-align:center;padding:22px">رشته‌ای با این جست‌وجو پیدا نشد.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if field_page > 1 or field_page * field_page_size < field_total %}
+<div class="foot">
+  نمایش {{ ((field_page - 1) * field_page_size + 1)|fa }} تا {{ ([field_page * field_page_size, field_total]|min)|fa }} از {{ field_total|fa }} رشته
+  <div class="pager">
+    {% if field_page > 1 %}<a href="#" hx-get="/channels/table?fq={{ field_q }}&page={{ field_page - 1 }}" hx-target="#fields-table" hx-swap="innerHTML">قبلی</a>{% endif %}
+    <b>{{ field_page|fa }}</b>
+    {% if field_page * field_page_size < field_total %}<a href="#" hx-get="/channels/table?fq={{ field_q }}&page={{ field_page + 1 }}" hx-target="#fields-table" hx-swap="innerHTML">بعدی</a>{% endif %}
+  </div>
+</div>
+{% endif %}

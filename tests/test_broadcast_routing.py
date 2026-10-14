@@ -169,7 +169,7 @@ async def test_field_category_is_stored_once_and_marked_manual(session: AsyncSes
         "an operator decision must be visible and not look like a ruleset guess"
     )
     # It persists: re-reading gives the same answer without re-running rules.
-    rows = await field_service.field_category_rows(session)
+    rows, _total = await field_service.field_category_rows(session)
     stored = [r for r in rows if r["id"] == field.id][0]
     assert stored["category_id"] == other.id
     assert stored["category_name"] == "فنی و مهندسی"
@@ -188,7 +188,8 @@ async def test_assigning_an_unknown_category_is_refused(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_field_rows_list_every_field_with_its_category(session: AsyncSession):
     await _world(session)
-    rows = await field_service.field_category_rows(session)
+    rows, total = await field_service.field_category_rows(session)
+    assert total == 1
     assert len(rows) == 1
     assert rows[0]["name"] == "test-field"
     assert rows[0]["category_name"] == "پزشکی و علوم سلامت"

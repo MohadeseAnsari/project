@@ -73,7 +73,7 @@ project/
 │   └── manage_channels.py    # channels + field -> channel routes CLI
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
-├── docs/                     # this guide, architecture.md, erd.md
+├── docs/                     # this guide, architecture.md, erd.md, llm-prompt.md
 ├── Dockerfile                # python:3.12-slim, non-root user
 ├── docker-compose.yml        # postgres + api + worker + sender, named volume
 ├── requirements.txt

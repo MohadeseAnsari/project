@@ -437,6 +437,35 @@ async def test_session_expiry_follows_setting(session: AsyncSession, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_templates_have_balanced_jinja_comments():
+    """A typo'd ``#}`` silently deletes whole sections from a page.
+
+    This cost real time: a malformed comment separator in channels.html
+    swallowed the entire field -> category card, and the page rendered fine —
+    just missing a section, with nothing in the logs. Jinja does not complain
+    about an unclosed comment, so nothing else would have caught it.
+    """
+    from pathlib import Path
+
+    unbalanced = []
+    for template in Path("app/panel/templates").glob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        if text.count("{#") != text.count("#}"):
+            unbalanced.append(f"{template.name} ({{#={text.count('{#')}, #}}={text.count('#}')})")
+    assert not unbalanced, f"unbalanced Jinja comments: {unbalanced}"
+
+
+def test_every_template_still_parses():
+    """Catch a broken block/if/endif at import time rather than on a request."""
+    from jinja2 import Environment, FileSystemLoader
+    from pathlib import Path
+
+    env = Environment(loader=FileSystemLoader("app/panel/templates"))
+    for template in Path("app/panel/templates").glob("*.html"):
+        env.parse(template.read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
 async def test_all_panel_pages_render(session: AsyncSession):
     """Every GET page returns 200 with its Persian title (template smoke)."""
     from app.db.models import Category, Channel, Delivery, Main
@@ -462,7 +491,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
     pages = {
         "/": "داشبورد",
         "/records": "رکوردها و بازبینی",
-        "/deliveries": "ارسال‌ها و تحویل",
+        "/records?tab=deliveries": "ارسال‌ها و تحویل",
         "/fields": "رشته‌ها و دسته‌ها",
         "/channels": "کانال‌ها و مسیرها",
         "/models": "مدل‌ها",

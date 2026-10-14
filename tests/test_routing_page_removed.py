@@ -44,9 +44,9 @@ def test_no_link_to_the_page_remains():
     """A dead sidebar entry is worse than no entry at all."""
     from pathlib import Path
 
-    for name in ("base.html", "channels.html", "records.html", "deliveries.html"):
-        html = Path("app/panel/templates", name).read_text(encoding="utf-8")
-        assert 'href="/routing"' not in html, f"{name} still links to the removed page"
+    for template in Path("app/panel/templates").glob("*.html"):
+        html = template.read_text(encoding="utf-8")
+        assert 'href="/routing"' not in html, f"{template.name} still links to the removed page"
     assert not Path("app/panel/templates/routing.html").exists()
 
 

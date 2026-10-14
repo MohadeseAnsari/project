@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}رکوردها و بازبینی{% endblock %}
-{% block h1 %}رکوردها و بازبینی{% endblock %}
-{% block crumb %}کنسول › رکوردها › در انتظار بازبینی{% endblock %}
+{% block title %}رکوردها و ارسال‌ها{% endblock %}
+{% block h1 %}رکوردها و ارسال‌ها{% endblock %}
+{% block crumb %}کنسول › رکوردها{% endblock %}
 {% block top_actions %}
-<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>
+{% if tab != 'deliveries' %}<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>{% endif %}
 <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
 {% endblock %}
 {% block content %}
@@ -14,13 +14,59 @@
   <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق</div></div></div>
 </div>
 
+{# One page, two tabs (item 2). A record and its deliveries are one thing seen
+   from two sides, and the operator moves between "what needs my decision" and
+   "did it reach the channel" constantly. #}
+<div class="card" style="padding:12px 22px 0">
+  <div class="seg" style="border:0">
+    <a href="/records" style="text-decoration:none;color:inherit"><span class="{% if tab != 'deliveries' %}on{% endif %}">رکوردها و بازبینی</span></a>
+    <a href="/records?tab=deliveries" style="text-decoration:none;color:inherit"><span class="{% if tab == 'deliveries' %}on{% endif %}">ارسال‌ها و تحویل</span></a>
+  </div>
+</div>
+
+{% if tab == 'deliveries' %}
+<div class="card">
+  <form hx-get="/deliveries/table" hx-target="#deliveries-table" hx-swap="innerHTML" hx-trigger="submit">
+    <div class="filters">
+      <div class="seg">
+        <a href="/records?tab=deliveries" style="text-decoration:none;color:inherit"><span class="{% if not dstatus %}on{% endif %}">همه</span></a>
+        <a href="/records?tab=deliveries&status=sent" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='sent' %}on{% endif %}">موفق</span></a>
+        <a href="/records?tab=deliveries&status=failed" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='failed' %}on{% endif %}">ناموفق</span></a>
+        <a href="/records?tab=deliveries&status=awaiting_confirmation" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
+      </div>
+      <select name="platform"><option value="">همهٔ کانال‌ها</option><option value="bale" {% if dplatform=='bale' %}selected{% endif %}>بله</option><option value="telegram" {% if dplatform=='telegram' %}selected{% endif %}>تلگرام</option></select>
+      <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ dmain_id or '' }}">
+      <input type="hidden" name="status" value="{{ dstatus or '' }}">
+      <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>تحویل‌ها<span class="grow"></span><span class="badge s-off">{{ total|fa }} مورد</span></h3>
+  <div id="deliveries-table" hx-get="/deliveries/table?{{ dquery }}" hx-trigger="load, every 15s">
+    {% include "deliveries_table.html" %}
+  </div>
+</div>
+
+<div class="two">
+  <div class="card"><h3>Retry Policy</h3><div class="body">
+    <dl class="kv"><dt>سقف تلاش</dt><dd>{{ max_attempts|fa }} بار</dd><dt>فاصلهٔ پایه</dt><dd>{{ backoff_base|fa }} ثانیه</dd><dt>عقب‌افتادگی</dt><dd>نمایی با دو برابر شدن فاصله</dd><dt>پس از سقف</dt><dd>وضعیت failed می‌ماند و منتظر اقدام دستی</dd></dl>
+  </div></div>
+  <div class="card"><h3>دروازهٔ تأیید انسانی</h3><div class="body" style="display:flex;flex-direction:column;gap:10px">
+    <div class="note">تحویل‌های «در انتظار تأیید» فقط با تأیید خبر در تب «رکوردها و بازبینی» به صف ارسال می‌روند؛ خبرِ تأییدنشده هیچ‌وقت به کانال نمی‌رسد.</div>
+    <div class="note">سطر «در انتظار تأیید» دکمهٔ «آزادسازی» خودش را دارد (همان تأیید، ولی تک‌تحویل)؛ سطر «ناموفق» دکمهٔ «ارسال دوباره» دارد.</div>
+    <div class="note">خبر منتشرشده هرگز حذف نمی‌شود؛ پیام از کانال پاک می‌شود و ردپای ارسال باقی می‌ماند.</div>
+  </div></div>
+</div>
+{% else %}
 <div class="card">
   <form hx-get="/records/table" hx-target="#records-table" hx-swap="innerHTML" hx-trigger="submit">
     <div class="filters">
       <div class="seg">
         <a href="/records?status=review" style="text-decoration:none;color:inherit"><span class="{% if status=='review' %}on{% endif %}">در انتظار بازبینی</span></a>
         <a href="/records" style="text-decoration:none;color:inherit"><span class="{% if not status %}on{% endif %}">همه</span></a>
-        <a href="/deliveries?status=sent" style="text-decoration:none;color:inherit"><span>منتشرشده</span></a>
+        <a href="/records?status=published" style="text-decoration:none;color:inherit"><span class="{% if status=='published' %}on{% endif %}">منتشرشده</span></a>
         <a href="/records?status=failed" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
         <a href="/records?status=ready" style="text-decoration:none;color:inherit"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
       </div>
@@ -38,11 +84,95 @@
       <a class="btn btn-ghost btn-sm" href="/records">پاک‌کردن</a>
     </div>
   </form>
-  <form method="post" action="/records/bulk-approve">{{ csrf_field(request) | safe }}
+  {# Multi-select (item 3). The table auto-refreshes every 15s, so the
+     selection is kept in a JS Set keyed by record id and re-applied after each
+     swap — otherwise a background refresh silently emptied the selection and
+     the operator approved nothing. #}
+  <form method="post" action="/records/bulk-approve" id="bulk-form">{{ csrf_field(request) | safe }}
   <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load, every 15s">
     {% include "records_table.html" %}
   </div>
-  <div class="foot"><button class="btn btn-primary btn-sm" type="submit">تأیید گروهی انتخاب‌شده‌ها</button></div>
+  <div class="foot" style="display:flex;gap:11px;align-items:center;flex-wrap:wrap">
+    <button class="btn btn-primary btn-sm" type="submit" id="bulk-submit" disabled>تأیید گروهی انتخاب‌شده‌ها</button>
+    <span class="hint" id="bulk-count"><span class="num">۰</span> انتخاب‌شده</span>
+    <span class="hint">انتخاب‌ها با به‌روزرسانی خودکار جدول حفظ می‌شوند.</span>
+  </div>
   </form>
 </div>
+<script>
+(function () {
+  // Selection survives the table's 15s auto-refresh: keep the ids here, not
+  // in the DOM that htmx replaces.
+  var selected = new Set();
+  var table = document.getElementById('records-table');
+  var form = document.getElementById('bulk-form');
+  var count = document.getElementById('bulk-count');
+  var submit = document.getElementById('bulk-submit');
+  if (!table || !form) return;
+
+  function fa(n) {
+    return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; });
+  }
+
+  function render() {
+    count.innerHTML = '<span class="num">' + fa(selected.size) + '</span> انتخاب‌شده';
+    submit.disabled = selected.size === 0;
+  }
+
+  function paint() {
+    table.querySelectorAll('input[name="ids"]').forEach(function (box) {
+      var id = box.value;
+      box.checked = selected.has(id);
+      box.disabled = false;
+    });
+    var all = table.querySelector('[data-select-all]');
+    if (all) {
+      var boxes = Array.prototype.slice.call(table.querySelectorAll('input[name="ids"]'));
+      all.checked = boxes.length > 0 && boxes.every(function (b) { return selected.has(b.value); });
+    }
+    render();
+  }
+
+  form.addEventListener('change', function (event) {
+    var box = event.target;
+    if (box.matches('[data-select-all]')) {
+      table.querySelectorAll('input[name="ids"]').forEach(function (b) {
+        if (box.checked) { selected.add(b.value); } else { selected.delete(b.value); }
+        b.checked = box.checked;
+      });
+    } else if (box.name === 'ids') {
+      if (box.checked) { selected.add(box.value); } else { selected.delete(box.value); }
+    } else {
+      return;
+    }
+    // Keep the POST body in step with the Set, so what is submitted is exactly
+    // what the counter says.
+    form.querySelectorAll('input[name="ids"]').forEach(function (n) { n.remove(); });
+    selected.forEach(function (id) {
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden'; hidden.name = 'ids'; hidden.value = id;
+      form.appendChild(hidden);
+    });
+    render();
+  });
+
+  form.addEventListener('submit', function (event) {
+    if (selected.size === 0) {
+      event.preventDefault();
+      return;
+    }
+    if (!confirm('۱ خبر انتخاب شود؟ این کار خبرها را برای ارسال آزاد می‌کند.')) {
+      event.preventDefault();
+      return;
+    }
+    selected.clear();
+  });
+
+  document.body.addEventListener('htmx:afterSwap', function (event) {
+    if (event.detail && event.detail.target === table) paint();
+  });
+  paint();
+})();
+</script>
+{% endif %}
 {% endblock %}

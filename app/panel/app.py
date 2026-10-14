@@ -392,11 +392,26 @@ async def records_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
+    tab: str = "", platform: str = "", main_id: str = "",
 ):
-    """Show the filterable record list (first page server-rendered, rest via HTMX)."""
+    """Records, review AND deliveries on one page (item 2).
+
+    A record and its deliveries are one thing seen from two sides, and the
+    operator moves between "what needs my decision" and "did it reach the
+    channel" constantly — so they are two tabs here rather than two pages with
+    two filter bars. ``/deliveries`` redirects to the deliveries tab.
+
+    The deliveries tab carries its own filters (``d*`` names) because they are
+    genuinely different axes: a record filters by field and university, a
+    delivery by platform and outcome.
+    """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
+    if tab == "deliveries":
+        return await _deliveries_tab(
+            request, session, status=status, platform=platform, main_id=main_id,
+        )
     page = max(1, page)
     page_size = 20
     counts = await record_service.record_status_counts(session)
@@ -680,22 +695,29 @@ async def records_bulk_approve(request: Request, session: AsyncSession = Depends
 # --------------------------------------------------------------------------
 
 
-@panel_app.get("/deliveries", response_class=HTMLResponse)
-async def deliveries_page(
-    request: Request, session: AsyncSession = Depends(session_dep),
-    status: str = "", platform: str = "", main_id: str = "",
+@panel_app.get("/deliveries")
+async def deliveries_page_merged(request: Request):
+    """The deliveries page is merged into ``/records?tab=deliveries`` (item 2)."""
+    return RedirectResponse(url="/records?tab=deliveries", status_code=301)
+
+
+async def _deliveries_tab(
+    request: Request, session: AsyncSession, *, status: str = "",
+    platform: str = "", main_id: str = "",
 ):
-    """Show the filterable delivery list (first page server-rendered)."""
+    """Render the deliveries half of the merged page (item 2).
+
+    Same data and same filters the standalone page used, so the HTMX partial
+    at /deliveries/table keeps working unchanged.
+    """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
     page_size = 20
-    status_f = status or None
-    platform_f = platform or None
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     pairs, total = await delivery_service.fetch_deliveries(
-        session, page=1, page_size=page_size, status=status_f,
-        platform=platform_f, main_id=mid,
+        session, page=1, page_size=page_size, status=status or None,
+        platform=platform or None, main_id=mid,
     )
     items = await delivery_service.delivery_items(session, pairs)
     newest_failure = await delivery_service.last_failed(session)
@@ -703,16 +725,28 @@ async def deliveries_page(
         f"خطای آخر: «{newest_failure.error_message}» — {_jalali(newest_failure.updated_at)}"
         if newest_failure and newest_failure.error_message else None
     )
+    counts = await record_service.record_status_counts(session)
     delivery_counts = await delivery_service.delivery_status_counts(session)
+    needs_review = await record_service.needs_review_count(session)
+    options = await record_service.filter_options(session)
+    dquery = urlencode(
+        {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
+    )
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    query_str = urlencode({k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v})
-    return templates.TemplateResponse(request, "deliveries.html",
+    return templates.TemplateResponse(request, "records.html",
         _ctx(
-            request, user, active="deliveries", **counts_ctx, status=status, platform=platform,
-            main_id=main_id, query=query_str, items=items, total=total, page=1, page_size=page_size,
-            last_error=last_error, max_attempts=settings.sender_max_attempts,
+            request, user, active="deliveries", **counts_ctx, tab="deliveries",
+            dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
+            total=total, items=items, page=1, page_size=page_size, last_error=last_error,
+            max_attempts=settings.sender_max_attempts,
             backoff_base=settings.sender_backoff_base_seconds,
             failed_count=delivery_counts.get("failed", 0),
+            # The KPI strip is shared by both tabs, so it is always supplied.
+            kpi_review=needs_review,
+            kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
+            kpi_sent=delivery_counts.get("sent", 0),
+            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
+            field_options=options["fields"], university_options=options["universities"],
         )
     )
 
@@ -995,7 +1029,11 @@ async def field_confirm(request: Request, field_id: int, session: AsyncSession =
 
 
 @panel_app.get("/channels", response_class=HTMLResponse)
-async def channels_page(request: Request, channel_id: int | None = None, new: str = "", session: AsyncSession = Depends(session_dep)):
+async def channels_page(
+    request: Request, channel_id: int | None = None, new: str = "",
+    fq: str = "", field_page: int = 1,
+    session: AsyncSession = Depends(session_dep),
+):
     """Channels, plus the two assignments the owner configures (item 6).
 
     No route MATRIX here any more. Delivery broadcasts to every active
@@ -1012,7 +1050,12 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
     if selected is None:
         selected = channels[0] if channels else None
     categories = await channel_service.category_channel_matrix(session)
-    field_rows = await field_service.field_category_rows(session)
+    # The field list is searched and paginated: a deployment has hundreds of
+    # fields, and rendering every one of them made the page unusable.
+    field_rows, field_total = await field_service.field_category_rows(
+        session, q=fq, page=field_page
+    )
+    field_page_size = 50
     usage = await channel_service.channel_usage(session)
     cat_channel_counts = {
         row["id"]: sum(1 for c in categories if c["channel_id"] == row["id"])
@@ -1027,12 +1070,38 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             categories=categories, field_rows=field_rows,
+             categories=categories, field_rows=field_rows, field_q=fq,
+             field_page=field_page, field_page_size=field_page_size,
+             field_total=field_total, active_count=sum(1 for c in channels if c.is_active),
              # With no channels at all there is nothing to edit, so the empty
              # state must offer the add form — otherwise the page has no form
              # on it and a first-time operator is stuck.
              show_new=bool(new) or not channels))
 
+
+
+@panel_app.get("/channels/table", response_class=HTMLResponse)
+async def channels_fields_table(
+    request: Request, fq: str = "", page: int = 1,
+    session: AsyncSession = Depends(session_dep),
+):
+    """Just the searchable field → category table, for HTMX paging.
+
+    Only the table swaps, so paging does not throw the operator back to the top
+    of a long page and lose the channel they were editing.
+    """
+    user = await require_login(request, session)
+    field_rows, field_total = await field_service.field_category_rows(
+        session, q=fq, page=page
+    )
+    categories, _total = await field_service.category_cards(session)
+    return templates.TemplateResponse(
+        request, "channels_fields_table.html",
+        _ctx(
+            request, user, field_rows=field_rows, field_q=fq, field_page=page,
+            field_page_size=50, field_total=field_total, categories=categories,
+        ),
+    )
 
 
 @panel_app.get("/routing")
@@ -1077,13 +1146,16 @@ async def channel_set_category_channel(
 @panel_app.post("/fields/{field_id}/category")
 async def field_set_category(
     request: Request, field_id: int, category_id: int = Form(...),
+    return_to: str = Form("fields"),
     session: AsyncSession = Depends(session_dep),
 ):
     """Pin a field to a category once, by hand (item 15).
 
     The assignment is stored on the row and marked ``manual``, so the
     automatic ruleset does not quietly overwrite an operator's decision on the
-    next classification pass.
+    next classification pass. ``return_to`` sends the operator back to whichever
+    page they made the edit from — both the channels page and the merged
+    fields page offer this control.
     """
     user = await require_login(request, session)
     try:
@@ -1101,7 +1173,10 @@ async def field_set_category(
             status_code=422)
     await audit_service.record_event(session, user.id, "route", None,
                                      f"field={field_id} category={row.category_id} source=manual")
-    return RedirectResponse(url="/channels", status_code=303)
+    # Whitelist rather than echoing the value: an open redirect here would let
+    # a crafted form bounce an admin to another site.
+    destination = "/channels" if return_to == "channels" else "/fields"
+    return RedirectResponse(url=destination, status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
