@@ -24,7 +24,7 @@ from app.panel.auth import ensure_admin_user, session_user_id, verify_password
 from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
-from app.services.errors import PermissionDenied
+from app.services.errors import PermissionDenied, from_value_error
 from app.services import channels as channel_service
 from app.services import deliveries as delivery_service
 from app.services import dispose_engine
@@ -39,6 +39,16 @@ from app.services.transitions import STATUS_FA
 
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
+
+
+def _service_error(exc: ValueError, default: str = "") -> str:
+    """Persian text for a service ``ValueError`` whose ``str()`` is a code.
+
+    Delegates to the one lookup table in ``app/services/errors`` so the panel
+    and the machine API describe the same failure identically, and no
+    traceback ever reaches the operator.
+    """
+    return from_value_error(exc, default or None)[1]
 
 
 def _jalali(value) -> str:
@@ -790,10 +800,45 @@ async def delivery_cancel(
 async def delivery_delete_from_channel(
     request: Request, delivery_id: int, session: AsyncSession = Depends(session_dep)
 ):
-    """Record that the operator deleted the published message from the channel.
+    """Delete the published message IN THE CHANNEL, then record it.
 
-    The delivery keeps its message id and moves to ``deleted_from_channel`` —
-    the row is the history, so it is never removed.
+    This calls the platform's ``deleteMessage`` through the channel's own bot
+    token, so the article really disappears; only after the platform confirms
+    does the row move to ``deleted_from_channel`` (keeping the message id as
+    history). A refusal leaves the row ``sent`` and shows the real reason, so
+    the operator knows the message is still there.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.RETRY_DELIVERY)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    delivery = await delivery_service.get_delivery(session, delivery_id)
+    if delivery is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
+    try:
+        delivery = await delivery_service.delete_published_message(session, delivery)
+    except ValueError as e:
+        status, message = from_value_error(e, "حذف پیام ممکن نشد.")
+        await audit_service.record_event(session, user.id, "delete_from_channel_failed", delivery.main_id,
+                                         f"delivery={delivery.id} error={e}")
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=message),
+                                          status_code=status)
+    await audit_service.record_event(
+        session, user.id, "delete_from_channel", delivery.main_id,
+        f"delivery={delivery.id} message_id={delivery.platform_message_id}",
+    )
+    return RedirectResponse(url="/deliveries", status_code=303)
+
+
+@panel_app.post("/deliveries/{delivery_id}/mark-deleted")
+async def delivery_mark_deleted(
+    request: Request, delivery_id: int, session: AsyncSession = Depends(session_dep)
+):
+    """Record ``deleted_from_channel`` when the message was already removed by hand.
+
+    The companion action for when the operator deleted the post in the channel
+    app: nothing is sent to the platform, the row just reflects reality.
     """
     user = await require_login(request, session)
     try:
@@ -805,13 +850,15 @@ async def delivery_delete_from_channel(
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال یافت نشد."), status_code=404)
     try:
         delivery = await delivery_service.mark_deleted_from_channel(session, delivery)
-    except ValueError:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="فقط ارسال‌های تحویل‌شده را می‌توان از کانال حذف کرد."), status_code=409)
+    except ValueError as e:
+        status, message = from_value_error(e)
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=message),
+                                          status_code=status)
     await audit_service.record_event(
-        session, user.id, "delete_from_channel", delivery.main_id,
+        session, user.id, "mark_deleted", delivery.main_id,
         f"delivery={delivery.id} message_id={delivery.platform_message_id}",
     )
-    return RedirectResponse(url="/deliveries", status_code=302)
+    return RedirectResponse(url="/deliveries", status_code=303)
 
 
 # --------------------------------------------------------------------------
@@ -875,6 +922,12 @@ async def channels_page(request: Request, channel_id: int | None = None, new: st
     _, cat_routes = await channel_service.category_route_matrix(session)
     categories = await field_service.list_categories(session)
     all_fields = await field_service.list_field_options(session)
+    usage = await channel_service.channel_usage(session)
+    for channel in channels:
+        channel.usage = usage.get(
+            channel.id,
+            {"deliveries": 0, "sent": 0, "field_routes": 0, "category_routes": 0},
+        )
     counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
@@ -977,17 +1030,23 @@ async def channel_toggle(request: Request, channel_id: int, session: AsyncSessio
     if not row:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
     row = await channel_service.toggle_channel(session, row)
-    await audit_service.record_event(session, user.id, "channel_create", None, f"toggle channel={channel_id} active={row.is_active}")
-    return RedirectResponse(url="/channels", status_code=302)
+    await audit_service.record_event(session, user.id, "channel_toggle", None, f"channel={channel_id} active={row.is_active}")
+    return RedirectResponse(url=f"/channels?channel_id={channel_id}", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}")
 async def channel_update(
     request: Request, channel_id: int, title: str = Form(""),
     chat_id: str = Form(""), username: str = Form(""), bot_token_env: str = Form(""),
+    bot_token: str = Form(""), clear_token: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Update a channel's display fields (admin only; no tokens on rows)."""
+    """Edit ONE channel (admin only): title, destination, and its own token.
+
+    The form is scoped to ``channel_id``, so saving leaves every other channel
+    untouched. A blank ``bot_token`` keeps the stored one; ``clear_token``
+    drops it and falls back to the platform-wide token.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_CONFIG)
@@ -997,32 +1056,64 @@ async def channel_update(
     row = await channel_service.get_channel(session, channel_id)
     if not row:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
-    updates = {}
-    if title is not None:
-        updates["title"] = title.strip() or None
-    if username is not None:
-        updates["username"] = username.strip() or None
-    if bot_token_env is not None:
-        updates["bot_token_env"] = bot_token_env.strip() or None
+    updates = {"title": title.strip() or None, "username": username.strip() or None,
+               "bot_token_env": bot_token_env.strip() or None}
     if chat_id.strip().lstrip("-").isdigit():
         updates["chat_id"] = int(chat_id.strip())
-    row = await channel_service.update_channel(session, row, updates)
-    await audit_service.record_event(session, user.id, "channel_create", None, f"update channel={channel_id}")
+    try:
+        row = await channel_service.update_channel(session, row, updates)
+        if bot_token.strip():
+            row = await channel_service.set_channel_token(session, row, bot_token.strip())
+        if clear_token.strip():
+            row = await channel_service.clear_channel_token(session, row)
+    except ValueError as e:
+        message = _service_error(e, default="ذخیرهٔ کانال ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "channel_update", None,
+                                     f"channel={channel_id} token={'set' if bot_token.strip() else 'unchanged'}")
     return RedirectResponse(url=f"/channels?channel_id={channel_id}", status_code=302)
+
+
+@panel_app.post("/channels/{channel_id}/delete")
+async def channel_delete(
+    request: Request, channel_id: int, confirm: str = Form(""),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Delete a channel that never received anything; otherwise disable it.
+
+    Requires an explicit ``confirm`` so a stray click cannot drop a
+    destination. A channel with delivery history is turned off instead of
+    deleted, because those rows must keep resolving.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+
+    row = await channel_service.get_channel(session, channel_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="کانال یافت نشد."), status_code=404)
+    if confirm.strip() != "yes":
+        return RedirectResponse(url=f"/channels?channel_id={channel_id}", status_code=303)
+    outcome = await channel_service.delete_channel(session, row)
+    await audit_service.record_event(session, user.id, "channel_delete", None, f"channel={channel_id} outcome={outcome}")
+    return RedirectResponse(url="/channels", status_code=303)
 
 
 @panel_app.post("/channels")
 async def channel_create(
     request: Request, platform: str = Form(...), target: str = Form(...),
-    title: str = Form(""), bot_token_env: str = Form(""),
+    title: str = Form(""), bot_token_env: str = Form(""), bot_token: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Create a channel destination after live getChat validation (admin only).
+    """ADD a channel (admin only): a new row beside the existing ones.
 
-    Accepts a numeric chat id or an @username; the platform API resolves it
-    first, so typos fail here instead of silently parking every future send.
-    Tokens stay in env (platform-wide for creation); the resolved title is
-    shown on the channel card right after redirect.
+    Accepts a numeric chat id or an ``@username``; the platform API resolves
+    it first, so a typo fails here instead of parking every future send. The
+    bot token can be typed straight into the form (stored encrypted, never
+    shown again), so adding a channel needs no environment change.
     """
     user = await require_login(request, session)
     try:
@@ -1036,21 +1127,20 @@ async def channel_create(
             session, platform=platform, target=target,
             title=title.strip() or None,
             bot_token_env=bot_token_env.strip() or None,
+            bot_token=bot_token.strip() or None,
         )
         await audit_service.record_event(session, user.id, "channel_create", None, f"{platform}:{row.chat_id}")
     except ValueError as e:
-        message = {
-            "bad-platform": "سکوی نامعتبر است.",
-            "no-platform-token": f"توکن ربات {platform} پیکربندی نشده است.",
-            "duplicate-channel": "این کانال قبلاً ثبت شده است.",
-            "bad-result": "پاسخ getChat شناسهٔ معتبر نداشت.",
-        }.get(str(e), f"کانال یافت نشد: {e}")
-        status = 422
-        if str(e).startswith("unresolvable:"):
-            message = f"کانال یافت نشد: {str(e)[len('unresolvable: '):]}"
+        code = str(e)
+        if code == "no-platform-token":
+            # Names the platform so the operator knows which token is missing.
+            message = (f"توکن ربات {platform} نه در فرم و نه در محیط پیکربندی نشده است؛ "
+                       "توکن را در فرم وارد کنید.")
+        else:
+            message = _service_error(e, default=f"کانال یافت نشد: {code}")
         return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=message), status_code=status)
-    return RedirectResponse(url="/channels", status_code=302)
+            _ctx(request, user, error=message), status_code=422)
+    return RedirectResponse(url=f"/channels?channel_id={row.id}", status_code=303)
 
 
 
@@ -1451,6 +1541,11 @@ GUARDED_ROUTES: dict[str, str] = {
     "/deliveries/{delivery_id}/release": "RETRY_DELIVERY",
     "/deliveries/{delivery_id}/cancel": "RETRY_DELIVERY",
     "/deliveries/{delivery_id}/delete-from-channel": "RETRY_DELIVERY",
+    "/deliveries/{delivery_id}/mark-deleted": "RETRY_DELIVERY",
+    "/channels": "MANAGE_CONFIG",
+    "/channels/{channel_id}": "MANAGE_CONFIG",
+    "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
+    "/channels/{channel_id}/delete": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
 }

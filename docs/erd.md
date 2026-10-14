@@ -110,14 +110,19 @@ erDiagram
 
     channels {
         SERIAL id PK
-        VARCHAR platform UK
-        BIGINT chat_id UK
+        VARCHAR platform
+        BIGINT chat_id
         VARCHAR username
         VARCHAR title
         VARCHAR bot_token_env
+        TEXT bot_token_encrypted
         BOOLEAN is_active
         TIMESTAMP created_at
     }
+    # Many channels coexist; the pair (platform, chat_id) is unique
+    # (uq_channels_platform_chat) so one destination is never registered
+    # twice. bot_token_encrypted is a per-channel Fernet token, write-only.
+    # Deleting is not unconditional: a channel with deliveries is disabled.
 
     field_channel_routes {
         INTEGER field_id PK,FK

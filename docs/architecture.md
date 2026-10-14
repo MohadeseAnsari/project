@@ -246,7 +246,12 @@ losing a published article is worse than a duplicate post.
 - Constant-time comparison via `hmac.compare_digest()`
 - Never stored in database, logged, or sent to LLM
 - AvalAI API key from environment variable only
-- Bot tokens (`BALE_BOT_TOKEN`, `TELEGRAM_BOT_TOKEN`) from environment only; a `channels` row is a destination, never a credential
+- Bot tokens: the platform-wide `BALE_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` from
+  the environment, **or** a per-channel `channels.bot_token_encrypted`
+  (Fernet, written from the panel form, write-only and never rendered back).
+  A channel's own token wins over the platform-wide one, so a channel can be
+  added and used with no environment change. Deleting a published message uses
+  the same token that sent it.
 
 ## Project Structure
 

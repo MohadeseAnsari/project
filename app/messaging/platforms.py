@@ -87,6 +87,22 @@ class PlatformClient:
         """
         return await self._get("getChat", {"chat_id": chat})
 
+    async def delete_message(self, chat_id: int, message_id: int) -> bool:
+        """Delete a previously sent message from the chat.
+
+        Backs the panel's "حذف از کانال" action: the operator removes the
+        published article at the platform, and the delivery row then records
+        ``deleted_from_channel`` so the history stays complete. ``result`` is a
+        bare ``true`` on both platforms, so only the envelope is checked.
+
+        Raises:
+            PermanentDeliveryError: the platform refuses (message too old,
+                wrong chat, no rights) — a retry cannot help.
+            TransientDeliveryError: transport or server-side failure.
+        """
+        await self._post_result("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        return True
+
     async def _get(self, method: str, params: dict) -> dict:
         """GET a Bot-API-style method and return the ``result`` object.
 
@@ -125,13 +141,26 @@ class PlatformClient:
         return result
 
     async def _post(self, method: str, payload: dict) -> int:
-        """POST a Bot-API-style request and unwrap the ``ok``/``result`` envelope.
+        """POST a Bot-API-style request and return the sent message's id.
 
         Raises:
             TransientDeliveryError: network failure, timeout, or a status worth
                 retrying.
             PermanentDeliveryError: any other status, or ``ok: false`` with a
                 non-retryable provider error code.
+        """
+        result = await self._post_result(method, payload)
+        if not isinstance(result, dict):
+            raise PermanentDeliveryError(f"{method}: missing result object")
+        return int(result.get("message_id", 0))
+
+    async def _post_result(self, method: str, payload: dict):
+        """POST and unwrap the ``ok``/``result`` envelope, returning the raw result.
+
+        Split out from :meth:`_post` because methods disagree on the shape of
+        ``result``: ``sendMessage`` returns an object, while ``deleteMessage``
+        returns a bare ``true``. Callers that only care about success (did the
+        platform do it?) use this and ignore the value.
         """
         url = f"{self._api_base()}/bot{self._token}/{method}"
         try:
@@ -161,8 +190,7 @@ class PlatformClient:
                 raise TransientDeliveryError(f"{method}: {description} (error_code={error_code})")
             raise PermanentDeliveryError(f"{method}: {description or 'ok=false'}")
 
-        result = body.get("result") or {}
-        return int(result.get("message_id", 0))
+        return body.get("result")
 
     def _api_base(self) -> str:
         raise NotImplementedError
@@ -252,6 +280,22 @@ def client_for_channel(channel, clients: dict[str, PlatformClient]):
     token values never leave this function except inside the client itself.
     """
     import os
+
+    # A token stored ON THE ROW (encrypted at rest) wins: that is how a
+    # channel added from the panel works with no environment change at all.
+    stored = getattr(channel, "bot_token_encrypted", None)
+    if stored:
+        from app.credentials import CredentialError, decrypt
+
+        try:
+            row_token = decrypt(stored)
+        except CredentialError:
+            return None, (
+                f"stored bot token for channel {channel.id} cannot be decrypted "
+                "(the master key changed)"
+            )
+        if row_token:
+            return build_client(channel.platform, row_token), None
 
     if getattr(channel, "bot_token_env", None):
         token = os.environ.get(channel.bot_token_env)

@@ -5,6 +5,8 @@ Single implementation shared by the machine API and the panel. Raises plain
 error pages.
 """
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 
 from app.db.models import Channel, Delivery, Main
@@ -219,18 +221,76 @@ async def cancel_delivery(session, delivery: Delivery) -> Delivery:
     return delivery
 
 
-async def mark_deleted_from_channel(session, delivery: Delivery) -> Delivery:
-    """Record that the operator deleted the published message from the channel.
+async def delete_published_message(session, delivery: Delivery) -> Delivery:
+    """Delete the published message AT THE PLATFORM, then record it (PART B).
 
-    Final state of the delivery lifecycle: the message is gone from the
-    channel but the row (and its message id) stays as history — deliveries
-    are never hard-deleted.
+    The real removal the owner asked for: it calls the channel's own
+    ``deleteMessage`` so the article disappears from the channel, and only
+    after the platform confirms does the row move to
+    ``deleted_from_channel`` (the message id stays — the row is the history).
+
+    The platform error is translated into a code here, so callers never
+    import the messaging layer and the operator sees one message per cause.
+    A refused delete leaves the row ``sent``: the message is still there, and
+    a retry is meaningful.
+
+    Raises:
+        ValueError: ``not-sent`` when nothing was published,
+            ``missing-message-id`` when the row has no platform message id,
+            ``channel-not-found`` when the destination row is gone,
+            ``no-token`` when the channel has no usable bot token,
+            ``delete-refused`` when the platform will not delete it
+            (too old, wrong chat, no rights) — retrying cannot help,
+            ``delete-unavailable`` on a transport/server failure.
+    """
+    from app.db.models import Channel as _Channel
+    from app.messaging.platforms import (
+        DeliveryError,
+        PermanentDeliveryError,
+        client_for_channel,
+        configured_clients,
+    )
+
+    if delivery.status != "sent":
+        raise ValueError("not-sent")
+    if not delivery.platform_message_id:
+        raise ValueError("missing-message-id")
+    channel = await session.get(_Channel, delivery.channel_id)
+    if channel is None:
+        raise ValueError("channel-not-found")
+
+    # The channel's OWN token wins (so a channel added from the panel deletes
+    # without any environment change); otherwise the platform-wide token — the
+    # same one that published the message, and the only one allowed to.
+    client, token_error = client_for_channel(channel, configured_clients())
+    if client is None:
+        # The reason names the platform or the variable, never a token value.
+        raise ValueError(f"no-token: {token_error}")
+
+    try:
+        await client.delete_message(channel.chat_id, delivery.platform_message_id)
+    except PermanentDeliveryError as e:
+        raise ValueError(f"delete-refused: {e}")
+    except DeliveryError as e:
+        raise ValueError(f"delete-unavailable: {e}")
+
+    assert_delivery_transition("sent", "deleted_from_channel")
+    delivery.status = "deleted_from_channel"
+    delivery.updated_at = datetime.utcnow()
+    await session.commit()
+    return delivery
+
+
+async def mark_deleted_from_channel(session, delivery: Delivery) -> Delivery:
+    """Record ``deleted_from_channel`` WITHOUT calling the platform.
+
+    The fallback when the message was removed by hand in the channel app: the
+    operator says so and the row reflects it. Use
+    :func:`delete_published_message` to have the panel delete it for you.
 
     Raises:
         ValueError: ``not-sent`` when the message was never published.
     """
-    from datetime import datetime
-
     if delivery.status != "sent":
         raise ValueError("not-sent")
     assert_delivery_transition("sent", "deleted_from_channel")

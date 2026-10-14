@@ -150,8 +150,13 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   CHECK), `chat_id` (BIGINT, because chat ids exceed 2³¹), `username` (rendered
   as the message footer), `title`, `is_active`. Unique per
   `(platform, chat_id)`. Migration 005 seeds the one Bale channel in use.
-  **No credentials here** — bot tokens live in configuration, so a channel row
-  is never a secret.
+  **Many rows coexist**: the panel adds a channel beside the existing ones and
+  edits, switches on/off and deletes each one independently; a channel with
+  deliveries is disabled rather than deleted, so published history keeps
+  resolving. `bot_token_encrypted` (Fernet, migration 019) is an *optional*
+  per-channel token written from the panel form — it wins over the
+  platform-wide one, is never rendered back, and is what lets a channel be
+  added with no environment change.
 - **category_channel_routes** — the primary category → channel mapping,
   `(category_id, channel_id)` primary key, cascading deletes. The sender
   consults it first; seeded permissively (every category to every active
@@ -381,8 +386,13 @@ windows/panes instead of background shell jobs you cannot reattach to.
   broken channel must not stall every article queued behind it. Permanent
   errors (unknown chat, revoked token) fail immediately rather than burning
   attempts that could never succeed.
-- Bot tokens in configuration instead of on the `channels` row: a channel is a
-  destination, not a credential, so channel rows stay safe to read and audit.
+- Bot tokens in configuration by default, with an optional encrypted per-channel
+  token: a channel is a destination, not a credential, so channel rows stay safe
+  to read and audit; the exception exists so a second channel can be added from
+  the panel without editing the environment.
+- The panel records `deleted_from_channel` only after the platform confirms the
+  delete, so the row can never claim a message is gone while it is still in the
+  channel; a refusal leaves it `sent` and retryable.
 - A field with no route falls back to all active channels: fields discovered at
   runtime have no route row, and silently dropping their articles would be worse
   than publishing them to the current channel set.

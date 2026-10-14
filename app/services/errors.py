@@ -62,6 +62,11 @@ ERROR_MESSAGES: dict[str, tuple[int, str]] = {
     "not-awaiting": (409, "این ارسال در انتظار تأیید نیست."),
     "not-cancellable": (409, "ارسال در حال ارسال یا ارسال‌شده قابل لغو نیست."),
     "not-sent": (409, "فقط ارسال‌های تحویل‌شده را می‌توان از کانال حذف کرد."),
+    "missing-message-id": (422, "این ارسال شناسهٔ پیام ندارد، پس حذف از کانال ممکن نیست."),
+    "channel-not-found": (404, "کانال این ارسال یافت نشد."),
+    "no-token": (422, "توکن ربات این کانال در دسترس نیست؛ حذف پیام انجام نشد."),
+    "delete-refused": (409, "سکو حذف پیام را نپذیرفت؛ پیام هنوز در کانال است."),
+    "delete-unavailable": (502, "ارتباط با سکو برقرار نشد؛ پیام هنوز در کانال است، دوباره تلاش کنید."),
     "weak-password": (422, "گذرواژه باید حداقل ۸ نویسه باشد."),
     "bad-current-password": (401, "گذرواژهٔ فعلی نادرست است."),
     "duplicate-username": (422, "نام کاربری تکراری است."),
@@ -102,9 +107,13 @@ def from_value_error(exc: ValueError, default_message: str | None = None) -> tup
 
     Services still raise plain ``ValueError`` with stable codes for
     backwards compatibility; this maps them centrally so every route answers
-    the same way without repeating a lookup table.
+    the same way without repeating a lookup table. A code carrying a reason
+    suffix (``delete-refused: MESSAGE_TOO_OLD``) maps on the part before the
+    colon, so the operator sees one clear sentence per cause instead of a raw
+    platform string.
     """
     code = str(exc)
     if code.startswith("unresolvable:"):
         return 422, f"کانال یافت نشد: {code[len('unresolvable: '):]}"
-    return status_for(code), message_for(code, default_message or code)
+    base = code.split(":", 1)[0].strip()
+    return status_for(base), message_for(base, default_message or code)

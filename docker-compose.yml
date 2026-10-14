@@ -153,6 +153,14 @@ services:
       AVALAI_API_KEY: ${AVALAI_API_KEY:-}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+      # The panel needs the platform tokens to validate a channel target
+      # (getChat) and to delete a published message on behalf of a channel
+      # that has no token of its own. Without them here, adding a channel
+      # from the panel fails with "no bot token configured" and a delete
+      # cannot be performed — a per-channel bot_token_encrypted is the
+      # alternative that needs no environment change.
+      BALE_BOT_TOKEN: ${BALE_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     volumes:
       - credentials_data:/app/data
     depends_on:

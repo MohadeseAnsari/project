@@ -112,27 +112,79 @@ async def test_cancel_allows_queued_but_not_yet_sent(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_delete_from_channel_records_status_and_message_id(session: AsyncSession):
-    """Deleting a published message records the state and keeps the message id."""
+async def test_delete_from_channel_calls_the_platform_and_records_it(session: AsyncSession, monkeypatch):
+    """Deleting really calls the channel's deleteMessage, then records the state.
+
+    The status change alone would be a lie: the owner asked for the message to
+    be gone from the channel, so the platform call is the thing under test.
+    """
+    from app.messaging import platforms
+
     await _admin(session)
     delivery = await _delivery(session, "sent")
+    channel_id = delivery.channel_id
+    calls: list[tuple[int, int]] = []
+
+    class _Recording:
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            calls.append((chat_id, message_id))
+            return True
+
+    monkeypatch.setattr(
+        platforms, "client_for_channel", lambda channel, clients: (_Recording(), None)
+    )
     async with panel_client() as client:
         await client.post("/login", data={"username": "delivery-admin", "password": "secret123"},
                           follow_redirects=False)
         response = await client.post(
             f"/deliveries/{delivery.id}/delete-from-channel", follow_redirects=False
         )
-        assert response.status_code == 302
+        assert response.status_code == 303
+    assert len(calls) == 1, "the platform must be asked to delete the message"
     session.expire_all()
     await session.refresh(delivery)
     assert delivery.status == "deleted_from_channel"
     assert delivery.platform_message_id == 4242, "history keeps the platform message id"
+    assert calls[0][1] == 4242, "the message the platform sent is the one removed"
     detail = (
         await session.execute(
             select(AuditLog.detail).where(AuditLog.action == "delete_from_channel")
         )
     ).scalars().all()
     assert detail and "4242" in detail[0]
+    assert channel_id == delivery.channel_id
+
+
+@pytest.mark.asyncio
+async def test_delete_from_channel_refusal_keeps_the_row_sent(session: AsyncSession, monkeypatch):
+    """A platform refusal leaves the message published and says so (409)."""
+    from app.messaging import platforms
+    from app.messaging.platforms import PermanentDeliveryError
+
+    await _admin(session)
+    delivery = await _delivery(session, "sent")
+
+    class _Refusing:
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise PermanentDeliveryError("deleteMessage: message to delete not found")
+
+    monkeypatch.setattr(
+        platforms, "client_for_channel", lambda channel, clients: (_Refusing(), None)
+    )
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "delivery-admin", "password": "secret123"},
+                          follow_redirects=False)
+        response = await client.post(
+            f"/deliveries/{delivery.id}/delete-from-channel", follow_redirects=False
+        )
+        assert response.status_code == 409
+    session.expire_all()
+    await session.refresh(delivery)
+    assert delivery.status == "sent", "the message is still in the channel, so the row must not lie"
+    actions = (await session.execute(
+        select(AuditLog.action).where(AuditLog.action == "delete_from_channel_failed")
+    )).scalars().all()
+    assert actions, "a failed delete is audited too"
 
 
 @pytest.mark.asyncio
@@ -147,6 +199,31 @@ async def test_delete_from_channel_only_for_sent(session: AsyncSession):
             f"/deliveries/{delivery.id}/delete-from-channel", follow_redirects=False
         )
         assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_mark_deleted_records_without_touching_the_platform(session: AsyncSession, monkeypatch):
+    """The companion action for a message already removed by hand: no call out."""
+    from app.messaging import platforms
+
+    await _admin(session)
+    delivery = await _delivery(session, "sent")
+
+    def _never(channel, clients):
+        raise AssertionError("mark-deleted must not call the platform")
+
+    monkeypatch.setattr(platforms, "client_for_channel", _never)
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "delivery-admin", "password": "secret123"},
+                          follow_redirects=False)
+        response = await client.post(
+            f"/deliveries/{delivery.id}/mark-deleted", follow_redirects=False
+        )
+        assert response.status_code == 303
+    session.expire_all()
+    await session.refresh(delivery)
+    assert delivery.status == "deleted_from_channel"
+    assert delivery.platform_message_id == 4242
 
 
 @pytest.mark.asyncio

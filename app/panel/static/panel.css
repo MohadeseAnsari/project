@@ -38,6 +38,7 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .btn-ghost{background:#fff;border:1px solid var(--line);color:var(--ink2)}
 .btn-soft{background:var(--primary-soft);color:var(--primary-d)}
 .btn-ok{background:var(--green-soft);color:var(--green);border:1px solid var(--green-line)}
+.btn-danger{background:var(--red-soft);color:var(--red);border:1px solid #FECDD3}
 .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
 .wrap{padding:18px 22px;display:flex;flex-direction:column;gap:14px}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}

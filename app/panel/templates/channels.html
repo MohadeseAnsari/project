@@ -5,19 +5,32 @@
 {% block content %}
 <div class="two">
   <div class="card">
-    <h3>کانال‌های انتشار</h3>
+    <h3>کانال‌های انتشار<span class="grow"></span><span class="badge s-sent">{{ channels|fa }} کانال</span></h3>
     <div class="body" style="display:flex;flex-direction:column;gap:12px">
       {% for c in channels %}
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:11px">
+      {% set is_selected = selected and selected.id == c.id %}
+      <div style="border:1px solid {% if is_selected %}var(--primary){% else %}var(--line){% endif %};border-radius:12px;padding:12px;display:flex;align-items:center;gap:11px;{% if is_selected %}background:var(--primary-soft){% endif %}">
         <div class="b {% if c.platform=='telegram' %}b-blue{% else %}b-green{% endif %}" style="width:36px;height:36px;border-radius:10px;display:grid;place-items:center">{% if c.platform=='telegram' %}✈{% else %}⇢{% endif %}</div>
-        <div class="grow"><b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b><div class="hint">{{ c.route_count|fa }} رشتهٔ مسیرشده · <span class="num">{{ c.chat_id }}</span>{% if c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>{% else %} · توکن سراسری{% endif %}</div></div>
+        <div class="grow">
+          <b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b>
+          <div class="hint">
+            <span class="num">{{ c.chat_id }}</span> ·
+            {{ c.route_count|fa }} رشتهٔ مسیرشده ·
+            {{ c.usage.category_routes|fa }} مسیر دسته
+            {%- if c.bot_token_encrypted %} · توکن اختصاصی: ذخیره‌شده
+            {%- elif c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>
+            {%- else %} · توکن سراسری{% endif %}
+            {%- if c.usage.deliveries %} · <span class="num">{{ c.usage.deliveries|fa }}</span> ارسال{% endif %}
+          </div>
+        </div>
         {% if c.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}
-        <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="تغییر وضعیت" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
+        <a class="btn btn-ghost btn-sm" href="/channels?channel_id={{ c.id }}">ویرایش</a>
+        <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="فعال / غیرفعال" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
       </div>
       {% endfor %}
       <div style="border:1px dashed var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:11px">
         <div style="width:36px;height:36px;border-radius:10px;background:#F3F4F6;display:grid;place-items:center;color:var(--mut)">+</div>
-        <div class="grow"><b style="font-size:13.5px">افزودن کانال تازه</b><div class="hint">توکن ربات در env می‌ماند و هرگز در این صفحه نشان داده نمی‌شود</div></div>
+        <div class="grow"><b style="font-size:13.5px">افزودن کانال تازه</b><div class="hint">کانال تازه کنار کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div></div>
         <a class="btn btn-ghost btn-sm" href="/channels?new=1">افزودن</a>
       </div>
     </div>
@@ -27,13 +40,27 @@
     <h3>تنظیمات کانال انتخاب‌شده{% if selected %} — {{ selected.title or selected.username or selected.platform }}{% endif %}</h3>
     <div class="body">
       {% if selected %}
+      <div class="hint" style="margin-bottom:11px">این فرم فقط همین کانال را تغییر می‌دهد؛ ذخیرهٔ آن روی بقیهٔ کانال‌ها اثری ندارد.</div>
       <form method="post" action="/channels/{{ selected.id }}">{{ csrf_field(request) | safe }}
         <div class="field"><label>نام نمایشی</label><input type="text" name="title" value="{{ selected.title or '' }}"></div>
         <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}" style="direction:ltr;text-align:left"></div>
-        <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}" style="direction:ltr;text-align:left"><div class="hint">توکن ربات در متغیر محیطی می‌ماند و در پایگاه‌داده ذخیره نمی‌شود.</div></div>
+        <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>توکن ربات این کانال (اختیاری)</label><input type="password" name="bot_token" autocomplete="new-password" style="direction:ltr;text-align:left" placeholder="{{ 'ذخیره شده — برای تغییر، مقدار تازه بنویسید' if selected.bot_token_encrypted else 'خالی = توکن سراسری سکو' }}"><div class="hint">رمزنگاری‌شده ذخیره می‌شود و هرگز دوباره نمایش داده نمی‌شود. خالی = توکن فعلی دست‌نخورده می‌ماند.</div>{% if selected.bot_token_encrypted %}<label style="display:flex;gap:7px;align-items:center;margin-top:6px;cursor:pointer"><input type="checkbox" name="clear_token" value="yes"> پاک کردن توکن این کانال و بازگشت به توکن سراسری</label>{% endif %}</div>
         <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env" value="{{ selected.bot_token_env or '' }}" style="direction:ltr;text-align:left"><div class="hint">خالی = توکن سراسری سکو. فقط نام متغیر، هرگز خود توکن.</div></div>
-        <div style="display:flex;gap:9px"><button class="btn btn-primary" type="submit">ذخیره</button></div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn btn-primary" type="submit">ذخیرهٔ تغییرات همین کانال</button>
+        </div>
       </form>
+      <div style="border-top:1px solid var(--line2);margin-top:16px;padding-top:13px">
+        <h3 style="font-size:13px;margin:0 0 6px">حذف کانال</h3>
+        {% if selected.usage.deliveries %}
+        <div class="hint" style="margin-bottom:8px">این کانال <span class="num">{{ selected.usage.deliveries|fa }}</span> ارسال دارد، پس حذف نمی‌شود — فقط غیرفعال می‌شود تا تاریخچهٔ انتشار سالم بماند.</div>
+        <form method="post" action="/channels/{{ selected.id }}/delete" onsubmit="return confirm('این کانال {{ selected.usage.deliveries|fa }} ارسال دارد؛ به‌جای حذف، غیرفعال می‌شود. ادامه می‌دهید؟');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes"><button class="btn btn-danger btn-sm" type="submit">غیرفعال کردن کانال</button></form>
+        {% else %}
+        <div class="hint" style="margin-bottom:8px">این کانال هیچ ارسالی ندارد، پس حذف می‌شود. {{ selected.usage.field_routes|fa }} مسیر رشته و {{ selected.usage.category_routes|fa }} مسیر دستهٔ آن هم برداشته می‌شود.</div>
+        <form method="post" action="/channels/{{ selected.id }}/delete" onsubmit="return confirm('این کانال و مسیرهایش برای همیشه حذف می‌شوند. مطمئنید؟');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes"><button class="btn btn-danger btn-sm" type="submit">حذف کانال</button></form>
+        {% endif %}
+      </div>
       {% else %}
       <p>کانالی تعریف نشده است.</p>
       {% endif %}
@@ -99,14 +126,16 @@
 <div class="card">
   <h3>کانال جدید</h3>
   <div class="body">
+    <div class="hint" style="margin-bottom:11px">کانال تازه <b>کنار</b> کانال‌های موجود اضافه می‌شود؛ کانال‌های فعلی دست‌نخورده می‌مانند و بعداً می‌توانید هرکدام را جداگانه ویرایش، روشن/خاموش یا حذف کنید.</div>
     <form method="post" action="/channels">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:10px">
         <div class="field"><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
-        <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@channel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود و عنوان resolved نمایش داده می‌شود.</div></div>
+        <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@mychannel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود؛ مقصد نامعتبر اصلاً ذخیره نمی‌شود.</div></div>
         <div class="field"><label>عنوان نمایشی (اختیاری)</label><input type="text" name="title"></div>
+        <div class="field"><label>توکن ربات (اختیاری)</label><input type="password" name="bot_token" autocomplete="new-password" style="direction:ltr;text-align:left"><div class="hint">اگر این کانال ربات دیگری دارد، توکنش را اینجا بدهید؛ رمزنگاری‌شده ذخیره و هرگز نمایش داده نمی‌شود. خالی = توکن سراسری سکو.</div></div>
         <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env" style="direction:ltr;text-align:left"><div class="hint">خالی = توکن سراسری سکو. فقط نام متغیر.</div></div>
       </div>
-      <button class="btn btn-primary" type="submit">بررسی و ایجاد کانال</button>
+      <button class="btn btn-primary" type="submit">بررسی و افزودن کانال</button>
     </form>
   </div>
 </div>

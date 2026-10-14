@@ -132,7 +132,7 @@ async def test_channel_create_by_username_resolves_and_saves(session: AsyncSessi
             "/channels", data={"platform": "bale", "target": "@testchannel", "title": ""},
             follow_redirects=False,
         )
-        assert created.status_code == 302
+        assert created.status_code == 303
     row = (await session.execute(select(Channel).where(Channel.chat_id == 12345))).scalar_one()
     assert row.platform == "bale"
     assert row.username == "testchannel"
