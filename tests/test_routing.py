@@ -100,7 +100,7 @@ async def test_every_active_channel_receives_the_news(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_a_category_mapping_no_longer_excludes_other_channels(session: AsyncSession):
-    """The behaviour that was wrong before: one mapping used to filter delivery."""
+    """Legacy rows must not narrow delivery, and provenance is now one value."""
     cat = await _category(session)
     field = await _field(session, cat)
     designated = await _channel(session)
@@ -111,9 +111,9 @@ async def test_a_category_mapping_no_longer_excludes_other_channels(session: Asy
 
     assert [c.id for c in await channels_for_article(session, article)] == [designated.id, other.id]
     assert await channels_for_article_with_source(session, article) == [
-        (designated, "category"),
+        (designated, "all"),
         (other, "all"),
-    ], "the mapping still records WHY a channel was chosen"
+    ], "there is one rule, so there is one reason"
 
 
 @pytest.mark.asyncio
@@ -172,9 +172,7 @@ async def test_ensure_queues_a_delivery_per_active_channel(session: AsyncSession
 
 
 @pytest.mark.asyncio
-async def test_ensure_records_provenance_for_the_designated_channel(
-    session: AsyncSession, monkeypatch
-):
+async def test_ensure_records_broadcast_provenance(session: AsyncSession, monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "require_human_confirmation", False)
@@ -188,9 +186,7 @@ async def test_ensure_records_provenance_for_the_designated_channel(
 
     assert await ensure_pending_deliveries(session) == 2
     rows = (await session.execute(select(Delivery).order_by(Delivery.channel_id))).scalars().all()
-    sources = {row.channel_id: row.route_source for row in rows}
-    assert sources[designated.id] == "category"
-    assert sources[other.id] == "all"
+    assert {row.route_source for row in rows} == {"all"}
     assert all(row.category_id == cat.id for row in rows)
 
 

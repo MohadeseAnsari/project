@@ -312,7 +312,7 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
             }
         )
 
-    channels = await channel_service.channels_with_route_counts(session)
+    channels = await channel_service.channels_with_counts(session)
 
     delivery_counts = await delivery_service.delivery_status_counts(session)
     failed_note = None
@@ -1031,77 +1031,50 @@ async def field_confirm(request: Request, field_id: int, session: AsyncSession =
 @panel_app.get("/channels", response_class=HTMLResponse)
 async def channels_page(
     request: Request, channel_id: int | None = None, new: str = "",
-    fq: str = "", field_page: int = 1,
     session: AsyncSession = Depends(session_dep),
 ):
-    """Channels, plus the two assignments the owner configures (item 6).
+    """Destinations only: add, edit, switch on/off, delete.
 
-    No route MATRIX here any more. Delivery broadcasts to every active
-    channel, so what this page configures is (1) which category each field
-    belongs to and (2) which channel is each category's designated news
-    channel. A channel is kept out of delivery by switching it off.
+    The owner asked for exactly this page and nothing more. Every generated
+    article goes to every ACTIVE channel, so there is no routing to
+    configure — no "which field goes where" and no "which category maps to
+    which channel". Those two configuration screens had accumulated for a
+    behaviour that never actually filtered anything, and switching a channel
+    OFF is the only thing that decides where news does not go.
+
+    A channel that is on but failing says so on its row, because otherwise it
+    looks healthy while nothing reaches it.
     """
     user = await require_login(request, session)
 
-    channels = await channel_service.channels_with_route_counts(session)
+    channels = await channel_service.channels_with_counts(session)
     selected = None
     if channel_id is not None:
         selected = await channel_service.get_channel(session, channel_id)
     if selected is None:
         selected = channels[0] if channels else None
-    categories = await channel_service.category_channel_matrix(session)
     # The field list is searched and paginated: a deployment has hundreds of
     # fields, and rendering every one of them made the page unusable.
-    field_rows, field_total = await field_service.field_category_rows(
-        session, q=fq, page=field_page
-    )
-    field_page_size = 50
     usage = await channel_service.channel_usage(session)
-    cat_channel_counts = {
-        row["id"]: sum(1 for c in categories if c["channel_id"] == row["id"])
-        for row in categories
-    }
+    last_errors = await channel_service.last_errors(session)
     for channel in channels:
         channel.usage = usage.get(
             channel.id,
-            {"deliveries": 0, "sent": 0, "field_routes": 0, "category_routes": 0},
+            {"deliveries": 0, "sent": 0, "failed": 0, "field_routes": 0,
+             "category_routes": 0},
         )
-        channel.category_count = cat_channel_counts.get(channel.id, 0)
+        channel.last_error = last_errors.get(channel.id)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             categories=categories, field_rows=field_rows, field_q=fq,
-             field_page=field_page, field_page_size=field_page_size,
-             field_total=field_total, active_count=sum(1 for c in channels if c.is_active),
+             active_count=sum(1 for c in channels if c.is_active),
+             total_sent=sum(c.usage.get("sent", 0) for c in channels),
+             total_failed=sum(c.usage.get("failed", 0) for c in channels),
              # With no channels at all there is nothing to edit, so the empty
              # state must offer the add form — otherwise the page has no form
              # on it and a first-time operator is stuck.
              show_new=bool(new) or not channels))
 
-
-
-@panel_app.get("/channels/table", response_class=HTMLResponse)
-async def channels_fields_table(
-    request: Request, fq: str = "", page: int = 1,
-    session: AsyncSession = Depends(session_dep),
-):
-    """Just the searchable field → category table, for HTMX paging.
-
-    Only the table swaps, so paging does not throw the operator back to the top
-    of a long page and lose the channel they were editing.
-    """
-    user = await require_login(request, session)
-    field_rows, field_total = await field_service.field_category_rows(
-        session, q=fq, page=page
-    )
-    categories, _total = await field_service.category_cards(session)
-    return templates.TemplateResponse(
-        request, "channels_fields_table.html",
-        _ctx(
-            request, user, field_rows=field_rows, field_q=fq, field_page=page,
-            field_page_size=50, field_total=field_total, categories=categories,
-        ),
-    )
 
 
 @panel_app.get("/routing")
@@ -1115,47 +1088,20 @@ async def routing_page_removed(request: Request):
     return RedirectResponse(url="/channels", status_code=301)
 
 
-@panel_app.post("/channels/category-channel")
-async def channel_set_category_channel(
-    request: Request, category_id: int = Form(...), channel_id: int = Form(0),
-    session: AsyncSession = Depends(session_dep),
-):
-    """Record which channel is a category's designated news channel (item 6).
-
-    Delivery broadcasts to every active channel, so this pairing is a label and
-    a provenance marker rather than a filter. ``channel_id=0`` clears it.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.MANAGE_CONFIG)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
-    try:
-        outcome = await channel_service.set_category_channel(
-            session, category_id=category_id, channel_id=channel_id or None
-        )
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "تعیین کانال دسته ممکن نشد.")),
-            status_code=422)
-    await audit_service.record_event(session, user.id, "route", None,
-                                     f"category={category_id} channel={channel_id or 'none'} {outcome}")
-    return RedirectResponse(url="/fields", status_code=303)
-
-
 @panel_app.post("/fields/{field_id}/category")
 async def field_set_category(
     request: Request, field_id: int, category_id: int = Form(...),
-    return_to: str = Form("fields"),
     session: AsyncSession = Depends(session_dep),
 ):
     """Pin a field to a category once, by hand (item 15).
 
     The assignment is stored on the row and marked ``manual``, so the
     automatic ruleset does not quietly overwrite an operator's decision on the
-    next classification pass. ``return_to`` sends the operator back to whichever
-    page they made the edit from — both the channels page and the merged
-    fields page offer this control.
+    next classification pass.
+
+    This lives on the fields page only. It decides which CATEGORY a field
+    belongs to — the classification the generator and the records use — and has
+    nothing to do with routing, which no longer exists.
     """
     user = await require_login(request, session)
     try:
@@ -1173,10 +1119,7 @@ async def field_set_category(
             status_code=422)
     await audit_service.record_event(session, user.id, "route", None,
                                      f"field={field_id} category={row.category_id} source=manual")
-    # Whitelist rather than echoing the value: an open redirect here would let
-    # a crafted form bounce an admin to another site.
-    destination = "/channels" if return_to == "channels" else "/fields"
-    return RedirectResponse(url=destination, status_code=303)
+    return RedirectResponse(url="/fields", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
@@ -1712,7 +1655,6 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}": "MANAGE_CONFIG",
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
-    "/channels/category-channel": "MANAGE_CONFIG",
     "/fields/{field_id}/category": "FIELD_CURATE",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",

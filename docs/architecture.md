@@ -33,12 +33,11 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### Sender Worker (Channel Delivery)
 - Polls for processed articles (`main.status = 'review'`) that have no delivery for an active channel
 - Creates one `deliveries` row per (article, channel) — the unit of work
-- Resolves channels for an article: **every active channel** is a target
-  (item 6). `category_channel_routes` records which channel is a category's
-  designated news channel and is reported as the delivery's provenance
-  (`route_source='category'` vs `'all'`); it does **not** narrow delivery, and
-  a channel is excluded only by being switched off. Each delivery also
-  snapshots `category_id`, so sends stay explainable
+- Resolves channels for an article: **every active channel** is a target. There is
+  no routing table in the decision any more — the two configuration screens were
+  removed at the owner's request, and switching a channel OFF is the only thing
+  that decides where news does not go. Each delivery snapshots its `category_id`
+  and records `route_source='all'` so a send stays explainable.
 - Renders the message (`app/messaging/formatting.py`): emoji-headed title in bold, lead, body, and the destination channel handle
 - Claims one due delivery at a time with `FOR UPDATE SKIP LOCKED`
 - Sends through the platform client for the channel (`Bale`, `Telegram`) using the bot token from configuration

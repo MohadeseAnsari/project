@@ -27,23 +27,40 @@ async def get_channel(session, channel_id: int) -> Channel | None:
     return await session.get(Channel, channel_id)
 
 
-async def channels_with_route_counts(session) -> list[Channel]:
-    """Channels with ``route_count`` and ``sent_count`` attached.
+async def last_errors(session) -> dict[int, str]:
+    """The newest failure message per channel, for the channels page.
 
-    Two grouped queries for every channel rather than one per channel, so the
-    dashboard does not fan out into N queries as channels are added.
+    A channel can be switched on, look perfectly healthy in the list, and
+    still reject every message (a bot without admin rights on Telegram, a
+    revoked token). Without this the operator only finds out from the delivery
+    queue. Returns ``{channel_id: message}``; the text is the provider's own,
+    which never contains a credential.
+    """
+    from app.db.models import Delivery
+
+    rows = (
+        await session.execute(
+            select(Delivery)
+            .where(Delivery.status == "failed", Delivery.error_message.isnot(None))
+            .order_by(Delivery.id.desc())
+        )
+    ).scalars().all()
+    out: dict[int, str] = {}
+    for row in rows:
+        out.setdefault(row.channel_id, row.error_message)
+    return out
+
+
+async def channels_with_counts(session) -> list[Channel]:
+    """Channels with ``sent_count`` attached, for the cards and the list.
+
+    One grouped query rather than one per channel, so the page does not fan
+    out into N queries as channels are added. Named for what it counts; the
+    route counts it used to carry went when routing did.
     """
     from app.db.models import Delivery
 
     channels = await list_channels(session)
-    route_counts = dict(
-        (
-            await session.execute(
-                select(FieldChannelRoute.channel_id, func.count())
-                .group_by(FieldChannelRoute.channel_id)
-            )
-        ).all()
-    )
     sent_counts = dict(
         (
             await session.execute(
@@ -54,7 +71,6 @@ async def channels_with_route_counts(session) -> list[Channel]:
         ).all()
     )
     for channel in channels:
-        channel.route_count = route_counts.get(channel.id, 0)
         channel.sent_count = sent_counts.get(channel.id, 0)
     return channels
 
@@ -293,13 +309,22 @@ async def clear_channel_token(session, row: Channel) -> Channel:
 
 
 async def channel_usage(session) -> dict[int, dict[str, int]]:
-    """Per-channel delivery and route counts, for the delete confirmation.
+    """Per-channel delivery counts, for the row badges and the delete guard.
 
     One query per table instead of one per channel, so a page with many
-    channels does not fan out into N queries.
+    channels does not fan out into N queries. ``failed`` is included because a
+    channel that is switched on but rejecting every message is exactly the
+    thing the operator needs to see on the page.
     """
     from app.db.models import Delivery
 
+    all_deliveries = dict(
+        (
+            await session.execute(
+                select(Delivery.channel_id, func.count()).group_by(Delivery.channel_id)
+            )
+        ).all()
+    )
     sent = dict(
         (
             await session.execute(
@@ -309,38 +334,22 @@ async def channel_usage(session) -> dict[int, dict[str, int]]:
             )
         ).all()
     )
-    all_deliveries = dict(
+    failed = dict(
         (
             await session.execute(
-                select(Delivery.channel_id, func.count()).group_by(Delivery.channel_id)
+                select(Delivery.channel_id, func.count())
+                .where(Delivery.status == "failed")
+                .group_by(Delivery.channel_id)
             )
         ).all()
     )
-    field_counts = dict(
-        (
-            await session.execute(
-                select(FieldChannelRoute.channel_id, func.count())
-                .group_by(FieldChannelRoute.channel_id)
-            )
-        ).all()
-    )
-    cat_counts = dict(
-        (
-            await session.execute(
-                select(CategoryChannelRoute.channel_id, func.count())
-                .group_by(CategoryChannelRoute.channel_id)
-            )
-        ).all()
-    )
-    ids = set(all_deliveries) | set(field_counts) | set(cat_counts)
     return {
         cid: {
             "deliveries": all_deliveries.get(cid, 0),
             "sent": sent.get(cid, 0),
-            "field_routes": field_counts.get(cid, 0),
-            "category_routes": cat_counts.get(cid, 0),
+            "failed": failed.get(cid, 0),
         }
-        for cid in ids
+        for cid in all_deliveries
     }
 
 
@@ -354,87 +363,5 @@ async def has_deliveries(session, channel_id: int) -> bool:
         )
     ).scalar_one()
     return bool(count)
-
-
-async def category_channel_matrix(session) -> list[dict]:
-    """Each category with the channel designated for it (item 6).
-
-    This is the "which news channel corresponds to this category" half of the
-    owner's configuration. Since delivery broadcasts to every active channel,
-    this pairing is a LABEL and a provenance marker, not a filter — the panel
-    says so on the row.
-
-    ``channel_id`` is None when the category has no designated channel, and 0
-    when it has one that was since deleted.
-    """
-    from app.db.models import Delivery, Field
-
-    categories = (
-        await session.execute(select(Category).order_by(Category.name))
-    ).scalars().all()
-    field_counts = dict(
-        (
-            await session.execute(
-                select(Field.category_id, func.count()).group_by(Field.category_id)
-            )
-        ).all()
-    )
-    designated = {
-        row.category_id: row.channel_id
-        for row in (
-            await session.execute(select(CategoryChannelRoute).order_by(CategoryChannelRoute.channel_id))
-        ).scalars().all()
-    }
-    return [
-        {
-            "id": category.id,
-            "name": category.name,
-            "description": category.description,
-            "field_count": field_counts.get(category.id, 0),
-            "channel_id": designated.get(category.id),
-        }
-        for category in categories
-    ]
-
-
-async def set_category_channel(session, *, category_id: int, channel_id: int | None) -> str:
-    """Set (or clear) the channel designated for one category (item 6).
-
-    A category gets exactly one designated channel, so setting a new one
-    replaces the previous pairing for that category and leaves other
-    categories' pairings alone. Passing ``channel_id=None`` clears it.
-
-    Returns ``"set"`` or ``"cleared"``.
-
-    Raises:
-        ValueError: ``unknown-category`` / ``unknown-channel`` when the row
-            does not exist, so a stale form cannot write a dangling route.
-    """
-    category = await session.get(Category, category_id)
-    if category is None:
-        raise ValueError("unknown-category")
-    existing = list(
-        (
-            await session.execute(
-                select(CategoryChannelRoute).where(CategoryChannelRoute.category_id == category_id)
-            )
-        ).scalars().all()
-    )
-    if channel_id is None:
-        for route in existing:
-            await session.delete(route)
-        if existing:
-            await session.commit()
-        return "cleared"
-    channel = await session.get(Channel, channel_id)
-    if channel is None:
-        raise ValueError("unknown-channel")
-    for route in existing:
-        if route.channel_id != channel_id:
-            await session.delete(route)
-    if not any(route.channel_id == channel_id for route in existing):
-        session.add(CategoryChannelRoute(category_id=category_id, channel_id=channel_id))
-    await session.commit()
-    return "set"
 
 

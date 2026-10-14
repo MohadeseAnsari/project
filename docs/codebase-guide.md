@@ -157,11 +157,10 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   per-channel token written from the panel form — it wins over the
   platform-wide one, is never rendered back, and is what lets a channel be
   added with no environment change.
-- **category_channel_routes** — the primary category → channel mapping,
-  `(category_id, channel_id)` primary key, cascading deletes. Since item 6 this
-  records each category's *designated* news channel and the delivery's
-  provenance; it does **not** filter delivery, because the rule is that every
-  active channel receives the news.
+- **category_channel_routes** — retired. No longer written, no longer read, and
+  the panel has no screen for it: the owner removed the category → channel
+  configuration because news goes to every active channel regardless. Kept so
+  existing rows are not lost.
 - **field_channel_routes** — retired from the delivery decision (item 6) and no
   longer written by the panel. The table is kept so existing rows and the
   history they explain are not lost.

@@ -139,18 +139,18 @@ erDiagram
         TIMESTAMP created_at
     }
     # Retired from the delivery decision (item 6) and no longer written by the
-    # panel. Kept so existing rows and the history they explain are not lost;
-    # dropping the table would be a destructive migration for no gain.
+    # panel. Kept so existing rows are not lost; dropping the table would be a
+    # destructive migration for no gain.
 
     category_channel_routes {
         INTEGER category_id PK,FK
         INTEGER channel_id PK,FK
         TIMESTAMP created_at
     }
-    # One designated news channel per category. Since item 6 this does NOT
-    # filter delivery — every active channel receives the news. It records the
-    # pairing shown in the panel and becomes the delivery's
-    # route_source='category' provenance.
+    # Retired from the delivery decision and no longer written by the panel
+    # (item 6, final rule: news goes to every ACTIVE channel, nothing is
+    # configurable). Kept so existing rows are not lost; the panel has no
+    # screen for them any more.
 
     deliveries {
         SERIAL id PK

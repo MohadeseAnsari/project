@@ -24,7 +24,7 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import CategoryChannelRoute, Channel, Delivery, Main
+from app.db.models import Channel, Delivery, Main
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
 from app.services.transitions import assert_delivery_transition, assert_record_transition
@@ -157,9 +157,15 @@ async def resolve_channels(
     The neutral core shared by the sender (via articles), the routing preview
     endpoint and the panel, so every surface agrees on where an article goes.
 
-    Every active channel is a target. The source is ``category`` when the
-    article's category is mapped to that channel and ``all`` when it is
-    reached by broadcast, which is what the row records for provenance.
+    Every active channel is a target. There is no routing to configure: the
+    owner asked for exactly this, and the two configuration screens that used
+    to sit on the channels page had accumulated for a behaviour that never
+    actually filtered anything. Switching a channel OFF is the only thing
+    that decides where news does not go.
+
+    ``route_source`` is therefore always ``"all"``. The column is kept because
+    it is part of the delivery's history, and older rows still carry
+    ``"category"``/``"field"`` from before.
     """
     active = list(
         (
@@ -168,23 +174,7 @@ async def resolve_channels(
             )
         ).scalars().all()
     )
-    if not active:
-        return []
-    designated: set[int] = set()
-    if category_id is not None:
-        designated = set(
-            (
-                await session.execute(
-                    select(CategoryChannelRoute.channel_id).where(
-                        CategoryChannelRoute.category_id == category_id
-                    )
-                )
-            ).scalars().all()
-        )
-    return [
-        (channel, "category" if channel.id in designated else "all")
-        for channel in active
-    ]
+    return [(channel, "all") for channel in active]
 
 
 async def channels_for_article_with_source(

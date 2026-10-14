@@ -1,29 +1,36 @@
 {% extends "base.html" %}
-{% block title %}کانال‌ها و مسیرها{% endblock %}
-{% block h1 %}کانال‌ها و مسیرها{% endblock %}
+{% block title %}کانال‌ها{% endblock %}
+{% block h1 %}کانال‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › کانال‌ها{% endblock %}
 {% block content %}
 
-{# How it works, stated once and briefly. This page answers two questions —
-   where does the news go, and what does each category mean — and the answer
-   to the first is deliberately simple. #}
+{# This page manages DESTINATIONS and nothing else.
+
+   Every generated article is published to every ACTIVE channel. There is no
+   routing to configure: no "which field goes where", no "which category maps
+   to which channel". The owner asked for exactly this, because the routing
+   tables had accumulated two configuration screens to fill in for a behaviour
+   that never actually filtered anything.
+
+   Switching a channel OFF is the only way to stop it receiving news. #}
 <div class="note">
-  <b>هر خبر تولیدشده به همهٔ کانال‌های فعال می‌رود.</b>
-  این صفحه دو چیز را تنظیم می‌کند: <b>هر رشته در کدام دسته است</b> و <b>کانال متناظر هر دسته کدام است</b> —
-  این نگاشت فقط برچسب می‌دهد و ارسال را محدود نمی‌کند. برای اینکه خبری به کانالی نرود، آن کانال را خاموش کنید.
+  هر خبر تولیدشده به <b>همهٔ کانال‌های فعال</b> می‌رود. نیازی به انتخاب کانال یا مسیر نیست —
+  برای اینکه خبری به کانالی نرود، همان کانال را خاموش کنید.
 </div>
 
 <div class="kpis">
   <div class="kpi"><div class="b b-green">⇢</div><div><div class="n">{{ channels|length|fa }}</div><div class="t">کانال</div></div></div>
-  <div class="kpi"><div class="b b-amber">◈</div><div><div class="n">{{ active_count|fa }}</div><div class="t">کانال فعال (ارسال می‌گیرد)</div></div></div>
-  <div class="kpi"><div class="b b-violet">◫</div><div><div class="n">{{ categories|length|fa }}</div><div class="t">دسته</div></div></div>
-  <div class="kpi"><div class="b b-blue">▤</div><div><div class="n">{{ field_total|fa }}</div><div class="t">رشته</div></div></div>
+  <div class="kpi"><div class="b b-amber">◈</div><div><div class="n">{{ active_count|fa }}</div><div class="t">فعال — این‌ها خبر می‌گیرند</div></div></div>
+  <div class="kpi"><div class="b b-blue">✓</div><div><div class="n">{{ total_sent|fa }}</div><div class="t">خبر منتشرشده</div></div></div>
+  {% if total_failed %}
+  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ total_failed|fa }}</div><div class="t">ارسال ناموفق</div></div></div>
+  {% endif %}
 </div>
 
 <div class="two">
   {# ── the channels ─────────────────────────────────────────────── #}
   <div class="card">
-    <h3>کانال‌های انتشار</h3>
+    <h3>کانال‌ها</h3>
     <div class="body" style="display:flex;flex-direction:column;gap:10px">
       {% for c in channels %}
       {% set is_selected = selected and selected.id == c.id %}
@@ -33,7 +40,11 @@
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <b style="font-size:13.5px">{{ c.title or c.username or c.platform }}</b>
             {% if c.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}
-            {% if c.category_count %}<span class="badge s-off">{{ c.category_count|fa }} دسته</span>{% endif %}
+            {# A channel that is on but failing is the one thing worth seeing
+               here: otherwise it looks healthy while nothing reaches it. #}
+            {% if c.usage.failed and c.is_active %}
+            <span class="badge s-failed" title="{{ c.last_error or 'ارسال ناموفق' }}">{{ c.usage.failed|fa }} ارسال ناموفق</span>
+            {% endif %}
           </div>
           <div class="hint">
             <span class="num">{{ c.chat_id }}</span> ·
@@ -42,6 +53,9 @@
             {%- elif c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>
             {%- else %} · توکن سراسری{% endif %}
           </div>
+          {% if c.is_active and c.last_error and c.usage.failed %}
+          <div class="hint" style="color:var(--red)">آخرین خطا: {{ c.last_error }}</div>
+          {% endif %}
         </div>
         <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="فعال / غیرفعال" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
         <a class="btn btn-ghost btn-sm" href="/channels?channel_id={{ c.id }}">ویرایش</a>
@@ -93,53 +107,6 @@
       <p>کانالی انتخاب نشده است.</p>
       {% endif %}
     </div>
-  </div>
-</div>
-
-{# ── assignment 1: field → category ───────────────────────────────── #}
-<div class="card">
-  <h3>رشته ← دسته<span class="grow"></span><span class="badge s-off">تعیین یک‌بار و ماندگار</span></h3>
-  <form method="get" action="/channels" class="filters" style="border-bottom:1px solid var(--line2);padding-bottom:12px">
-    <input type="hidden" name="channel_id" value="{{ selected.id if selected else '' }}">
-    <input type="text" name="fq" placeholder="جست‌وجوی رشته…" value="{{ fq or '' }}" style="flex:1">
-    <button class="btn btn-primary btn-sm" type="submit">جست‌وجو</button>
-    {% if fq %}<a class="btn btn-ghost btn-sm" href="/channels{% if selected %}?channel_id={{ selected.id }}{% endif %}">پاک‌کردن</a>{% endif %}
-    <span class="pill">{{ field_total|fa }} رشته</span>
-  </form>
-  <div id="fields-table">
-    {% include "channels_fields_table.html" %}
-  </div>
-  <div class="body" style="border-top:1px solid var(--line2)">
-    <div class="hint">این تعیین یک‌بار در پایگاه‌داده ذخیره می‌شود و دیگر با هر رکورد بازمحاسبه نمی‌شود. «منبع» نشان می‌دهد دستی تعیین شده یا از قواعد خودکار آمده است.</div>
-  </div>
-</div>
-
-{# ── assignment 2: category → its channel ──────────────────────────── #}
-<div class="card">
-  <h3>دسته ← کانال متناظر<span class="grow"></span><span class="badge s-off">فقط برچسب، ارسال را محدود نمی‌کند</span></h3>
-  <table>
-    <thead><tr><th>دسته</th><th style="width:110px">رشته‌ها</th><th style="width:280px">کانال متناظر</th></tr></thead>
-    <tbody>
-      {% for cat in categories %}
-      <tr>
-        <td class="title">{{ cat.name }}{% if cat.description %}<span class="sub">{{ cat.description }}</span>{% endif %}</td>
-        <td class="num">{{ cat.field_count|fa }}</td>
-        <td>
-          <form method="post" action="/channels/category-channel" class="inline-edit">{{ csrf_field(request) | safe }}
-            <input type="hidden" name="category_id" value="{{ cat.id }}">
-            <select name="channel_id">
-              <option value="">— تعیین نشده —</option>
-              {% for c in channels %}<option value="{{ c.id }}" {% if cat.channel_id == c.id %}selected{% endif %}>{{ c.title or c.username or c.platform }}</option>{% endfor %}
-            </select>
-            <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <div class="body" style="border-top:1px solid var(--line2)">
-    <div class="hint">برای اینکه خبری به کانالی نرود، آن کانال را از فهرست بالا خاموش کنید — کانال خاموش هیچ خبری نمی‌گیرد.</div>
   </div>
 </div>
 
