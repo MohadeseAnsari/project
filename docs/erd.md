@@ -127,11 +127,18 @@ erDiagram
         TEXT bot_token_encrypted
         BOOLEAN is_active
         TIMESTAMP created_at
+        TIMESTAMP activated_at
     }
     # Many channels coexist; the pair (platform, chat_id) is unique
     # (uq_channels_platform_chat) so one destination is never registered
     # twice. bot_token_encrypted is a per-channel Fernet token, write-only.
     # Deleting is not unconditional: a channel with deliveries is disabled.
+    #
+    # activated_at is the channel's start line: an article is delivered here
+    # only if main.created_at >= channels.activated_at. It is seeded from
+    # created_at for existing rows and refreshed every time the channel is
+    # switched ON, so neither a new channel nor a re-enabled one inherits the
+    # archive that predates it.
 
     field_channel_routes {
         INTEGER field_id PK,FK
@@ -213,11 +220,10 @@ deliveries are `sent`.
 `awaiting_confirmation` is the gated initial status while
 `REQUIRE_HUMAN_CONFIRMATION` is on; approving the record flips it to `pending`.
 
-An article reaches a channel through field → category → channels:
-`category_channel_routes` is the primary mapping the sender consults first,
-`field_channel_routes` stays as the field-level exception table for categories
-without a route, and unmapped categories fall back to all active channels.
-Each delivery snapshots `category_id` + `route_source`
-(`category` | `field` | `fallback`) at queue time, so a send stays explainable
-after later route edits. `fields.matched_keyword` records which keyword
-produced the field's category, for the same reason.
+An article reaches **every active channel**; there is no route table in the
+decision any more. The only exclusions are `is_active = false` and
+`channels.activated_at > main.created_at` — a channel never receives news that
+predates the moment it was switched on. Each delivery snapshots `category_id` +
+`route_source` (`all`) at queue time, so a send stays explainable after later
+edits. `fields.matched_keyword` records which keyword produced the field's
+category, for the same reason.

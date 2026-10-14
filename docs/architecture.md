@@ -38,6 +38,15 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
   removed at the owner's request, and switching a channel OFF is the only thing
   that decides where news does not go. Each delivery snapshots its `category_id`
   and records `route_source='all'` so a send stays explainable.
+- **A channel only receives news from the moment it was switched on.** The
+  filter is `channels.activated_at <= main.created_at`, and `activated_at` moves
+  forward every time a channel is switched ON. Without it, adding a channel made
+  the sender enqueue the entire archive to it — a brand new channel has no
+  delivery rows for anything, so every historical record looked like pending
+  work, forever. The same floor is expressed twice on purpose: in
+  `resolve_channels()` for the rows that get created, and in
+  `_has_undelivered_channel()` for the batch query that finds the articles.
+  They must agree or news is silently dropped or silently flooded.
 - Renders the message (`app/messaging/formatting.py`): emoji-headed title in bold, lead, body, and the destination channel handle
 - Claims one due delivery at a time with `FOR UPDATE SKIP LOCKED`
 - Sends through the platform client for the channel (`Bale`, `Telegram`) using the bot token from configuration

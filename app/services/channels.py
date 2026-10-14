@@ -216,8 +216,24 @@ async def update_channel(
 
 
 async def toggle_channel(session, row: Channel) -> Channel:
-    """Flip a channel's active switch."""
+    """Flip a channel's active switch.
+
+    Switching **ON** also moves ``activated_at`` to now. That is the whole
+    point of the column: a channel that has been off does not get the
+    accumulated backlog thrown at it when it comes back, exactly like a brand
+    new channel. The owner asked for new news only, and re-enabling a dormant
+    channel is the same decision as creating a fresh one.
+
+    Switching **OFF** leaves ``activated_at`` alone, so the boundary does not
+    drift while the channel is dark.
+    """
     row.is_active = not row.is_active
+    if row.is_active:
+        # func.now(), not datetime.now(): this must be the SAME clock as the
+        # column default, or a channel switched on in the same transaction as
+        # an article insert would compare against two different notions of
+        # "now" and silently drop that article.
+        row.activated_at = func.now()
     await session.commit()
     await session.refresh(row)
     return row

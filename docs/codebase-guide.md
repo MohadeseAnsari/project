@@ -156,7 +156,12 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   resolving. `bot_token_encrypted` (Fernet, migration 019) is an *optional*
   per-channel token written from the panel form — it wins over the
   platform-wide one, is never rendered back, and is what lets a channel be
-  added with no environment change.
+  added with no environment change. `activated_at` (migration 022) is the
+  channel's start line: an article is only delivered there if it was created at
+  or after that moment, and the value is refreshed every time the channel is
+  switched ON. Without it, adding a channel made the sender enqueue the whole
+  archive to it — a new channel has no delivery rows for anything, so every
+  historical record looked like pending work.
 - **category_channel_routes** — retired. No longer written, no longer read, and
   the panel has no screen for it: the owner removed the category → channel
   configuration because news goes to every active channel regardless. Kept so

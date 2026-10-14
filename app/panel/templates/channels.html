@@ -15,7 +15,9 @@
    Switching a channel OFF is the only way to stop it receiving news. #}
 <div class="note">
   هر خبر تولیدشده به <b>همهٔ کانال‌های فعال</b> می‌رود. نیازی به انتخاب کانال یا مسیر نیست —
-  برای اینکه خبری به کانالی نرود، همان کانال را خاموش کنید.
+  برای اینکه خبری به کانالی نرود، همان کانال را خاموش کنید.<br>
+  کانال تازه فقط خبرهای <b>بعد از زمان روشن‌شدنش</b> را می‌گیرد؛ آرشیو قبلی برایش ارسال نمی‌شود.
+  خاموش و دوباره روشن کردن کانال، زمان شروع را به‌روز می‌کند.
 </div>
 
 <div class="kpis">
@@ -49,6 +51,7 @@
           <div class="hint">
             <span class="num">{{ c.chat_id }}</span> ·
             <span class="num">{{ c.sent_count|fa }}</span> خبر منتشرشده
+            · از <span class="num">{{ c.activated_at|jalali }}</span> دریافت می‌کند
             {%- if c.bot_token_encrypted %} · توکن اختصاصی: ذخیره‌شده
             {%- elif c.bot_token_env %} · توکن اختصاصی: <span class="num">{{ c.bot_token_env }}</span>
             {%- else %} · توکن سراسری{% endif %}

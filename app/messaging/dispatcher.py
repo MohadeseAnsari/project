@@ -86,7 +86,7 @@ async def preview_routing(
                 keyword = field_row.matched_keyword
         if keyword is None:
             _, keyword, _ = classify_with_reason(normalize_field(record.field))
-        pairs = await resolve_channels(session, record.category_id, record.field_id)
+        pairs = await resolve_channels(session, record.created_at)
         return {
             "input": record.field,
             "record_id": record.id,
@@ -114,7 +114,7 @@ async def preview_routing(
         )
         category = result.scalar_one_or_none()
         category_id = category.id if category else None
-    pairs = await resolve_channels(session, category_id, None)
+    pairs = await resolve_channels(session, None)
     return {
         "input": field,
         "record_id": None,
@@ -150,7 +150,7 @@ async def channels_for_article(session, article: Main) -> list[Channel]:
 
 
 async def resolve_channels(
-    session, category_id: int | None, field_id: int | None
+    session, since: datetime | None
 ) -> list[tuple[Channel, str]]:
     """Resolve ``(channel, route_source)`` for one article.
 
@@ -163,17 +163,23 @@ async def resolve_channels(
     actually filtered anything. Switching a channel OFF is the only thing
     that decides where news does not go.
 
+    **A channel only receives news from the moment it was switched on.**
+    ``since`` is the article's ``created_at``, and a channel qualifies when
+    ``activated_at <= since``. Without that floor the owner got the opposite of
+    what they asked for: adding a channel made the sender enqueue the entire
+    archive to it, because a brand new channel has no delivery rows for
+    anything, ever. Passing ``None`` means "no article yet" and applies no
+    floor, which is what the preview endpoint wants — it answers "where would
+    news generated right now go?".
+
     ``route_source`` is therefore always ``"all"``. The column is kept because
     it is part of the delivery's history, and older rows still carry
     ``"category"``/``"field"`` from before.
     """
-    active = list(
-        (
-            await session.execute(
-                select(Channel).where(Channel.is_active.is_(True)).order_by(Channel.id)
-            )
-        ).scalars().all()
-    )
+    query = select(Channel).where(Channel.is_active.is_(True))
+    if since is not None:
+        query = query.where(Channel.activated_at <= since)
+    active = list((await session.execute(query.order_by(Channel.id))).scalars().all())
     return [(channel, "all") for channel in active]
 
 
@@ -187,19 +193,26 @@ async def channels_for_article_with_source(
     reached by the broadcast (``all``), so the delivery row can snapshot its
     provenance at queue time.
     """
-    return await resolve_channels(session, article.category_id, article.field_id)
+    return await resolve_channels(session, article.created_at)
 
 
 def _has_undelivered_channel():
     """SQL predicate: the article has an active channel with no delivery yet.
 
-    Mirrors :func:`channels_for_article` exactly — every active channel is a
-    target — because the two must agree or the batch query would either skip
-    articles the resolver would route (silent non-delivery) or keep returning
-    articles the resolver has nothing to do for.
+    Mirrors :func:`channels_for_article` exactly -- every active channel is
+    a target, but only from the moment it was switched ON
+    (``channels.activated_at <= main.created_at``) -- because the two must
+    agree or the batch query would either skip articles the resolver would
+    route (silent non-delivery) or keep returning articles the resolver has
+    nothing to do for.
 
-    That agreement is now simple enough to state in one sentence, which is
-    the point: the old version had to re-express the three-level chain in SQL
+    The activation floor is what stops a newly added channel from inheriting
+    the whole archive: without it every historical article matches this
+    predicate, because a new channel has no delivery rows for anything, so the
+    sender would build deliveries for the entire backlog on every pass.
+
+    That agreement is now simple enough to state in one sentence, which is the
+    point: the old version had to re-express the three-level chain in SQL
     and carried a comment explaining how easy it was to get subtly wrong.
     """
     return exists(
@@ -215,6 +228,7 @@ def _has_undelivered_channel():
         .where(
             and_(
                 Channel.is_active.is_(True),
+                Channel.activated_at <= Main.created_at,
                 Delivery.id.is_(None),
             )
         )
@@ -227,9 +241,13 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
 
     An article qualifies when it is ``review``/``approved``/``published`` with
     a usable ``output_json`` AND at least one channel it resolves to has no
-    delivery row yet (``approved``/``published`` matter when a channel is
-    routed after the article was already approved — its delivery is created
-    directly as ``pending`` because the human decision already happened).
+    delivery row yet. "Resolves to" means ACTIVE and switched on no later than
+    the article, so an article predating a channel is never enqueued for it —
+    adding a channel does not send the archive.
+
+    ``approved``/``published`` are included because a record's generated news
+    can reach this stage after earlier ones; its delivery is created directly
+    as ``pending`` because the human decision already happened.
 
     The "still needs sending" test is an anti-join expressed in SQL, not a
     Python filter applied after ``LIMIT``. That distinction is load-bearing: if

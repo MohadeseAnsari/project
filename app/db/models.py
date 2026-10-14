@@ -253,6 +253,11 @@ class Channel(Base):
     bot_token_encrypted = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+    #: When this channel started receiving news. Refreshed every time it is
+    #: switched ON. The sender only fans an article out to a channel whose
+    #: ``activated_at`` is not later than the article's ``created_at``, so a
+    #: channel added today never inherits the archive that predates it.
+    activated_at = Column(DateTime, nullable=False, server_default=func.now())
 
     routes = relationship("FieldChannelRoute", back_populates="channel")
     category_routes = relationship("CategoryChannelRoute", back_populates="channel")
