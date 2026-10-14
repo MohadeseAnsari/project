@@ -33,6 +33,61 @@ async def get_model(session, model_id: int) -> Model | None:
     return await session.get(Model, model_id)
 
 
+async def active_model_health(session) -> dict:
+    """Health of the ONE model the Worker generates with, for the dashboard.
+
+    Answers the question an operator actually has on the console: is the thing
+    that writes my news reachable right now?
+
+        ``name`` / ``api_model`` — which provider model is in use
+        ``state``            — ``missing`` | ``untested`` | ``connected`` |
+                               ``degraded`` | ``disconnected``
+        ``tested_at``        — when the probe last ran (None = never)
+        ``latency_ms``       — the probe's round trip, when recorded
+        ``error``            — the probe's own message, never a credential
+
+    ``state`` is deliberately computed, never guessed at the call site, so the
+    dashboard and any future health endpoint cannot disagree.
+
+    Never returns the API key — only that a credential resolves.
+    """
+    row = (
+        await session.execute(select(Model).where(Model.is_active.is_(True)).order_by(Model.id))
+    ).scalars().first()
+    if row is None:
+        return {"name": None, "api_model": None, "state": "missing", "tested_at": None,
+                "latency_ms": None, "error": None, "has_credential": False}
+
+    try:
+        resolve_model_credentials(row)
+        has_credential = True
+    except MissingModelKeyError as e:
+        has_credential = False
+        credential_error = str(e)
+
+    if not has_credential:
+        # A row that cannot authenticate is disconnected whatever the last
+        # probe said; the old result is no longer evidence.
+        state, error = "disconnected", credential_error
+    elif row.last_test_ok is None:
+        # Configured but never proven: say so instead of implying success.
+        state, error = "untested", None
+    elif row.last_test_ok:
+        state, error = "connected", None
+    else:
+        state, error = "disconnected", row.last_test_error
+
+    return {
+        "name": row.name,
+        "api_model": row.api_model or row.name,
+        "state": state,
+        "tested_at": row.last_tested_at,
+        "latency_ms": row.last_test_latency_ms,
+        "error": error,
+        "has_credential": has_credential,
+    }
+
+
 async def usable_model_count(session, *, exclude_id: int | None = None) -> int:
     """How many models can actually generate (have a usable credential).
 

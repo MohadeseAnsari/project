@@ -329,6 +329,8 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
         )
 
     channels = await channel_service.channels_with_route_counts(session)
+    # The model that actually writes the news, and whether it is reachable.
+    model_health = await model_service.active_model_health(session)
 
     failed_note = None
     if delivery_counts.get("failed", 0):
@@ -342,6 +344,7 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
             kpi_review=kpi_review, kpi_queued=kpi_queued, kpi_sent=kpi_sent, kpi_failed=kpi_failed,
             chart=chart, worker_fresh=worker_fresh, pending_deliveries=pending_deliveries,
             timeline=timeline, channels=channels, failed_note=failed_note, now_label=now_label,
+            model_health=model_health,
         ),
     )
 
@@ -1625,8 +1628,14 @@ SELF_SERVICE_ROUTES: frozenset[str] = frozenset({
 
 
 @panel_app.get("/users", response_class=HTMLResponse)
-async def users_page(request: Request, session: AsyncSession = Depends(session_dep)):
-    """List console users with the role access matrix (admin only)."""
+async def users_page(
+    request: Request, user_id: int | None = None, session: AsyncSession = Depends(session_dep)
+):
+    """List console users with the role access matrix (admin only).
+
+    ``user_id`` selects which account the single settings block is editing, so
+    the page never grows a new pair of sections per user.
+    """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.MANAGE_USERS)
@@ -1635,9 +1644,16 @@ async def users_page(request: Request, session: AsyncSession = Depends(session_d
 
     users = await user_service.list_users(session)
     roles = await user_service.list_roles(session)
+    selected_user = None
+    if user_id is not None:
+        selected_user = next((u for u in users if u["id"] == user_id), None)
+    if selected_user is None and users:
+        # Default to the first account so the block is never a dead form.
+        selected_user = users[0]
     counts_ctx = await _sidebar_counts(session)
     return templates.TemplateResponse(request, "users.html",
-        _ctx(request, user, active="users", **counts_ctx, users=users, roles=roles))
+        _ctx(request, user, active="users", **counts_ctx, users=users, roles=roles,
+             selected_user=selected_user))
 
 
 @panel_app.post("/users")
@@ -1778,9 +1794,9 @@ async def profile_change_password(
 async def user_delete(request: Request, user_id: int, session: AsyncSession = Depends(session_dep)):
     """Delete a console user with safeguards (admin only).
 
-    Deactivation stays the recommended action (see the toggle button and the
-    hint on the page). Deletion keeps history-bearing rows as deactivated
-    rows and hard-deletes only users with no audit trail.
+    Deactivation stays the available alternative (see the toggle button).
+    Deletion tombstones the account: it leaves every panel listing and can no
+    longer log in, while the audit trail keeps the person's name.
     """
     user = await require_login(request, session)
     try:
