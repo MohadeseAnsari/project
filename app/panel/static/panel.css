@@ -11,21 +11,30 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Vazirmatn,system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;-webkit-font-smoothing:antialiased}
-.grid{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
-aside{background:#fff;border-left:1px solid var(--line);padding:16px 13px;display:flex;flex-direction:column;gap:14px}
+/* Only <main> scrolls. The sidebar is a full-height flex column whose nav is
+   the scrollable part, so .side-foot (the logged-in account) is pinned to the
+   bottom and stays visible on every page however long the content is. Before
+   this, .grid used min-height:100vh and <aside> sat in normal flow, so a
+   scrolling page pushed the account block off the bottom of the document. */
+.grid{display:grid;grid-template-columns:250px 1fr;height:100vh;overflow:hidden}
+aside{background:#fff;border-left:1px solid var(--line);padding:16px 13px;display:flex;flex-direction:column;gap:14px;height:100vh;overflow:hidden}
+/* The content column is the only scrolling region (see .grid above), so a
+   page can be arbitrarily long while the account block stays pinned. */
+/* The content column is the only scrolling region (see .grid above), so a
+   page can be arbitrarily long while the account block stays pinned. */
+main{height:100vh;overflow-y:auto;overflow-x:hidden;padding-bottom:26px}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 6px 13px;border-bottom:1px solid var(--line)}
 .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--primary),#7C6CF0);color:#fff;display:grid;place-items:center;font-weight:700;font-size:16px}
 .brand b{display:block;font-size:14.5px}.brand span{display:block;font-size:11px;color:var(--mut);margin-top:2px}
-nav{display:flex;flex-direction:column;gap:2px}
+nav{display:flex;flex-direction:column;gap:2px;flex:1 1 auto;min-height:0;overflow-y:auto}
 nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:var(--ink2);text-decoration:none;font-size:13.5px}
 nav a .ic{width:20px;text-align:center;color:var(--mut);font-size:13px}
 nav a.on{background:var(--primary-soft);color:var(--primary-d);font-weight:600}
 nav .sep{font-size:11px;color:var(--mut2);padding:11px 10px 3px}
 nav .cnt{margin-right:auto;background:var(--violet-soft);color:var(--violet);font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px}
-.side-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:11px;display:flex;align-items:center;gap:9px}
+.side-foot{margin-top:auto;flex:0 0 auto;border-top:1px solid var(--line);padding-top:11px;display:flex;align-items:center;gap:9px}
 .avatar{width:32px;height:32px;border-radius:50%;background:var(--primary-soft);color:var(--primary-d);display:grid;place-items:center;font-weight:700;font-size:12.5px}
 .side-foot small{color:var(--mut);font-size:11px;display:block}
-main{padding-bottom:26px}
 header.top{background:#fff;border-bottom:1px solid var(--line);padding:12px 22px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
 header.top h1{font-size:16.5px;font-weight:700}
 header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
