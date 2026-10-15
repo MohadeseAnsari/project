@@ -1064,7 +1064,8 @@ async def delivery_mark_deleted(
 @panel_app.get("/fields", response_class=HTMLResponse)
 async def fields_page(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "",
+    q: str = "", tab: str = "", page: int = 1, page_size: int = 50,
+    category_id: int | None = None, source: str = "", unconfirmed: str = "",
 ):
     """Fields — one row each, with the category editable on that row.
 
@@ -1079,18 +1080,39 @@ async def fields_page(
     if tab == "categories":
         return RedirectResponse(url="/categories", status_code=301)
 
-    fields = await field_service.list_fields(session)
-    total = await field_service.field_total(session)
+    # SEARCH AND PAGINATE IN SQL. This page used to call list_fields(), which
+    # has a default limit of 100 and was called with no argument, so 449 of 549
+    # fields were never rendered — and the search box then filtered that
+    # already-truncated list in Python, so those 449 could not be found by
+    # searching either. 16 fields match "زیست"; the page could show 4.
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    fields, total = await field_service.field_category_rows(
+        session, q=q, page=page, page_size=page_size, category_id=category_id,
+        source=source, unconfirmed_only=unconfirmed == "1",
+    )
     top = await field_service.top_fields(session)
     # The category NAMES are needed for the per-row select even though the
     # categories page is separate — the select edits a field's category.
     categories, _category_total = await field_service.category_cards(session)
-    if q.strip():
-        fields = [f for f in fields if q.strip() in f["name"]]
     counts_ctx = await dashboard_service.sidebar_badges(session)
+    # Every active filter rides into the pager, so paging never silently
+    # drops the search the operator typed.
+    from urllib.parse import urlencode
+
+    query = urlencode(
+        {k: v for k, v in {
+            "q": q, "category_id": category_id, "source": source,
+            "unconfirmed": unconfirmed, "page_size": page_size,
+        }.items() if v not in (None, "")}
+    )
+    shown_from = (page - 1) * page_size + 1 if total else 0
+    shown_to = min(page * page_size, total)
     return templates.TemplateResponse(request, "fields.html",
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
-             top=top, q=q, categories=categories))
+             top=top, q=q, categories=categories, category_id=category_id,
+             source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
+             query=query, shown_from=shown_from, shown_to=shown_to))
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
