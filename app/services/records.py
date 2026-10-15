@@ -274,11 +274,21 @@ async def record_status_counts(session) -> dict[str, int]:
     return {status: count for status, count in rows}
 
 
-async def filter_options(session, limit: int = 50) -> dict[str, list[str]]:
+async def filter_options(session, limit: int = 500) -> dict[str, list[str]]:
     """Distinct field/university names for the list-page pickers.
 
     Panel list page (its own SQL, previously inline in the route) and any
     other caller of the shared filter vocabulary.
+
+    The limit was 50, which was fine when a deployment had two universities
+    and quietly stopped offering the rest as the data grew — a picker that
+    silently omits values is worse than no picker, because the operator
+    concludes the value does not exist. 500 comfortably covers the 544-field
+    reference table.
+
+    If this ever really does overflow a dropdown, the fix is a searchable
+    picker, not a smaller limit: the search box already matches on field and
+    university, so the common case is covered either way.
     """
     fields = [
         r[0] for r in (

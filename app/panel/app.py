@@ -443,10 +443,36 @@ async def records_page(
     needs_review = await record_service.needs_review_count(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
+
+    # The status tabs carry every OTHER active filter. Otherwise clicking
+    # "منتشرشده" while a field filter was applied silently dropped it, and the
+    # table quietly showed more rows than the operator had narrowed to — the
+    # same lie as a pager that forgets the search box.
+    def tab_for(new_status: str) -> str:
+        parts = {"field": field, "university": university, "q": q,
+                 "order": order, "approved": approved}
+        if new_status:
+            parts["status"] = new_status
+        encoded = urlencode({k: v for k, v in parts.items() if v})
+        return f"/records?{encoded}" if encoded else "/records"
+
+    tab_urls = {
+        "review": tab_for("review"), "all": tab_for(""), "published": tab_for("published"),
+        "failed": tab_for("failed"), "ready": tab_for("ready"),
+    }
+    # How many of the collapsed filters are currently narrowing the table, so
+    # the button can say so instead of hiding an applied filter behind a closed
+    # disclosure.
+    more_count = sum(1 for v in (field, university) if v)
+    if order == "oldest":
+        more_count += 1
+    if approved == "yes":
+        more_count += 1
     return templates.TemplateResponse(request, "records.html",
         _ctx(
             request, user, active="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
+            tab_urls=tab_urls, more_count=more_count, more_open=bool(more_count),
             # Record states only. The delivery counts that used to sit here
             # (kpi_sent) would answer a question this page is not asked, and
             # they are the first thing the operator scrolls past.
