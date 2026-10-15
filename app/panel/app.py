@@ -6,8 +6,10 @@ Human auth uses panel users + signed cookies (not the machine shared secret);
 every review/retry/config change is written to ``audit_logs`` for history.
 """
 
+import hashlib
 import logging
 import time
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -121,6 +123,56 @@ panel_app = FastAPI(
     dependencies=[Depends(verify_csrf)],
 )
 panel_app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
+
+
+@lru_cache(maxsize=1)
+def _asset_version() -> str:
+    """A short content hash of the panel's own assets, for cache-busting.
+
+    ``/static/panel.css`` is a stable URL and no Cache-Control was being sent,
+    so a browser applied its own freshness rules and kept serving the stylesheet
+    it had fetched days earlier. For a page whose CSS *is* the design, that
+    means the operator sees the old interface while the server has already
+    changed -- and nothing on screen distinguishes the two.
+
+    The fix is the standard one: keep the URL stable but vary the query string
+    with the content, so a changed file is a different URL and an unchanged one
+    is still cacheable. Hashed once per process, not per request.
+    """
+    digest = hashlib.sha256()
+    for name in ("panel.css", "htmx.min.js"):
+        asset = _here / "static" / name
+        if asset.exists():
+            digest.update(asset.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+def _build_stamp() -> str:
+    """Which build is on screen.
+
+    Without it, "I cannot see the change" and "the change never deployed" are
+    indistinguishable from inside the UI, which is what made a round of work
+    hard to diagnose.
+    """
+    return _asset_version()
+
+
+templates.env.globals["asset_v"] = _asset_version
+templates.env.globals["build_stamp"] = _build_stamp
+
+
+@panel_app.middleware("http")
+async def _no_store_html(request: Request, call_next):
+    """Never let a browser cache panel HTML.
+
+    The data changes constantly -- a record is approved, a delivery fails -- and
+    a cached page would show a status that stopped being true minutes ago. The
+    static mount sets its own headers, so this only ever sees HTML.
+    """
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 @panel_app.exception_handler(CSRFError)
@@ -391,7 +443,7 @@ def _audit_title(entry) -> str:
 async def records_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
-    q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
+    q: str = "", order: str = "newest", page: int = 1, approved: str = "",
     tab: str = "", platform: str = "", main_id: str = "",
 ):
     """Records, review AND deliveries on one page (item 2).
@@ -404,6 +456,17 @@ async def records_page(
     The deliveries tab carries its own filters (``d*`` names) because they are
     genuinely different axes: a record filters by field and university, a
     delivery by platform and outcome.
+
+    ``approved`` defaults to "" -- show everything. It used to default to "no",
+    meaning "not yet approved", which was defensible while most records were
+    awaiting review. It stopped being true: once a record reaches ``published``
+    -- which is what the panel exists to do -- it is no longer "not yet
+    approved" and therefore stopped being listed. The owner's page rendered
+    blank, and the «منتشرشده» tab could never match anything because the
+    default filter excluded exactly the status that tab selects.
+
+    A list whose default view hides its own contents is indistinguishable from
+    a broken one. "نیازمند بازبینی" is now an explicit filter.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode
@@ -445,7 +508,7 @@ async def records_table(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, page_size: int = 20,
-    approved: str = "no",
+    approved: str = "",
 ):
     """HTMX partial: one page of filtered record rows (used by the list page)."""
     user = await require_login(request, session)

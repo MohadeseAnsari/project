@@ -72,10 +72,12 @@
       </div>
       <select name="field"><option value="">همهٔ رشته‌ها</option>{% for f in field_options %}<option value="{{ f }}" {% if field==f %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
       <select name="university"><option value="">همهٔ دانشگاه‌ها</option>{% for u in university_options %}<option value="{{ u }}" {% if university==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>
+      {# "همه" is first because it is now the default. It used to sit last and
+         default to "نیازمند بازبینی", which hid every published record. #}
       <select name="approved">
+        <option value="" {% if not approved %}selected{% endif %}>همه</option>
         <option value="no" {% if approved=='no' %}selected{% endif %}>نیازمند بازبینی</option>
         <option value="yes" {% if approved=='yes' %}selected{% endif %}>تأییدشده</option>
-        <option value="" {% if not approved %}selected{% endif %}>همه (با تأییدشده‌ها)</option>
       </select>
       <input type="text" name="q" placeholder="جست‌وجو در عنوان، نویسنده، استاد یا شناسه…" value="{{ q or '' }}">
       <input type="hidden" name="status" value="{{ status or '' }}">

@@ -44,6 +44,12 @@ async def list_fields(session, limit: int = 100) -> list[dict]:
                 "id": field.id,
                 "name": field.name,
                 "source": field.source,
+                # The panel marks the current category with `selected` by
+                # comparing this to cat.id. Without it the comparison was always
+                # false, so the dropdown opened on the FIRST category rather
+                # than the field's actual one -- and saving without touching it
+                # would silently reassign the field.
+                "category_id": field.category_id,
                 "category_name": category.name if category else None,
                 "matched_keyword": field.matched_keyword,
                 "category_source": field.category_source,
@@ -178,6 +184,13 @@ async def category_cards(session, q: str = "") -> tuple[list[dict], int]:
         ).scalar_one()
         cards.append(
             {
+                # The id is what the panel's category <select> submits. Without
+                # it every <option> renders value="" -- the names looked right
+                # and saving a category silently did nothing. Nothing caught it
+                # because the tests POSTed category_id directly instead of
+                # reading the value out of the rendered form; the handler and
+                # the template are connected only by that string.
+                "id": category.id,
                 "name": category.name,
                 "description": category.description,
                 "field_names": list(names),

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
-<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css"></head>
+<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css?v={{ asset_v() }}"></head>
 <body>
 {% block layout %}
 <div class="grid">
@@ -35,8 +35,12 @@
       {% if ok %}<div class="ok-note">{{ ok }}</div>{% endif %}
       {% block content %}{% endblock %}
     </div>
+    {# Which build is on screen. A cached stylesheet served to a page opened
+       before a deploy looks exactly like a deploy that never happened. Styled
+       with the existing .hint class so the design is unchanged. #}
+    <div class="wrap" style="padding-top:0"><div class="hint">نسخهٔ {{ build_stamp() }}</div></div>
   </main>
 </div>
 {% endblock %}
-<script src="/static/htmx.min.js" defer></script>
+<script src="/static/htmx.min.js?v={{ asset_v() }}" defer></script>
 </body></html>

@@ -678,9 +678,17 @@ async def test_approved_record_leaves_review_list(session: AsyncSession):
     await session.commit()
     async with _client() as client:
         await _login(client, "panel-admin")
-        needs_review = await client.get("/records/table")
-        assert "Fresh" in needs_review.text
-        assert "Done" not in needs_review.text
+        # The default view lists everything. It used to hide approved records,
+        # which meant a published record disappeared from the list the panel
+        # exists to maintain -- and the «منتشرشده» tab, which selects exactly
+        # that status, could never return anything. "نیازمند بازبینی" is now an
+        # explicit filter rather than an imposed default.
+        everything = await client.get("/records/table")
+        assert "Fresh" in everything.text
+        assert "Done" in everything.text, "an approved record must not vanish"
+        pending = await client.get("/records/table", params={"approved": "no"})
+        assert "Fresh" in pending.text
+        assert "Done" not in pending.text, "the pending filter still narrows"
         approved = await client.get("/records/table", params={"approved": "yes"})
         assert "Done" in approved.text
         assert "Fresh" not in approved.text
@@ -723,9 +731,11 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
             follow_redirects=False,
         )
         assert response.status_code == 302
-        table = await client.get("/records/table")
+        # They leave the PENDING queue, not the list. The default view shows
+        # everything, so what bulk approval empties is the review queue.
+        pending = await client.get("/records/table", params={"approved": "no"})
         for title in ("Bulk-A", "Bulk-B", "Bulk-C"):
-            assert title not in table.text
+            assert title not in pending.text
     for record_id in ids:
         session.expire_all()
         row = await session.get(Main, record_id)
