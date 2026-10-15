@@ -394,24 +394,23 @@ async def records_page(
     q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
     tab: str = "", platform: str = "", main_id: str = "",
 ):
-    """Records, review AND deliveries on one page (item 2).
+    """Records and review — one page, records only.
 
-    A record and its deliveries are one thing seen from two sides, and the
-    operator moves between "what needs my decision" and "did it reach the
-    channel" constantly — so they are two tabs here rather than two pages with
-    two filter bars. ``/deliveries`` redirects to the deliveries tab.
+    Deliveries used to be a tab of this page. The owner asked for four
+    independently reachable pages instead, so ``/deliveries`` is its own page
+    again and the tab is gone. A record and its deliveries ARE one thing seen
+    from two sides, but they are answered by two different questions — "what
+    needs my decision" and "did it reach the channel" — and each deserves its
+    own KPIs rather than one strip of mixed numbers.
 
-    The deliveries tab carries its own filters (``d*`` names) because they are
-    genuinely different axes: a record filters by field and university, a
-    delivery by platform and outcome.
+    ``?tab=deliveries`` still redirects to ``/deliveries`` so old links and
+    bookmarks keep working instead of 404ing.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
     if tab == "deliveries":
-        return await _deliveries_tab(
-            request, session, status=status, platform=platform, main_id=main_id,
-        )
+        return RedirectResponse(url="/deliveries", status_code=301)
     page = max(1, page)
     page_size = 20
     counts = await record_service.record_status_counts(session)
@@ -430,10 +429,13 @@ async def records_page(
         _ctx(
             request, user, active="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
+            # Record states only. The delivery counts that used to sit here
+            # (kpi_sent) would answer a question this page is not asked, and
+            # they are the first thing the operator scrolls past.
             kpi_review=needs_review,
             kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
-            kpi_sent=delivery_counts.get("sent", 0),
-            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
+            kpi_published=counts.get("published", 0),
+            kpi_failed=counts.get("failed", 0),
             field_options=options["fields"], university_options=options["universities"],
             items=items, total=total, page=page, page_size=page_size,
         ),
@@ -695,24 +697,26 @@ async def records_bulk_approve(request: Request, session: AsyncSession = Depends
 # --------------------------------------------------------------------------
 
 
-@panel_app.get("/deliveries")
-async def deliveries_page_merged(request: Request):
-    """The deliveries page is merged into ``/records?tab=deliveries`` (item 2)."""
-    return RedirectResponse(url="/records?tab=deliveries", status_code=301)
-
-
-async def _deliveries_tab(
-    request: Request, session: AsyncSession, *, status: str = "",
-    platform: str = "", main_id: str = "",
+@panel_app.get("/deliveries", response_class=HTMLResponse)
+async def deliveries_page(
+    request: Request, session: AsyncSession = Depends(session_dep),
+    status: str = "", platform: str = "", main_id: str = "", tab: str = "",
 ):
-    """Render the deliveries half of the merged page (item 2).
+    """Deliveries and hand-off — an independent page again.
 
-    Same data and same filters the standalone page used, so the HTMX partial
-    at /deliveries/table keeps working unchanged.
+    It was merged into ``/records`` as a tab and the owner asked for it back as
+    its own page: the two have genuinely different filters (a record filters by
+    field and university, a delivery by platform and outcome) and genuinely
+    different KPIs, so neither page has to carry numbers the other owns.
+
+    ``?tab=records`` redirects back to ``/records`` for the same
+    backward-compatibility reason the records route redirects here.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
+    if tab == "records":
+        return RedirectResponse(url="/records", status_code=301)
     page_size = 20
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     pairs, total = await delivery_service.fetch_deliveries(
@@ -725,28 +729,28 @@ async def _deliveries_tab(
         f"خطای آخر: «{newest_failure.error_message}» — {_jalali(newest_failure.updated_at)}"
         if newest_failure and newest_failure.error_message else None
     )
-    counts = await record_service.record_status_counts(session)
     delivery_counts = await delivery_service.delivery_status_counts(session)
-    needs_review = await record_service.needs_review_count(session)
-    options = await record_service.filter_options(session)
     dquery = urlencode(
         {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
     )
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "records.html",
+    return templates.TemplateResponse(request, "deliveries.html",
         _ctx(
-            request, user, active="deliveries", **counts_ctx, tab="deliveries",
+            request, user, active="deliveries", **counts_ctx,
             dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
             total=total, items=items, page=1, page_size=page_size, last_error=last_error,
             max_attempts=settings.sender_max_attempts,
             backoff_base=settings.sender_backoff_base_seconds,
             failed_count=delivery_counts.get("failed", 0),
-            # The KPI strip is shared by both tabs, so it is always supplied.
-            kpi_review=needs_review,
-            kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
-            kpi_sent=delivery_counts.get("sent", 0),
-            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
-            field_options=options["fields"], university_options=options["universities"],
+            # Delivery KPIs, not record ones: this page answers "did it reach
+            # the channel". "in the queue" is pending + sending, because both
+            # are committed work the operator may be waiting on.
+            kpi_sent=delivery_counts.get("sent", 0)
+            + delivery_counts.get("deleted_from_channel", 0),
+            kpi_pending=delivery_counts.get("pending", 0)
+            + delivery_counts.get("sending", 0),
+            kpi_gated=delivery_counts.get("awaiting_confirmation", 0),
+            kpi_failed=delivery_counts.get("failed", 0),
         )
     )
 
@@ -972,43 +976,59 @@ async def delivery_mark_deleted(
 
 @panel_app.get("/fields", response_class=HTMLResponse)
 async def fields_page(
-    request: Request, tab: str = "", q: str = "",
-    session: AsyncSession = Depends(session_dep),
+    request: Request, session: AsyncSession = Depends(session_dep),
+    q: str = "", tab: str = "",
 ):
-    """Fields, categories and keywords on ONE page (item 4).
+    """Fields — one row each, with the category editable on that row.
 
-    They were three pages because they were written at different times, not
-    because the concepts differ: a field is a row, its category is a column on
-    that row, and the matched keyword is why the column holds what it holds.
-    One page with two tabs, and the field table carries the category as an
-    editable select so a change and its consequence are visible together.
+    A field's category is a property OF THE FIELD, so it belongs on the field
+    row: you can see the assignment and the keyword that produced it in one
+    glance. The categories themselves are a list of destinations and now have
+    their own page at ``/categories``, which the owner asked for.
 
-    ``/categories`` redirects here rather than 404ing, so old links survive.
+    ``?tab=categories`` still redirects there so old links keep working.
     """
     user = await require_login(request, session)
-    if tab not in ("", "categories"):
-        tab = ""
+    if tab == "categories":
+        return RedirectResponse(url="/categories", status_code=301)
 
     fields = await field_service.list_fields(session)
     total = await field_service.field_total(session)
     top = await field_service.top_fields(session)
-    categories, category_total = await field_service.category_cards(session, q)
+    # The category NAMES are needed for the per-row select even though the
+    # categories page is separate — the select edits a field's category.
+    categories, _category_total = await field_service.category_cards(session)
     if q.strip():
-        # The search box filters whatever tab is open, so the category tab must
-        # search categories while the field tab searches fields.
         fields = [f for f in fields if q.strip() in f["name"]]
-    channels = await channel_service.list_channels(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "fields.html",
-        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top,
-             tab=tab, q=q, categories=categories, category_total=category_total,
-             channels=channels))
+        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
+             top=top, q=q, categories=categories))
 
 
-@panel_app.get("/categories")
-async def categories_page_merged(request: Request, session: AsyncSession = Depends(session_dep)):
-    """The standalone categories page is merged into ``/fields`` (item 4)."""
-    return RedirectResponse(url="/fields?tab=categories", status_code=301)
+@panel_app.get("/categories", response_class=HTMLResponse)
+async def categories_page(
+    request: Request, session: AsyncSession = Depends(session_dep),
+    q: str = "", tab: str = "",
+):
+    """Categories and keywords — an independent page again.
+
+    It was merged into ``/fields`` as a tab and the owner asked for it back as
+    its own page: a category is a destination you browse ("what buckets exist
+    and what falls into each"), which is a different job from editing one
+    field's assignment.
+
+    ``?tab=fields`` redirects to ``/fields`` for symmetry with the old
+    ``/fields?tab=categories`` form.
+    """
+    user = await require_login(request, session)
+    if tab == "fields":
+        return RedirectResponse(url="/fields", status_code=301)
+    categories, category_total = await field_service.category_cards(session, q)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
+    return templates.TemplateResponse(request, "categories.html",
+        _ctx(request, user, active="categories", **counts_ctx,
+             categories=categories, category_total=category_total, q=q))
 
 
 @panel_app.post("/fields/{field_id}/confirm")

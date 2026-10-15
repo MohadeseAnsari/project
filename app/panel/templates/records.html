@@ -1,65 +1,19 @@
 {% extends "base.html" %}
-{% block title %}رکوردها و ارسال‌ها{% endblock %}
-{% block h1 %}رکوردها و ارسال‌ها{% endblock %}
+{% block title %}رکوردها و بازبینی{% endblock %}
+{% block h1 %}رکوردها و بازبینی{% endblock %}
 {% block crumb %}کنسول › رکوردها{% endblock %}
 {% block top_actions %}
-{% if tab != 'deliveries' %}<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>{% endif %}
+{% if kpi_review %}<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>{% endif %}
 <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
 {% endblock %}
 {% block content %}
 <div class="kpis">
   <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی</div></div></div>
   <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف پردازش</div></div></div>
-  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده</div></div></div>
-  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق</div></div></div>
+  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_published|fa }}</div><div class="t">منتشرشده</div></div></div>
+  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">تولید ناموفق</div></div></div>
 </div>
 
-{# One page, two tabs (item 2). A record and its deliveries are one thing seen
-   from two sides, and the operator moves between "what needs my decision" and
-   "did it reach the channel" constantly. #}
-<div class="card" style="padding:12px 22px 0">
-  <div class="seg" style="border:0">
-    <a href="/records" style="text-decoration:none;color:inherit"><span class="{% if tab != 'deliveries' %}on{% endif %}">رکوردها و بازبینی</span></a>
-    <a href="/records?tab=deliveries" style="text-decoration:none;color:inherit"><span class="{% if tab == 'deliveries' %}on{% endif %}">ارسال‌ها و تحویل</span></a>
-  </div>
-</div>
-
-{% if tab == 'deliveries' %}
-<div class="card">
-  <form hx-get="/deliveries/table" hx-target="#deliveries-table" hx-swap="innerHTML" hx-trigger="submit">
-    <div class="filters">
-      <div class="seg">
-        <a href="/records?tab=deliveries" style="text-decoration:none;color:inherit"><span class="{% if not dstatus %}on{% endif %}">همه</span></a>
-        <a href="/records?tab=deliveries&status=sent" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='sent' %}on{% endif %}">موفق</span></a>
-        <a href="/records?tab=deliveries&status=failed" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='failed' %}on{% endif %}">ناموفق</span></a>
-        <a href="/records?tab=deliveries&status=awaiting_confirmation" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
-      </div>
-      <select name="platform"><option value="">همهٔ کانال‌ها</option><option value="bale" {% if dplatform=='bale' %}selected{% endif %}>بله</option><option value="telegram" {% if dplatform=='telegram' %}selected{% endif %}>تلگرام</option></select>
-      <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ dmain_id or '' }}">
-      <input type="hidden" name="status" value="{{ dstatus or '' }}">
-      <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>
-    </div>
-  </form>
-</div>
-
-<div class="card">
-  <h3>تحویل‌ها<span class="grow"></span><span class="badge s-off">{{ total|fa }} مورد</span></h3>
-  <div id="deliveries-table" hx-get="/deliveries/table?{{ dquery }}" hx-trigger="load, every 15s">
-    {% include "deliveries_table.html" %}
-  </div>
-</div>
-
-<div class="two">
-  <div class="card"><h3>Retry Policy</h3><div class="body">
-    <dl class="kv"><dt>سقف تلاش</dt><dd>{{ max_attempts|fa }} بار</dd><dt>فاصلهٔ پایه</dt><dd>{{ backoff_base|fa }} ثانیه</dd><dt>عقب‌افتادگی</dt><dd>نمایی با دو برابر شدن فاصله</dd><dt>پس از سقف</dt><dd>وضعیت failed می‌ماند و منتظر اقدام دستی</dd></dl>
-  </div></div>
-  <div class="card"><h3>دروازهٔ تأیید انسانی</h3><div class="body" style="display:flex;flex-direction:column;gap:10px">
-    <div class="note">تحویل‌های «در انتظار تأیید» فقط با تأیید خبر در تب «رکوردها و بازبینی» به صف ارسال می‌روند؛ خبرِ تأییدنشده هیچ‌وقت به کانال نمی‌رسد.</div>
-    <div class="note">سطر «در انتظار تأیید» دکمهٔ «آزادسازی» خودش را دارد (همان تأیید، ولی تک‌تحویل)؛ سطر «ناموفق» دکمهٔ «ارسال دوباره» دارد.</div>
-    <div class="note">خبر منتشرشده هرگز حذف نمی‌شود؛ پیام از کانال پاک می‌شود و ردپای ارسال باقی می‌ماند.</div>
-  </div></div>
-</div>
-{% else %}
 <div class="card">
   <form hx-get="/records/table" hx-target="#records-table" hx-swap="innerHTML" hx-trigger="submit">
     <div class="filters">
@@ -174,5 +128,4 @@
   paint();
 })();
 </script>
-{% endif %}
 {% endblock %}

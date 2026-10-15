@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block content %}
+
+{# An independent page again (the owner asked for four separate pages). A
+   category is a destination, not a field: this page answers "what buckets exist
+   and what falls into each", while /fields answers "what is each row and which
+   bucket is it in". The category of a FIELD is edited on /fields, because that
+   is a property of the row, and editing it here would mean hunting for it. #}
+<div class="note">
+  دسته‌ها مقصد دسته‌بندی‌اند. هر رشته دقیقاً یک دسته دارد و آن انتخاب در صفحهٔ
+  <a href="/fields">رشته‌ها</a> انجام می‌شود؛ اینجا می‌بینید هر دسته چه رشته‌هایی دارد.
+</div>
+
+<div class="card">
+  <div class="filters">
+    <form method="get" action="/categories" style="display:flex;gap:9px;align-items:center;flex:1">
+      <input type="text" name="q" placeholder="جست‌وجو در نام دسته…" value="{{ q or '' }}" style="flex:1">
+      <button class="btn btn-primary btn-sm" type="submit">جست‌وجو</button>
+      {% if q %}<a class="btn btn-ghost btn-sm" href="/categories">پاک‌کردن</a>{% endif %}
+    </form>
+    <span class="pill">{{ categories|length|fa }}{% if q %} از {{ category_total|fa }}{% endif %} دسته</span>
+  </div>
+
+  <div class="two" style="padding:14px 22px">
+    {% for c in categories %}
+    <div class="card" style="margin:0"><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+      <div class="body">
+        {% if c.field_names %}
+        <div class="chips">
+          {% for f in c.field_names %}<span class="chip">{{ f }}</span>{% endfor %}
+        </div>
+        {% if c.field_count > c.field_names|length %}
+        <div class="hint" style="margin-top:9px">و {{ (c.field_count - c.field_names|length)|fa }} رشتهٔ دیگر در همین دسته.</div>
+        {% endif %}
+        {% else %}
+        <div class="hint">هنوز رشته‌ای در این دسته نیست.</div>
+        {% endif %}
+        {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
+        <div class="hint" style="margin-top:10px">تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
+      </div>
+    </div>
+    {% else %}
+    <div class="hint" style="grid-column:1/-1">
+      {% if q %}دسته‌ای با نام «{{ q }}» پیدا نشد.{% else %}هنوز دسته‌ای ثبت نشده است.{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
