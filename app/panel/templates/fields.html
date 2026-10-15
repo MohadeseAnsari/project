@@ -10,14 +10,50 @@
 </div>
 
 <div class="card">
-  <div class="filters">
-    <form method="get" action="/fields" style="display:flex;gap:9px;align-items:center;flex:1">
-      <input type="text" name="q" placeholder="جست‌وجو در نام رشته…" value="{{ q or '' }}" style="flex:1">
-      <button class="btn btn-primary btn-sm" type="submit">جست‌وجو</button>
-      {% if q %}<a class="btn btn-ghost btn-sm" href="/fields">پاک‌کردن</a>{% endif %}
-    </form>
-    <span class="pill">{% if q %}{{ fields|length|fa }} از {% endif %}{{ total|fa }} رشته</span>
-  </div>
+  {# Basic filters stay visible: they are what an operator reaches for most,
+     and the ones below are a filter OF a filter. Everything rarer is behind a
+     native <details>, which is keyboard accessible and works with no script.
+     The form is GET, so a filtered page is a shareable URL and Back works. #}
+  <form method="get" action="/fields">
+    <div class="filters">
+      <input type="text" name="q" placeholder="جست‌وجو در نام رشته…" value="{{ q or '' }}"
+             style="min-width:200px;flex:1 1 200px" aria-label="جست‌وجو در نام رشته">
+      <select name="category_id" aria-label="دسته">
+        <option value="">همهٔ دسته‌ها</option>
+        {% for cat in categories %}
+        <option value="{{ cat.id }}" {% if category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>
+        {% endfor %}
+      </select>
+      <label class="check" title="فقط رشته‌هایی که هنوز دستهٔ نهایی ندارند">
+        <input type="checkbox" name="unconfirmed" value="1" {% if unconfirmed == '1' %}checked{% endif %}>
+        <span>بدون تأیید</span>
+      </label>
+      <button class="btn btn-primary btn-sm" type="submit">اعمال</button>
+      {% if q or category_id or source or unconfirmed %}
+      <a class="btn btn-ghost btn-sm" href="/fields">پاک‌کردن</a>
+      {% endif %}
+      <span class="grow"></span>
+      <details class="more">
+        <summary class="more-btn">فیلترهای بیشتر</summary>
+        <div class="more-body">
+          <label for="src">منبع دسته</label>
+          <select id="src" name="source">
+            <option value="">همه</option>
+            {% for value, label in [('rules','قواعد'),('curated','تأییدشده'),('manual','دستی'),('llm','مدل')] %}
+            <option value="{{ value }}" {% if source == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <label for="psz">تعداد در صفحه</label>
+          <select id="psz" name="page_size">
+            {% for n in [25, 50, 100, 200] %}
+            <option value="{{ n }}" {% if page_size == n %}selected{% endif %}>{{ n|fa }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary btn-sm" type="submit">اعمال</button>
+        </div>
+      </details>
+    </div>
+  </form>
 
   {# Every field as a row, with its category editable in place: the assignment
      and its consequence are visible together, which is the whole point of
@@ -34,7 +70,10 @@
         <td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
         <td>
           <form method="post" action="/fields/{{ f.id }}/category" class="inline-edit">{{ csrf_field(request) | safe }}
-            <select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
+            {# Redirects back to whatever page the operator was on, so setting
+               a category from page 4 does not dump them on page 1. #}
+            <input type="hidden" name="return_to" value="/fields?{{ query }}page={{ page }}">
+            <select name="category_id" aria-label="دستهٔ {{ f.name }}">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
             <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
           </form>
         </td>
@@ -44,12 +83,31 @@
             {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="hint" style="text-align:center;padding:22px">
-        {% if q %}رشته‌ای با نام «{{ q }}» پیدا نشد.{% else %}هنوز رشته‌ای ثبت نشده است.{% endif %}
+      <tr><td colspan="6" class="hint" style="text-align:center;padding:26px">
+        {% if q %}رشته‌ای با نام «{{ q }}» پیدا نشد.
+        {% elif category_id %}در این دسته رشته‌ای نیست.
+        {% elif unconfirmed %}همهٔ رشته‌ها تأیید شده‌اند.
+        {% else %}هنوز رشته‌ای ثبت نشده است.{% endif %}
       </td></tr>
       {% endfor %}
     </tbody>
   </table>
+
+  {# The count and the pager agree with the SQL: both come from the same
+      predicate, and every active filter rides along in ?query so paging never
+      drops a search. #}
+  <div class="foot">
+    {% if total %}
+    نمایش <span class="num">{{ ((page - 1) * page_size + 1)|fa }}</span>
+    تا <span class="num">{{ ([page * page_size, total]|min)|fa }}</span>
+    از <span class="num">{{ total|fa }}</span> رشته
+    {% endif %}
+    <div class="pager">
+      {% if page > 1 %}<a href="#" hx-get="/fields?{{ query }}&page={{ page - 1 }}" hx-target="#fields-pager" hx-swap="outerHTML">قبلی</a>{% endif %}
+      <b>{{ page|fa }}</b>
+      {% if page * page_size < total %}<a href="#" hx-get="/fields?{{ query }}&page={{ page + 1 }}" hx-target="#fields-pager" hx-swap="outerHTML">بعدی</a>{% endif %}
+    </div>
+  </div>
 </div>
 
 <div class="two">
@@ -59,6 +117,10 @@
     {% else %}
     <div class="hint">هنوز رکوردی ثبت نشده، پس آماری برای نمایش نیست.</div>
     {% endfor %}
+  </div></div>
+  <div class="card"><h3>دسته‌ها</h3><div class="body">
+    <p class="hint" style="margin-top:0">مقصدهای دسته‌بندی در صفحهٔ خودشان فهرست می‌شوند.</p>
+    <a class="btn btn-ghost btn-sm" href="/categories">دسته‌ها و کلیدواژه‌ها</a>
   </div></div>
 </div>
 {% endblock %}

@@ -264,3 +264,37 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
  main{height:auto;overflow:visible}
  th{position:static}
 }
+
+/* ── Progressive disclosure ───────────────────────────────────────────────
+   A native <details>, not a script: it is keyboard accessible, it opens with
+   Enter/Space, it survives a failed script, and it remembers nothing it
+   should not. Used for filters that are a filter OF a filter — rare enough
+   that showing them permanently costs every page a row of noise. #}
+.more{position:relative}
+.more-btn{list-style:none;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink2);
+  border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:#fff;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.more-btn::-webkit-details-marker{display:none}
+/* The arrow is the state indicator the owner asked for: it turns when open, so
+   you can tell closed from open without opening it. */
+.more-btn:before{content:"▾";color:var(--mut);font-size:10px;transition:transform .15s}
+.more[open]>.more-btn:before{transform:rotate(-180deg)}
+.more-btn:hover{background:var(--bg)}
+.more-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.more-body{position:absolute;inset-inline-start:0;top:calc(100% + 6px);z-index:30;
+  background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 32px rgba(17,24,39,.13);
+  padding:12px;display:flex;flex-direction:column;gap:8px;min-width:230px}
+.more-body label{font-size:var(--fs-sm);color:var(--mut);margin:0}
+/* On a narrow screen a popover that would overflow the viewport is worse than
+   no popover, so it becomes an inline row instead. */
+@media (max-width:820px){
+ .more{flex:1 1 100%}
+ .more-body{position:static;box-shadow:none;border-left:0;border-right:0;border-radius:0;
+   margin:8px -12px -10px;padding:12px}
+}
+/* A checkbox that reads as a filter toggle rather than a form control dropped
+   in the bar. */
+.check{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2);
+  white-space:nowrap;cursor:pointer;margin:0;user-select:none}
+.check input{width:15px;height:15px;accent-color:var(--primary);cursor:pointer;margin:0}
+.check:hover{color:var(--ink)}

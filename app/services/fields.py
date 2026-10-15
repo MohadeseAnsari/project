@@ -6,7 +6,7 @@ cards with real field names. Classification itself stays in
 the ``category_source`` column exists (migration 015).
 """
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.db.models import Category, Channel, Field, FieldChannelRoute, Main
 
@@ -59,9 +59,10 @@ async def field_total(session) -> int:
 
 
 async def field_category_rows(
-    session, q: str = "", page: int = 1, page_size: int = 50
+    session, q: str = "", page: int = 1, page_size: int = 50,
+    category_id: int | None = None, source: str = "", unconfirmed_only: bool = False,
 ) -> tuple[list[dict], int]:
-    """Fields with their category, for the "field → category" editor.
+    """Fields with their category, for the field -> category editor.
 
     The owner's requirement (item 15): the assignment is stored once in the
     database and edited by hand here, instead of a ruleset being re-applied on
@@ -75,18 +76,40 @@ async def field_category_rows(
 
     Only ``category_source='manual'`` rows are protected from reclassification;
     the rest are listed so the whole mapping is inspectable.
+
+    Every filter is applied INSIDE both queries. That is the part that is easy
+    to get wrong: filtering after the LIMIT means the page you are shown is
+    not the page the count claims, and "next" walks past the end of the real
+    result set. ``total`` and the rows must come from the same predicate, or
+    the pager lies.
     """
     base = select(Field, Category.name).outerjoin(Category, Category.id == Field.category_id)
     count_query = select(func.count()).select_from(Field)
+
+    filters = []
     term = q.strip()
     if term:
         pattern = f"%{term}%"
-        base = base.where(or_(Field.name.ilike(pattern), Field.normalized_name.ilike(pattern)))
-        count_query = count_query.where(
+        filters.append(
             or_(Field.name.ilike(pattern), Field.normalized_name.ilike(pattern))
         )
+    if category_id:
+        filters.append(Field.category_id == category_id)
+    if source:
+        filters.append(Field.category_source == source)
+    if unconfirmed_only:
+        # "Not yet confirmed by a human" is what an operator works through,
+        # so it is a first-class filter rather than something to spot by eye.
+        filters.append(Field.category_source.notin_(("manual", "curated")))
+
+    if filters:
+        where = and_(*filters)
+        base = base.where(where)
+        count_query = count_query.where(where)
+
     total = (await session.execute(count_query)).scalar_one()
     page = max(1, page)
+    page_size = max(1, min(page_size, 200))
     rows = (
         await session.execute(
             base.order_by(Category.name.is_(None), Category.name, Field.name)
@@ -178,6 +201,12 @@ async def category_cards(session, q: str = "") -> tuple[list[dict], int]:
         ).scalar_one()
         cards.append(
             {
+                # The id is what the panel's category SELECT submits. It was
+                # missing, so every <option> rendered value="" — the names
+                # looked right and the form silently submitted nothing.
+                # Nothing caught it: tests POSTed category_id directly rather
+                # than reading the value out of the rendered form.
+                "id": category.id,
                 "name": category.name,
                 "description": category.description,
                 "field_names": list(names),

@@ -157,6 +157,24 @@ async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
     return RedirectResponse(url="/login", status_code=302)
 
 
+def _safe_fields_return(value: str) -> str:
+    """Accept only a local /fields path, so ``return_to`` cannot be an open redirect.
+
+    A crafted form could otherwise POST a signed-in admin straight to another
+    site after a save. Rules: must start with the literal "/fields", must not
+    start with "//" (protocol-relative), must not contain a scheme, and must
+    not carry a backslash that some browsers normalise into a "//".
+    """
+    if not value:
+        return "/fields"
+    candidate = value.strip()
+    if not candidate.startswith("/fields"):
+        return "/fields"
+    if candidate.startswith("//") or "://" in candidate or "\\" in candidate:
+        return "/fields"
+    return candidate
+
+
 def _ctx(request: Request, user: object | None, **extra):
     base = {
         "request": request, "current_user": user, "active": "",
@@ -977,7 +995,8 @@ async def delivery_mark_deleted(
 @panel_app.get("/fields", response_class=HTMLResponse)
 async def fields_page(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "",
+    q: str = "", tab: str = "", category_id: int | None = None,
+    source: str = "", unconfirmed: str = "", page: int = 1, page_size: int = 50,
 ):
     """Fields — one row each, with the category editable on that row.
 
@@ -991,19 +1010,36 @@ async def fields_page(
     user = await require_login(request, session)
     if tab == "categories":
         return RedirectResponse(url="/categories", status_code=301)
+    from urllib.parse import urlencode
 
-    fields = await field_service.list_fields(session)
-    total = await field_service.field_total(session)
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    # SEARCH AND PAGINATE IN SQL. This page used to pull every field into
+    # Python and filter the list there: 544 rows rendered as 544 table rows,
+    # roughly 27 screens of scrolling, with the search box narrowing the page
+    # only after everything had already been fetched and laid out.
+    fields, total = await field_service.field_category_rows(
+        session, q=q, page=page, page_size=page_size, category_id=category_id,
+        source=source, unconfirmed_only=unconfirmed == "1",
+    )
     top = await field_service.top_fields(session)
     # The category NAMES are needed for the per-row select even though the
     # categories page is separate — the select edits a field's category.
     categories, _category_total = await field_service.category_cards(session)
-    if q.strip():
-        fields = [f for f in fields if q.strip() in f["name"]]
     counts_ctx = await dashboard_service.sidebar_badges(session)
+    # Every current filter is carried into the pager, so paging never silently
+    # drops the search the operator typed.
+    query = urlencode(
+        {k: v for k, v in {
+            "q": q, "category_id": category_id, "source": source,
+            "unconfirmed": unconfirmed, "page_size": page_size,
+        }.items() if v not in (None, "")}
+    )
     return templates.TemplateResponse(request, "fields.html",
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
-             top=top, q=q, categories=categories))
+             top=top, q=q, categories=categories, category_id=category_id,
+             source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
+             query=query))
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
@@ -1111,6 +1147,7 @@ async def routing_page_removed(request: Request):
 @panel_app.post("/fields/{field_id}/category")
 async def field_set_category(
     request: Request, field_id: int, category_id: int = Form(...),
+    return_to: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
     """Pin a field to a category once, by hand (item 15).
@@ -1122,6 +1159,15 @@ async def field_set_category(
     This lives on the fields page only. It decides which CATEGORY a field
     belongs to — the classification the generator and the records use — and has
     nothing to do with routing, which no longer exists.
+
+    ``return_to`` sends the operator back to the page they were on. The fields
+    list is now paginated, so redirecting to a bare ``/fields`` after saving on
+    page 7 would dump them at page 1 of a 544-row table — a small thing that
+    makes a long curation pass feel broken.
+
+    It is WHITELISTED, not echoed. An open redirect here would let a crafted
+    form bounce a signed-in admin to another site, so a value that is not a
+    plain ``/fields?...`` path falls back to ``/fields``.
     """
     user = await require_login(request, session)
     try:
@@ -1139,7 +1185,7 @@ async def field_set_category(
             status_code=422)
     await audit_service.record_event(session, user.id, "route", None,
                                      f"field={field_id} category={row.category_id} source=manual")
-    return RedirectResponse(url="/fields", status_code=303)
+    return RedirectResponse(url=_safe_fields_return(return_to), status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
