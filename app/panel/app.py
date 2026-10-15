@@ -65,6 +65,30 @@ def _jalali(value) -> str:
     return str(value)
 
 
+#: Persian weekday names, ordered the way an Iranian week runs: Saturday first.
+#:
+#: jdatetime exposes a locale (``set_locale("fa")``) but ``strftime("%A")``
+#: ignores it and keeps returning English, so the names are mapped here instead.
+#: Indexed by ``jdatetime``'s ``weekday()``, which already uses this ordering --
+#: Saturday is 0 and Friday is 6, not the ISO Monday-first convention.
+#: ZWNJ (U+200C) keeps یک‌شنبه / سه‌شنبه / پنج‌شنبه correctly joined.
+_FA_WEEKDAYS = (
+    "شنبه", "یک‌شنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه",
+)
+
+
+def _fa_weekday(date) -> str:
+    """The Persian name of a date's weekday.
+
+    Falls back to the digit if the value is not a real date, because a chart
+    axis is the wrong place for a crash.
+    """
+    try:
+        return _FA_WEEKDAYS[jdatetime.date.fromgregorian(date=date).weekday()]
+    except Exception:
+        return str(date)
+
+
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
@@ -345,7 +369,7 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
     peak = max((n for _, n in per_day), default=0)
     chart = [
         {
-            "label": jdatetime.date.fromgregorian(date=d).strftime("%A"),
+            "label": _fa_weekday(d),
             "pct": int(round(n / peak * 100)) if peak else 0,
         }
         for d, n in per_day
