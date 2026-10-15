@@ -10,8 +10,8 @@
     <tbody>
       {% for m in models %}
       <tr><td class="num">{{ m.id|fa }}</td><td class="title">{{ m.description or m.name }}{% if m.description %}<span class="sub"><span class="num">{{ m.name }}</span></span>{% endif %}</td>
-        <td style="direction:ltr;text-align:left">{{ m.creds.base_url }}</td>
-        <td style="direction:ltr;text-align:left">{{ m.api_model or m.name }}</td>
+        <td  class="ltr">{{ m.creds.base_url }}</td>
+        <td  class="ltr">{{ m.api_model or m.name }}</td>
         <td>
           {% if m.creds.key_env %}<small class="num">{{ m.creds.key_env }}</small><br>{% endif %}
           {% if m.creds.key_hint %}<small class="num">{{ m.creds.key_hint }}</small><br>{% endif %}
@@ -33,13 +33,13 @@
         </td>
         <td>{% if m.is_active %}<span class="badge s-sent">✓ فعال</span>{% else %}<span class="badge s-ready">غیرفعال</span>{% endif %}</td>
         <td>
-          <form method="post" action="/models/{{ m.id }}/test" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">تست اتصال</button></form>
-          <a class="rowbtn" href="/models?model_id={{ m.id }}" style="text-decoration:none">ویرایش</a>
+          <form method="post" action="/models/{{ m.id }}/test"  class="inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">تست اتصال</button></form>
+          <a class="rowbtn plain" href="/models?model_id={{ m.id }}" >ویرایش</a>
           {% if m.is_active %}
-          <form method="post" action="/models/{{ m.id }}/deactivate" style="display:inline" onsubmit="return confirm('این مدل غیرفعال شود؟ تا زمانی که مدل فعال دیگری نداشته باشید، تولید متوقف می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">غیرفعال</button></form>
+          <form method="post" action="/models/{{ m.id }}/deactivate"  class="inline" onsubmit="return confirm('این مدل غیرفعال شود؟ تا زمانی که مدل فعال دیگری نداشته باشید، تولید متوقف می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">غیرفعال</button></form>
           {% else %}
-          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
-          <form method="post" action="/models/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('این مدل حذف شود؟ مدل فعال قابل حذف نیست؛ ابتدا غیرفعال کنید.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف</button></form>
+          <form method="post" action="/models/{{ m.id }}/activate"  class="inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
+          <form method="post" action="/models/{{ m.id }}/delete"  class="inline" onsubmit="return confirm('این مدل حذف شود؟ مدل فعال قابل حذف نیست؛ ابتدا غیرفعال کنید.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف</button></form>
           {% endif %}
         </td></tr>
       {% endfor %}
@@ -52,13 +52,13 @@
     {% if selected %}
     <form method="post" action="/models/{{ selected.id }}">{{ csrf_field(request) | safe }}
       <div class="field"><label>نام مدل</label><input type="text" value="{{ selected.description or selected.name }}" disabled><div class="hint">نام نمایشی از توضیحات می‌آید؛ شناسهٔ مدل (<span class="num">{{ selected.name }}</span>) ثابت است.</div></div>
-      <div class="field"><label>مدل پایه</label><input type="text" value="{{ selected.name }}" style="direction:ltr;text-align:left" disabled></div>
-      <div class="field"><label>نقطهٔ اتصال (base URL)</label><input type="text" name="base_url" value="{{ selected.base_url or '' }}" style="direction:ltr;text-align:left">
+      <div class="field"><label>مدل پایه</label><input type="text" value="{{ selected.name }}"  class="ltr" disabled></div>
+      <div class="field"><label>نقطهٔ اتصال (base URL)</label><input type="text" name="base_url" value="{{ selected.base_url or '' }}"  class="ltr">
         {% if selected.base_url %}<div class="hint">این مدل نقطهٔ اتصال خودش را دارد، پس <b>باید کلید خودش را هم داشته باشد</b>؛ کلید سراسری هرگز به این آدرس ارسال نمی‌شود.</div>{% endif %}</div>
-      <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (api_model)</label><input type="text" name="api_model" value="{{ selected.api_model or '' }}" style="direction:ltr;text-align:left" placeholder="{{ selected.name }}">
+      <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (api_model)</label><input type="text" name="api_model" value="{{ selected.api_model or '' }}"  class="ltr" placeholder="{{ selected.name }}">
         <div class="hint">اگر نام ارائه‌دهنده با نام نمایشی فرق دارد، شناسهٔ واقعی را اینجا بنویسید. خالی = همان نام مدل.</div></div>
       <div class="field"><label>کلید API</label>
-        <input type="password" name="api_key" value="" autocomplete="new-password" style="direction:ltr;text-align:left" placeholder="{{ selected.creds.key_hint or 'کلیدی وارد نشده' }}">
+        <input type="password" name="api_key" value="" autocomplete="new-password"  class="ltr" placeholder="{{ selected.creds.key_hint or 'کلیدی وارد نشده' }}">
         <div class="hint">
           {% if selected.creds.key_hint %}کلید ذخیره‌شده: <span class="num">{{ selected.creds.key_hint }}</span> — خالی گذاشتن آن را نگه می‌دارد و تغییر نمی‌دهد.
           {% else %}هنوز کلیدی برای این مدل ثبت نشده است.{% endif %}
@@ -66,13 +66,13 @@
         </div></div>
       {% if selected.creds.key_hint or selected.api_key_env %}
       <div class="body" style="border-top:1px solid var(--line2)">
-        <form method="post" action="/models/{{ selected.id }}/clear-key" style="display:inline" onsubmit="return confirm('کلید ذخیره‌شدهٔ این مدل پاک شود؟ اگر نقطهٔ اتصال خودش را دارد، تا ثبت کلید تازه تولید ناموفق می‌شود.')">{{ csrf_field(request) | safe }}
-          <button class="btn btn-ghost btn-sm" style="color:var(--red)" type="submit">پاک کردن کلید</button>
+        <form method="post" action="/models/{{ selected.id }}/clear-key"  class="inline" onsubmit="return confirm('کلید ذخیره‌شدهٔ این مدل پاک شود؟ اگر نقطهٔ اتصال خودش را دارد، تا ثبت کلید تازه تولید ناموفق می‌شود.')">{{ csrf_field(request) | safe }}
+          <button class="btn btn-ghost btn-sm red"  type="submit">پاک کردن کلید</button>
           <span class="hint">برای حذف کلید ذخیره‌شده (نه متغیر محیطی) این دکمه را بزنید.</span>
         </form>
       </div>
       {% endif %}
-      <div class="field"><label>نام متغیر کلید محیطی (api_key_env)</label><input type="text" name="api_key_env" value="{{ selected.api_key_env or '' }}" style="direction:ltr;text-align:left"><div class="hint">فقط <b>نام</b> متغیر محیطی ذخیره می‌شود، نه خود کلید. برای بیشتر نصب‌ها خالی بماند و کلید بالا استفاده شود.</div></div>
+      <div class="field"><label>نام متغیر کلید محیطی (api_key_env)</label><input type="text" name="api_key_env" value="{{ selected.api_key_env or '' }}"  class="ltr"><div class="hint">فقط <b>نام</b> متغیر محیطی ذخیره می‌شود، نه خود کلید. برای بیشتر نصب‌ها خالی بماند و کلید بالا استفاده شود.</div></div>
       <div class="two" style="gap:10px">
         <div class="field"><label>دما (temperature)</label><input type="number" name="temperature" step="0.1" value="{{ selected.temperature if selected.temperature is not none else '' }}"></div>
         <div class="field"><label>سقف توکن خروجی</label><input type="number" name="max_output_tokens" value="{{ selected.max_output_tokens or '' }}"></div>
@@ -86,7 +86,7 @@
     {% endif %}
   </div></div>
 
-  <div class="card"><h3>آزمون اتصال</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+  <div class="card"><h3>آزمون اتصال</h3><div class="body stack-sm" >
     {% if selected %}
     {% if test_result %}
       {% if test_result.ok %}<div class="ok-note">اتصال موفق — پاسخ مدل دریافت شد و قالب JSON معتبر بود.</div>
@@ -107,18 +107,18 @@
   <div class="body">
     <form method="post" action="/models">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:10px">
-        <div class="field"><label>نام (برچسب داخلی)</label><input type="text" name="name" required style="direction:ltr;text-align:left">
+        <div class="field"><label>نام (برچسب داخلی)</label><input type="text" name="name" required  class="ltr">
           <div class="hint">این فقط نام داخلی مدل است. اگر ارائه‌دهنده شناسهٔ دیگری می‌خواهد، آن را در «شناسهٔ مدل در ارائه‌دهنده» بنویسید.</div></div>
         <div class="field"><label>ارائه‌دهنده</label><input type="text" name="provider" value="openai" required></div>
         <div class="field"><label>نسخه</label><input type="text" name="version" value="latest" required></div>
-        <div class="field"><label>نقطهٔ اتصال (اختیاری)</label><input type="text" name="base_url" style="direction:ltr;text-align:left"></div>
-        <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (اختیاری)</label><input type="text" name="api_model" style="direction:ltr;text-align:left">
+        <div class="field"><label>نقطهٔ اتصال (اختیاری)</label><input type="text" name="base_url"  class="ltr"></div>
+        <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (اختیاری)</label><input type="text" name="api_model"  class="ltr">
           <div class="hint"><b>اگر نام ارائه‌دهنده یک شناسهٔ واقعی نیست، اینجا بنویسید.</b>
           نام بالا فقط برچسب داخلی است؛ ارائه‌دهنده معمولاً آن را نمی‌شناسد و با خطای
           <span dir="ltr">404 model does not exist</span> پاسخ می‌دهد. پس از ساخت، «تست اتصال» را بزنید.</div></div>
-        <div class="field"><label>کلید API</label><input type="password" name="api_key" autocomplete="new-password" style="direction:ltr;text-align:left">
+        <div class="field"><label>کلید API</label><input type="password" name="api_key" autocomplete="new-password"  class="ltr">
           <div class="hint">اگر نقطهٔ اتصال خودش را وارد کنید، کلید خودش <b>اجباری</b> است؛ کلید سراسری به آدرس دیگری ارسال نمی‌شود. رمزنگاری‌شده ذخیره می‌شود.</div></div>
-        <div class="field"><label>نام متغیر کلید محیطی (اختیاری)</label><input type="text" name="api_key_env" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>نام متغیر کلید محیطی (اختیاری)</label><input type="text" name="api_key_env"  class="ltr"></div>
         <div class="field"><label>توضیح</label><input type="text" name="description"></div>
       </div>
       <button class="btn btn-primary" type="submit">ایجاد مدل</button>

@@ -298,3 +298,59 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
   white-space:nowrap;cursor:pointer;margin:0;user-select:none}
 .check input{width:15px;height:15px;accent-color:var(--primary);cursor:pointer;margin:0}
 .check:hover{color:var(--ink)}
+
+/* ── Dashboard ────────────────────────────────────────────────────────────
+   The KPI row used to be four <div>s that reported a number you could not act
+   on. Making them links to the list each one counts is the whole difference
+   between a dashboard and a scoreboard: four cards, four destinations. # */
+.kpi-link .kpi{text-decoration:none;color:inherit;transition:border-color .12s,box-shadow .12s}
+.kpi-link .kpi:hover{border-color:var(--primary);box-shadow:0 2px 10px rgba(67,56,202,.10)}
+.kpi-link .kpi:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+/* A non-zero failure count is the one card that should pull the eye. */
+.kpi-alert{border-color:#FECDD3;background:var(--red-soft)}
+
+/* One health row component, replacing five copies of the same inline flex. */
+.health{display:flex;flex-direction:column;gap:9px}
+.hrow{display:flex;align-items:center;gap:8px}
+.hrow b{font-size:13px}
+.health-note{margin-top:-4px}
+
+/* An empty region says so. A blank card is indistinguishable from a bug. */
+.hint.empty,.empty{
+  padding:18px;text-align:center;color:var(--mut2);font-size:12.5px;
+  border:1px dashed var(--line);border-radius:10px;background:#FCFCFE}
+
+/* ── Utility classes ──────────────────────────────────────────────────────
+   The panel carried 223 inline `style=` attributes across its templates. That
+   is why pages built at different times looked like pages built by different
+   people: nothing shared a scale, so two "the same" rows could differ by a few
+   pixels, and no change to a token could reach them.
+
+   These are the repeats that actually occurred, given real names. Anything
+   used once stays inline on purpose -- a class for a single call site is
+   indirection, not reuse. # */
+
+/* Latin values (ids, keys, chat ids, model names) inside an RTL page. */
+.ltr{direction:ltr;text-align:left}
+.ltr-inline{direction:ltr;display:inline-block}
+/* A link that must not look like one: navigation inside a table or a badge. */
+.plain{text-decoration:none;color:inherit}
+.inline{display:inline}
+.pre{white-space:pre-wrap}
+/* Spacing, off the ad-hoc 8/9/10/13px ladder. */
+.mt1{margin-top:var(--sp-1)}.mt2{margin-top:var(--sp-2)}
+.mt3{margin-top:var(--sp-3)}.mt4{margin-top:var(--sp-4)}
+.mb2{margin-bottom:var(--sp-2)}.mb3{margin-bottom:var(--sp-3)}
+.m0{margin:0}
+/* Column widths, named for the column rather than the pixel count, so a
+   change to one does not silently retune another. */
+.w-id{width:66px}.w-date{width:104px}.w-state{width:110px}.w-name{width:150px}
+.w-field{width:112px}.w-uni{width:142px}.w-actions{width:196px}
+.w-msg{width:150px}.w-channel{width:92px}.w-source{width:120px}
+/* Stacked sections. */
+.stack{display:flex;flex-direction:column;gap:var(--sp-3)}
+.stack-sm{display:flex;flex-direction:column;gap:var(--sp-2)}
+/* A readable measure for prose (the generated news preview). */
+.measure{max-width:72ch}
+.red{color:var(--red)}
+.grow-search{flex:1 1 200px;min-width:200px}

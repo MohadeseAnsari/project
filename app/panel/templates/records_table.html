@@ -28,10 +28,10 @@
       <td>
         {# Approving releases the article for sending: confirm, since it publishes. #}
         {% if r.status == 'review' %}
-        <form method="post" action="/records/{{ r.id }}/review" style="display:inline" onsubmit="return confirm('این خبر تأیید و برای ارسال آزاد شود؟')">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
-        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
+        <form method="post" action="/records/{{ r.id }}/review"  class="inline" onsubmit="return confirm('این خبر تأیید و برای ارسال آزاد شود؟')">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
+        <a class="rowbtn plain" href="/records/{{ r.id }}" >ویرایش</a>
         {% else %}
-        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">مشاهده</a>
+        <a class="rowbtn plain" href="/records/{{ r.id }}" >مشاهده</a>
         {% endif %}
       </td>
     </tr>

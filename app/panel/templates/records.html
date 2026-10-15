@@ -22,14 +22,14 @@
          university, author and supervisor, so the pickers below are for
          narrowing a large set rather than finding one thing. #}
       <div class="seg">
-        <a href="{{ tab_urls.review }}" style="text-decoration:none;color:inherit"><span class="{% if status=='review' %}on{% endif %}">در انتظار بازبینی</span></a>
-        <a href="{{ tab_urls.all }}" style="text-decoration:none;color:inherit"><span class="{% if not status %}on{% endif %}">همه</span></a>
-        <a href="{{ tab_urls.published }}" style="text-decoration:none;color:inherit"><span class="{% if status=='published' %}on{% endif %}">منتشرشده</span></a>
-        <a href="{{ tab_urls.failed }}" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
-        <a href="{{ tab_urls.ready }}" style="text-decoration:none;color:inherit"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
+        <a href="{{ tab_urls.review }}"  class="plain"><span class="{% if status=='review' %}on{% endif %}">در انتظار بازبینی</span></a>
+        <a href="{{ tab_urls.all }}"  class="plain"><span class="{% if not status %}on{% endif %}">همه</span></a>
+        <a href="{{ tab_urls.published }}"  class="plain"><span class="{% if status=='published' %}on{% endif %}">منتشرشده</span></a>
+        <a href="{{ tab_urls.failed }}"  class="plain"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
+        <a href="{{ tab_urls.ready }}"  class="plain"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
       </div>
       <input type="text" name="q" placeholder="جست‌وجو در عنوان، نویسنده، استاد، رشته یا دانشگاه…" value="{{ q or '' }}"
-             style="min-width:200px;flex:1 1 200px" aria-label="جست‌وجو در رکوردها">
+              class="grow-search" aria-label="جست‌وجو در رکوردها">
       <input type="hidden" name="status" value="{{ status or '' }}">
       <input type="hidden" name="order" value="{{ order }}">
       <input type="hidden" name="approved" value="{{ approved or '' }}">

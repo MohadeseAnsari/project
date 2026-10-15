@@ -26,20 +26,20 @@
 
   <div class="two" style="padding:14px 22px">
     {% for c in categories %}
-    <div class="card" style="margin:0"><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+    <div class="card m0" ><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
       <div class="body">
         {% if c.field_names %}
         <div class="chips">
           {% for f in c.field_names %}<span class="chip">{{ f }}</span>{% endfor %}
         </div>
         {% if c.field_count > c.field_names|length %}
-        <div class="hint" style="margin-top:9px">و {{ (c.field_count - c.field_names|length)|fa }} رشتهٔ دیگر در همین دسته.</div>
+        <div class="hint mt2" >و {{ (c.field_count - c.field_names|length)|fa }} رشتهٔ دیگر در همین دسته.</div>
         {% endif %}
         {% else %}
         <div class="hint">هنوز رشته‌ای در این دسته نیست.</div>
         {% endif %}
-        {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
-        <div class="hint" style="margin-top:10px">تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
+        {% if c.description %}<div class="hint mt2" >{{ c.description }}</div>{% endif %}
+        <div class="hint mt2" >تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
       </div>
     </div>
     {% else %}

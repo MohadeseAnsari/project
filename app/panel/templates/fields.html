@@ -17,7 +17,7 @@
   <form method="get" action="/fields">
     <div class="filters">
       <input type="text" name="q" placeholder="جست‌وجو در نام رشته…" value="{{ q or '' }}"
-             style="min-width:200px;flex:1 1 200px" aria-label="جست‌وجو در نام رشته">
+              class="grow-search" aria-label="جست‌وجو در نام رشته">
       <select name="category_id" aria-label="دسته">
         <option value="">همهٔ دسته‌ها</option>
         {% for cat in categories %}
@@ -80,7 +80,7 @@
         <td><small class="num">{{ f.matched_keyword or '—' }}</small></td>
         <td><span class="badge {% if f.category_source == 'manual' %}s-sent{% elif f.category_source == 'curated' %}s-ready{% else %}s-off{% endif %}">{{ {'manual': 'دستی', 'curated': 'تأییدشده', 'llm': 'مدل', 'rules': 'قواعد'}.get(f.category_source, f.category_source) }}</span></td>
         <td>{% if f.category_source == 'curated' or f.category_source == 'manual' %}<span class="badge s-sent">تأیید</span>
-            {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
+            {% else %}<form method="post" action="/fields/{{ f.id }}/confirm"  class="inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
       </tr>
       {% else %}
       <tr><td colspan="6" class="hint" style="text-align:center;padding:26px">
@@ -111,7 +111,7 @@
 </div>
 
 <div class="two">
-  <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+  <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body stack-sm" >
     {% for t in top %}
     <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>{{ t.name }}</span><span class="num">{{ t.pct|fa }}٪</span></div><div class="bar"><i style="width:{{ t.pct }}%"></i></div></div>
     {% else %}

@@ -3,7 +3,17 @@
 {% block h1 %}داشبورد{% endblock %}
 {% block crumb %}کنسول › نمای کلی سامانه{% endblock %}
 {% block top_actions %}
-<span class="pill"><span class="dot"></span> API ok · DB connected</span><span class="pill">آخرین به‌روزرسانی: {{ now_label }}</span>
+{# This pill used to read "API ok · DB connected" as a LITERAL. It said so
+   whether or not anything was wrong, directly above a card that computes the
+   real answer. It now reports the same state as the health card. #}
+<span class="pill">
+  {% if model_state == 'connected' and worker_fresh %}
+    <span class="dot"></span>همه‌چیز سالم
+  {% else %}
+    <span class="dot a"></span>نیازمند بررسی
+  {% endif %}
+</span>
+<span class="pill">آخرین به‌روزرسانی: {{ now_label }}</span>
 <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
 {% endblock %}
 {% block content %}
@@ -14,43 +24,60 @@
   {% include "dashboard_live.html" %}
 </div>
 
+{# The chart is the one thing here that wants width, and it is short. Health
+   is five rows. Side by side, the page fits one screen instead of three. #}
 <div class="side3">
   <div class="card">
     <h3>خبرهای تولیدشده در ۷ روز گذشته</h3>
     <div class="body">
+      {% if chart_total %}
       <div class="chart">
         {% for day in chart %}
-        <div style="height:{{ day.pct }}%"><span>{{ day.label }}</span></div>
+        <div style="height:{{ day.pct }}%" title="{{ day.label }}"><span>{{ day.label }}</span></div>
         {% endfor %}
       </div>
+      <div class="hint">مجموع {{ chart_total|fa }} رکورد در هفت روز گذشته.</div>
+      {% else %}
+      <div class="hint empty">هنوز رکوردی در هفت روز گذشته ثبت نشده.</div>
+      {% endif %}
     </div>
   </div>
 </div>
 
 <div class="two">
   <div class="card">
-    <h3>آخرین رویدادها</h3>
+    <h3>آخرین رویدادها<span class="grow"></span><a class="btn btn-ghost btn-sm" href="/audit">همه</a></h3>
     <div class="body">
+      {% if timeline %}
       <div class="timeline">
         {% for e in timeline %}
         <div class="tl"><div class="bullet" style="background:var(--{{ e.color }}-soft);color:var(--{{ e.color }})">{{ e.icon }}</div><div class="line"><b>{{ e.title }}</b><small>{{ e.sub }}</small></div></div>
         {% endfor %}
       </div>
+      {% else %}
+      <div class="hint empty">هنوز رویدادی ثبت نشده است.</div>
+      {% endif %}
     </div>
   </div>
 
   <div class="card">
-    <h3>وضعیت کانال‌ها</h3>
+    <h3>وضعیت کانال‌ها<span class="grow"></span><a class="btn btn-ghost btn-sm" href="/channels">مدیریت</a></h3>
     <div class="body">
+      {% if channels %}
       <table>
-        <thead><tr><th>کانال</th><th>خبرهای منتشرشده</th><th>حالت</th></tr></thead>
+        <thead><tr><th>کانال</th><th style="width:110px">منتشرشده</th><th style="width:74px">حالت</th></tr></thead>
         <tbody>
           {% for c in channels %}
-          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.sent_count|fa }} خبر</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
+          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td class="num">{{ c.sent_count|fa }}</td>
+              <td><a href="/channels?channel_id={{ c.id }}" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
           {% endfor %}
         </tbody>
       </table>
-      {% if failed_note %}<div class="note" style="margin-top:12px">{{ failed_note }}</div>{% endif %}
+      {% if failed_note %}<div class="note mt3" >{{ failed_note }}
+        <a href="/deliveries?status=failed" style="color:inherit;font-weight:700">رفتن به ارسال‌های ناموفق ←</a></div>{% endif %}
+      {% else %}
+      <div class="hint empty">هنوز کانالی ثبت نشده است. <a href="/channels">افزودن کانال</a></div>
+      {% endif %}
     </div>
   </div>
 </div>

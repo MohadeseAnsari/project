@@ -380,11 +380,18 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
 
     counts_ctx = await dashboard_service.sidebar_badges(session)
     now_label = jdatetime.datetime.now().strftime("%H:%M")
+    # The header pill used to be a literal "API ok · DB connected". It claimed
+    # health it had not checked, directly above a card that computes the real
+    # answer -- so a disconnected model still showed a green "ok". It now reads
+    # from the same state the health card does.
+    model_state = live.get("model_health", {}).get("state", "missing")
     return templates.TemplateResponse(request, "dashboard.html",
         _ctx(
             request, user, active="dashboard", **counts_ctx, **live,
-            chart=chart, timeline=timeline, channels=channels, failed_note=failed_note,
+            chart=chart, chart_total=sum(n for _d, n in per_day),
+            timeline=timeline, channels=channels, failed_note=failed_note,
             now_label=now_label, refresh_seconds=refresh_seconds,
+            model_state=model_state,
         ),
     )
 

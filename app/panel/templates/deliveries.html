@@ -23,10 +23,10 @@
   <form hx-get="/deliveries/table" hx-target="#deliveries-table" hx-swap="innerHTML" hx-trigger="submit">
     <div class="filters">
       <div class="seg">
-        <a href="/deliveries" style="text-decoration:none;color:inherit"><span class="{% if not dstatus %}on{% endif %}">همه</span></a>
-        <a href="/deliveries?status=sent" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='sent' %}on{% endif %}">موفق</span></a>
-        <a href="/deliveries?status=failed" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='failed' %}on{% endif %}">ناموفق</span></a>
-        <a href="/deliveries?status=awaiting_confirmation" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
+        <a href="/deliveries"  class="plain"><span class="{% if not dstatus %}on{% endif %}">همه</span></a>
+        <a href="/deliveries?status=sent"  class="plain"><span class="{% if dstatus=='sent' %}on{% endif %}">موفق</span></a>
+        <a href="/deliveries?status=failed"  class="plain"><span class="{% if dstatus=='failed' %}on{% endif %}">ناموفق</span></a>
+        <a href="/deliveries?status=awaiting_confirmation"  class="plain"><span class="{% if dstatus=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
       </div>
       <select name="platform"><option value="">همهٔ کانال‌ها</option><option value="bale" {% if dplatform=='bale' %}selected{% endif %}>بله</option><option value="telegram" {% if dplatform=='telegram' %}selected{% endif %}>تلگرام</option></select>
       <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ dmain_id or '' }}">
@@ -51,7 +51,7 @@
   <div class="card"><h3>Retry Policy</h3><div class="body">
     <dl class="kv"><dt>سقف تلاش</dt><dd>{{ max_attempts|fa }} بار</dd><dt>فاصلهٔ پایه</dt><dd>{{ backoff_base|fa }} ثانیه</dd><dt>عقب‌افتادگی</dt><dd>نمایی با دو برابر شدن فاصله</dd><dt>پس از سقف</dt><dd>وضعیت failed می‌ماند و منتظر اقدام دستی</dd></dl>
   </div></div>
-  <div class="card"><h3>دروازهٔ تأیید انسانی</h3><div class="body" style="display:flex;flex-direction:column;gap:10px">
+  <div class="card"><h3>دروازهٔ تأیید انسانی</h3><div class="body stack-sm" >
     <div class="note">تحویل‌های «در انتظار تأیید» فقط با تأیید خبر در صفحهٔ «رکوردها و بازبینی» به صف ارسال می‌روند؛ خبرِ تأییدنشده هیچ‌وقت به کانال نمی‌رسد.</div>
     <div class="note">سطر «در انتظار تأیید» دکمهٔ «آزادسازی» خودش را دارد (همان تأیید، ولی تک‌تحویل)؛ سطر «ناموفق» دکمهٔ «ارسال دوباره» دارد.</div>
     <div class="note">خبر منتشرشده هرگز حذف نمی‌شود؛ پیام از کانال پاک می‌شود و ردپای ارسال باقی می‌ماند.</div>
