@@ -6,10 +6,8 @@ Human auth uses panel users + signed cookies (not the machine shared secret);
 every review/retry/config change is written to ``audit_logs`` for history.
 """
 
-import hashlib
 import logging
 import time
-from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -125,63 +123,6 @@ panel_app = FastAPI(
 panel_app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
 
 
-@lru_cache(maxsize=1)
-def _asset_version() -> str:
-    """A short content hash of the panel's own assets, for cache-busting.
-
-    ``/static/panel.css`` is a stable URL, so a browser that fetched it once
-    keeps serving its copy — and an admin panel where the CSS *is* the design
-    change means the owner sees the old interface while the server has already
-    changed. No Cache-Control was being sent, which left freshness to browser
-    heuristics.
-
-    The fix is the standard one: keep the URL stable but vary the query string
-    with the content, so a changed file is a different URL and an unchanged one
-    is still cacheable. Hashed once per process, not per request.
-    """
-    digest = hashlib.sha256()
-    for name in ("panel.css", "panel.js"):
-        asset = _here / "static" / name
-        if asset.exists():
-            digest.update(asset.read_bytes())
-    return digest.hexdigest()[:10]
-
-
-templates.env.globals["asset_v"] = _asset_version()
-
-
-def _build_stamp() -> str:
-    """A human-readable "which build am I looking at" marker.
-
-    Added because a whole round of redesign was invisible to the owner while
-    the server had already changed: their browser was serving a cached
-    stylesheet from a page that had been open since before the work started.
-    Nothing in the UI said which build it was, so "I cannot see the change"
-    could not be told apart from "the change did not deploy".
-
-    It now says so on every page. If this stamp is not the one in the commit
-    message, the browser is showing an old copy and the page needs a reload.
-    """
-    return f"{_asset_version()} · built {settings.panel_version}"
-
-
-templates.env.globals["build_stamp"] = _build_stamp
-
-
-@panel_app.middleware("http")
-async def _no_store_html(request: Request, call_next):
-    """Never let a browser cache panel HTML.
-
-    The data changes constantly — a record is approved, a delivery fails — and
-    a cached page would show a status that stopped being true minutes ago. The
-    static mount sets its own headers, so this only ever sees HTML.
-    """
-    response = await call_next(request)
-    if response.headers.get("content-type", "").startswith("text/html"):
-        response.headers["Cache-Control"] = "no-store, must-revalidate"
-    return response
-
-
 @panel_app.exception_handler(CSRFError)
 async def _csrf_error_handler(request: Request, exc: CSRFError):
     """Render CSRF failures as a Persian 400 page (never a stack trace)."""
@@ -214,24 +155,6 @@ class _LoginRedirect(Exception):
 @panel_app.exception_handler(_LoginRedirect)
 async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
     return RedirectResponse(url="/login", status_code=302)
-
-
-def _safe_fields_return(value: str) -> str:
-    """Accept only a local /fields path, so ``return_to`` cannot be an open redirect.
-
-    A crafted form could otherwise POST a signed-in admin straight to another
-    site after a save. Rules: must start with the literal "/fields", must not
-    start with "//" (protocol-relative), must not contain a scheme, and must
-    not carry a backslash that some browsers normalise into a "//".
-    """
-    if not value:
-        return "/fields"
-    candidate = value.strip()
-    if not candidate.startswith("/fields"):
-        return "/fields"
-    if candidate.startswith("//") or "://" in candidate or "\\" in candidate:
-        return "/fields"
-    return candidate
 
 
 def _ctx(request: Request, user: object | None, **extra):
@@ -398,18 +321,11 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
 
     counts_ctx = await dashboard_service.sidebar_badges(session)
     now_label = jdatetime.datetime.now().strftime("%H:%M")
-    # The header pill used to be a literal "API ok · DB connected". It claimed
-    # health it had not checked, directly above a card that computes the real
-    # answer -- so a disconnected model still showed a green "ok". It now reads
-    # from the same state the health card does.
-    model_state = live.get("model_health", {}).get("state", "missing")
     return templates.TemplateResponse(request, "dashboard.html",
         _ctx(
             request, user, active="dashboard", **counts_ctx, **live,
-            chart=chart, chart_total=sum(n for _d, n in per_day),
-            timeline=timeline, channels=channels, failed_note=failed_note,
+            chart=chart, timeline=timeline, channels=channels, failed_note=failed_note,
             now_label=now_label, refresh_seconds=refresh_seconds,
-            model_state=model_state,
         ),
     )
 
@@ -471,60 +387,31 @@ def _audit_title(entry) -> str:
 # --------------------------------------------------------------------------
 
 
-@panel_app.get("/diagnose", response_class=HTMLResponse)
-async def diagnose(request: Request, session: AsyncSession = Depends(session_dep)):
-    """Report the panel's health from the BROWSER's point of view.
-
-    The server can prove it serves correct HTML to every authenticated
-    request, and it did -- repeatedly -- while the owner reported a blank
-    panel. What the server cannot see is what the browser ended up with: a
-    cached stylesheet, a script that failed to run, a zoomed viewport that
-    silently crossed a media-query breakpoint, or a layout that collapses at
-    one particular width.
-
-    So this page measures it client-side and reports the answer. It is the
-    difference between "the server says it works" and "your browser says it
-    works", which is the only distinction that was ever in question.
-    """
-    user = await require_login(request, session)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "diagnose.html",
-        _ctx(request, user, active="diagnose", **counts_ctx))
-
-
 @panel_app.get("/records", response_class=HTMLResponse)
 async def records_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
-    q: str = "", order: str = "newest", page: int = 1, approved: str = "",
+    q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
     tab: str = "", platform: str = "", main_id: str = "",
 ):
-    """Records and review — one page, records only.
+    """Records, review AND deliveries on one page (item 2).
 
-    Deliveries used to be a tab of this page. The owner asked for four
-    independently reachable pages instead, so ``/deliveries`` is its own page
-    again and the tab is gone. A record and its deliveries ARE one thing seen
-    from two sides, but they are answered by two different questions — "what
-    needs my decision" and "did it reach the channel" — and each deserves its
-    own KPIs rather than one strip of mixed numbers.
+    A record and its deliveries are one thing seen from two sides, and the
+    operator moves between "what needs my decision" and "did it reach the
+    channel" constantly — so they are two tabs here rather than two pages with
+    two filter bars. ``/deliveries`` redirects to the deliveries tab.
 
-    ``?tab=deliveries`` still redirects to ``/deliveries`` so old links and
-    bookmarks keep working instead of 404ing.
-
-    ``approved`` defaults to "" — show everything. It used to default to "no",
-    meaning "not yet approved", which was defensible while the dashboard was the
-    entry point and most records were awaiting review. It stopped being true:
-    once records reached "published" the page went BLANK, and the «منتشرشده» tab
-    could never match anything, because the default filter excluded exactly the
-    status that tab selects. A list whose default view hides its own contents is
-    indistinguishable from a broken one, so "needs review" is now an explicit
-    filter and the dashboard's KPI card links straight to it.
+    The deliveries tab carries its own filters (``d*`` names) because they are
+    genuinely different axes: a record filters by field and university, a
+    delivery by platform and outcome.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
     if tab == "deliveries":
-        return RedirectResponse(url="/deliveries", status_code=301)
+        return await _deliveries_tab(
+            request, session, status=status, platform=platform, main_id=main_id,
+        )
     page = max(1, page)
     page_size = 20
     counts = await record_service.record_status_counts(session)
@@ -539,43 +426,14 @@ async def records_page(
     needs_review = await record_service.needs_review_count(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
-
-    # The status tabs carry every OTHER active filter. Otherwise clicking
-    # "منتشرشده" while a field filter was applied silently dropped it, and the
-    # table quietly showed more rows than the operator had narrowed to — the
-    # same lie as a pager that forgets the search box.
-    def tab_for(new_status: str) -> str:
-        parts = {"field": field, "university": university, "q": q,
-                 "order": order, "approved": approved}
-        if new_status:
-            parts["status"] = new_status
-        encoded = urlencode({k: v for k, v in parts.items() if v})
-        return f"/records?{encoded}" if encoded else "/records"
-
-    tab_urls = {
-        "review": tab_for("review"), "all": tab_for(""), "published": tab_for("published"),
-        "failed": tab_for("failed"), "ready": tab_for("ready"),
-    }
-    # How many of the collapsed filters are currently narrowing the table, so
-    # the button can say so instead of hiding an applied filter behind a closed
-    # disclosure.
-    more_count = sum(1 for v in (field, university) if v)
-    if order == "oldest":
-        more_count += 1
-    if approved == "yes":
-        more_count += 1
     return templates.TemplateResponse(request, "records.html",
         _ctx(
             request, user, active="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
-            tab_urls=tab_urls, more_count=more_count, more_open=bool(more_count),
-            # Record states only. The delivery counts that used to sit here
-            # (kpi_sent) would answer a question this page is not asked, and
-            # they are the first thing the operator scrolls past.
             kpi_review=needs_review,
             kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
-            kpi_published=counts.get("published", 0),
-            kpi_failed=counts.get("failed", 0),
+            kpi_sent=delivery_counts.get("sent", 0),
+            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
             field_options=options["fields"], university_options=options["universities"],
             items=items, total=total, page=page, page_size=page_size,
         ),
@@ -837,26 +695,24 @@ async def records_bulk_approve(request: Request, session: AsyncSession = Depends
 # --------------------------------------------------------------------------
 
 
-@panel_app.get("/deliveries", response_class=HTMLResponse)
-async def deliveries_page(
-    request: Request, session: AsyncSession = Depends(session_dep),
-    status: str = "", platform: str = "", main_id: str = "", tab: str = "",
+@panel_app.get("/deliveries")
+async def deliveries_page_merged(request: Request):
+    """The deliveries page is merged into ``/records?tab=deliveries`` (item 2)."""
+    return RedirectResponse(url="/records?tab=deliveries", status_code=301)
+
+
+async def _deliveries_tab(
+    request: Request, session: AsyncSession, *, status: str = "",
+    platform: str = "", main_id: str = "",
 ):
-    """Deliveries and hand-off — an independent page again.
+    """Render the deliveries half of the merged page (item 2).
 
-    It was merged into ``/records`` as a tab and the owner asked for it back as
-    its own page: the two have genuinely different filters (a record filters by
-    field and university, a delivery by platform and outcome) and genuinely
-    different KPIs, so neither page has to carry numbers the other owns.
-
-    ``?tab=records`` redirects back to ``/records`` for the same
-    backward-compatibility reason the records route redirects here.
+    Same data and same filters the standalone page used, so the HTMX partial
+    at /deliveries/table keeps working unchanged.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
-    if tab == "records":
-        return RedirectResponse(url="/records", status_code=301)
     page_size = 20
     mid = int(main_id.strip()) if main_id.strip().isdigit() else None
     pairs, total = await delivery_service.fetch_deliveries(
@@ -869,28 +725,28 @@ async def deliveries_page(
         f"خطای آخر: «{newest_failure.error_message}» — {_jalali(newest_failure.updated_at)}"
         if newest_failure and newest_failure.error_message else None
     )
+    counts = await record_service.record_status_counts(session)
     delivery_counts = await delivery_service.delivery_status_counts(session)
+    needs_review = await record_service.needs_review_count(session)
+    options = await record_service.filter_options(session)
     dquery = urlencode(
         {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
     )
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "deliveries.html",
+    return templates.TemplateResponse(request, "records.html",
         _ctx(
-            request, user, active="deliveries", **counts_ctx,
+            request, user, active="deliveries", **counts_ctx, tab="deliveries",
             dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
             total=total, items=items, page=1, page_size=page_size, last_error=last_error,
             max_attempts=settings.sender_max_attempts,
             backoff_base=settings.sender_backoff_base_seconds,
             failed_count=delivery_counts.get("failed", 0),
-            # Delivery KPIs, not record ones: this page answers "did it reach
-            # the channel". "in the queue" is pending + sending, because both
-            # are committed work the operator may be waiting on.
-            kpi_sent=delivery_counts.get("sent", 0)
-            + delivery_counts.get("deleted_from_channel", 0),
-            kpi_pending=delivery_counts.get("pending", 0)
-            + delivery_counts.get("sending", 0),
-            kpi_gated=delivery_counts.get("awaiting_confirmation", 0),
-            kpi_failed=delivery_counts.get("failed", 0),
+            # The KPI strip is shared by both tabs, so it is always supplied.
+            kpi_review=needs_review,
+            kpi_queued=counts.get("ready", 0) + counts.get("processing", 0),
+            kpi_sent=delivery_counts.get("sent", 0),
+            kpi_failed=counts.get("failed", 0) + delivery_counts.get("failed", 0),
+            field_options=options["fields"], university_options=options["universities"],
         )
     )
 
@@ -1116,77 +972,43 @@ async def delivery_mark_deleted(
 
 @panel_app.get("/fields", response_class=HTMLResponse)
 async def fields_page(
-    request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "", category_id: int | None = None,
-    source: str = "", unconfirmed: str = "", page: int = 1, page_size: int = 50,
+    request: Request, tab: str = "", q: str = "",
+    session: AsyncSession = Depends(session_dep),
 ):
-    """Fields — one row each, with the category editable on that row.
+    """Fields, categories and keywords on ONE page (item 4).
 
-    A field's category is a property OF THE FIELD, so it belongs on the field
-    row: you can see the assignment and the keyword that produced it in one
-    glance. The categories themselves are a list of destinations and now have
-    their own page at ``/categories``, which the owner asked for.
+    They were three pages because they were written at different times, not
+    because the concepts differ: a field is a row, its category is a column on
+    that row, and the matched keyword is why the column holds what it holds.
+    One page with two tabs, and the field table carries the category as an
+    editable select so a change and its consequence are visible together.
 
-    ``?tab=categories`` still redirects there so old links keep working.
+    ``/categories`` redirects here rather than 404ing, so old links survive.
     """
     user = await require_login(request, session)
-    if tab == "categories":
-        return RedirectResponse(url="/categories", status_code=301)
-    from urllib.parse import urlencode
+    if tab not in ("", "categories"):
+        tab = ""
 
-    page = max(1, page)
-    page_size = min(max(1, page_size), 200)
-    # SEARCH AND PAGINATE IN SQL. This page used to pull every field into
-    # Python and filter the list there: 544 rows rendered as 544 table rows,
-    # roughly 27 screens of scrolling, with the search box narrowing the page
-    # only after everything had already been fetched and laid out.
-    fields, total = await field_service.field_category_rows(
-        session, q=q, page=page, page_size=page_size, category_id=category_id,
-        source=source, unconfirmed_only=unconfirmed == "1",
-    )
+    fields = await field_service.list_fields(session)
+    total = await field_service.field_total(session)
     top = await field_service.top_fields(session)
-    # The category NAMES are needed for the per-row select even though the
-    # categories page is separate — the select edits a field's category.
-    categories, _category_total = await field_service.category_cards(session)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    # Every current filter is carried into the pager, so paging never silently
-    # drops the search the operator typed.
-    query = urlencode(
-        {k: v for k, v in {
-            "q": q, "category_id": category_id, "source": source,
-            "unconfirmed": unconfirmed, "page_size": page_size,
-        }.items() if v not in (None, "")}
-    )
-    return templates.TemplateResponse(request, "fields.html",
-        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
-             top=top, q=q, categories=categories, category_id=category_id,
-             source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
-             query=query))
-
-
-@panel_app.get("/categories", response_class=HTMLResponse)
-async def categories_page(
-    request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "",
-):
-    """Categories and keywords — an independent page again.
-
-    It was merged into ``/fields`` as a tab and the owner asked for it back as
-    its own page: a category is a destination you browse ("what buckets exist
-    and what falls into each"), which is a different job from editing one
-    field's assignment.
-
-    ``?tab=fields`` redirects to ``/fields`` for symmetry with the old
-    ``/fields?tab=categories`` form.
-    """
-    user = await require_login(request, session)
-    if tab == "fields":
-        return RedirectResponse(url="/fields", status_code=301)
     categories, category_total = await field_service.category_cards(session, q)
+    if q.strip():
+        # The search box filters whatever tab is open, so the category tab must
+        # search categories while the field tab searches fields.
+        fields = [f for f in fields if q.strip() in f["name"]]
+    channels = await channel_service.list_channels(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "categories.html",
-        _ctx(request, user, active="categories", **counts_ctx,
-             categories=categories, category_total=category_total, q=q))
+    return templates.TemplateResponse(request, "fields.html",
+        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total, top=top,
+             tab=tab, q=q, categories=categories, category_total=category_total,
+             channels=channels))
+
+
+@panel_app.get("/categories")
+async def categories_page_merged(request: Request, session: AsyncSession = Depends(session_dep)):
+    """The standalone categories page is merged into ``/fields`` (item 4)."""
+    return RedirectResponse(url="/fields?tab=categories", status_code=301)
 
 
 @panel_app.post("/fields/{field_id}/confirm")
@@ -1269,7 +1091,6 @@ async def routing_page_removed(request: Request):
 @panel_app.post("/fields/{field_id}/category")
 async def field_set_category(
     request: Request, field_id: int, category_id: int = Form(...),
-    return_to: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
     """Pin a field to a category once, by hand (item 15).
@@ -1281,15 +1102,6 @@ async def field_set_category(
     This lives on the fields page only. It decides which CATEGORY a field
     belongs to — the classification the generator and the records use — and has
     nothing to do with routing, which no longer exists.
-
-    ``return_to`` sends the operator back to the page they were on. The fields
-    list is now paginated, so redirecting to a bare ``/fields`` after saving on
-    page 7 would dump them at page 1 of a 544-row table — a small thing that
-    makes a long curation pass feel broken.
-
-    It is WHITELISTED, not echoed. An open redirect here would let a crafted
-    form bounce a signed-in admin to another site, so a value that is not a
-    plain ``/fields?...`` path falls back to ``/fields``.
     """
     user = await require_login(request, session)
     try:
@@ -1307,7 +1119,7 @@ async def field_set_category(
             status_code=422)
     await audit_service.record_event(session, user.id, "route", None,
                                      f"field={field_id} category={row.category_id} source=manual")
-    return RedirectResponse(url=_safe_fields_return(return_to), status_code=303)
+    return RedirectResponse(url="/fields", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")

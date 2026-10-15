@@ -22,6 +22,3 @@ data/*.xlsx
 # undecryptable. Set CREDENTIALS_KEY in the environment instead.
 data/.credentials_key
 data/credentials_key*
-
-# local database dumps (restoring data, not source)
-backups/

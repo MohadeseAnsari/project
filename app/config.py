@@ -42,12 +42,6 @@ class Settings(BaseSettings):
     # loops: this is a human-facing readout, not a control loop, and the
     # figures are cheap `GROUP BY` counts.
     panel_dashboard_refresh_seconds: int = 15
-    #: Shown in the panel footer next to the asset hash. Bump it when a
-    #: deployment should be obvious on screen: the owner once spent a round of
-    #: redesign unable to see the change because a cached stylesheet was being
-    #: served, and nothing on the page said which build it was. Overridable
-    #: with PANEL_VERSION so a release can be labelled without a code change.
-    panel_version: str = "dev"
 
     # Field -> category classification.
     #

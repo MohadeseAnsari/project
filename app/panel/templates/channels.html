@@ -33,7 +33,7 @@
   {# ── the channels ─────────────────────────────────────────────── #}
   <div class="card">
     <h3>کانال‌ها</h3>
-    <div class="body stack-sm" >
+    <div class="body" style="display:flex;flex-direction:column;gap:10px">
       {% for c in channels %}
       {% set is_selected = selected and selected.id == c.id %}
       <div class="chan-row{% if is_selected %} on{% endif %}">
@@ -57,10 +57,10 @@
             {%- else %} · توکن سراسری{% endif %}
           </div>
           {% if c.is_active and c.last_error and c.usage.failed %}
-          <div class="hint red" >آخرین خطا: {{ c.last_error }}</div>
+          <div class="hint" style="color:var(--red)">آخرین خطا: {{ c.last_error }}</div>
           {% endif %}
         </div>
-        <form method="post" action="/channels/{{ c.id }}/toggle"  class="inline">{{ csrf_field(request) | safe }}<button type="submit" title="فعال / غیرفعال" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
+        <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="فعال / غیرفعال" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
         <a class="btn btn-ghost btn-sm" href="/channels?channel_id={{ c.id }}">ویرایش</a>
       </div>
       {% endfor %}
@@ -76,21 +76,21 @@
     <h3>تنظیمات کانال{% if selected %} — {{ selected.title or selected.username or selected.platform }}{% endif %}</h3>
     <div class="body">
       {% if selected %}
-      <div class="hint mb3" >این فرم فقط همین کانال را تغییر می‌دهد؛ بقیهٔ کانال‌ها دست‌نخورده می‌مانند.</div>
+      <div class="hint" style="margin-bottom:13px">این فرم فقط همین کانال را تغییر می‌دهد؛ بقیهٔ کانال‌ها دست‌نخورده می‌مانند.</div>
       <form method="post" action="/channels/{{ selected.id }}">{{ csrf_field(request) | safe }}
         <div class="field"><label>نام نمایشی</label><input type="text" name="title" value="{{ selected.title or '' }}" placeholder="مثلاً: کانال اصلی خبر"></div>
-        <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}"  class="ltr"></div>
-        <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}"  class="ltr" placeholder="@channel"></div>
+        <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}" style="direction:ltr;text-align:left"></div>
+        <div class="field"><label>نام کاربری</label><input type="text" name="username" value="{{ selected.username or '' }}" style="direction:ltr;text-align:left" placeholder="@channel"></div>
         <div class="field">
           <label>توکن ربات این کانال</label>
-          <input type="password" name="bot_token" autocomplete="new-password"  class="ltr"
+          <input type="password" name="bot_token" autocomplete="new-password" style="direction:ltr;text-align:left"
                  placeholder="{{ 'ذخیره شده — برای تغییر، مقدار تازه بنویسید' if selected.bot_token_encrypted else 'خالی = توکن سراسری سکو' }}">
           <div class="hint">رمزنگاری‌شده ذخیره می‌شود و هرگز دوباره نمایش داده نمی‌شود. خالی = توکن فعلی دست‌نخورده می‌ماند.</div>
           {% if selected.bot_token_encrypted %}
           <label style="display:flex;gap:7px;align-items:center;margin-top:7px;cursor:pointer"><input type="checkbox" name="clear_token" value="yes"> پاک کردن توکن این کانال و بازگشت به توکن سراسری</label>
           {% endif %}
         </div>
-        <div class="field"><label>نام متغیر توکن اختصاصی</label><input type="text" name="bot_token_env" value="{{ selected.bot_token_env or '' }}"  class="ltr" placeholder="خالی = توکن سراسری سکو"><div class="hint">فقط نام متغیر، هرگز خود توکن.</div></div>
+        <div class="field"><label>نام متغیر توکن اختصاصی</label><input type="text" name="bot_token_env" value="{{ selected.bot_token_env or '' }}" style="direction:ltr;text-align:left" placeholder="خالی = توکن سراسری سکو"><div class="hint">فقط نام متغیر، هرگز خود توکن.</div></div>
         <button class="btn btn-primary" type="submit">ذخیرهٔ تغییرات همین کانال</button>
       </form>
 
@@ -118,14 +118,14 @@
 <div class="card">
   <h3>افزودن کانال تازه</h3>
   <div class="body">
-    <div class="hint mb3" >کانال تازه <b>کنار</b> کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div>
+    <div class="hint" style="margin-bottom:13px">کانال تازه <b>کنار</b> کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div>
     <form method="post" action="/channels">{{ csrf_field(request) | safe }}
       <div class="two" style="gap:12px">
         <div class="field"><label>سکو</label><select name="platform"><option value="bale">bale</option><option value="telegram">telegram</option></select></div>
-        <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required  class="ltr" placeholder="@mychannel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود؛ مقصد نامعتبر ذخیره نمی‌شود.</div></div>
+        <div class="field"><label>شناسه عددی یا @نام کاربری</label><input type="text" name="target" required style="direction:ltr;text-align:left" placeholder="@mychannel"><div class="hint">پیش از ذخیره با getChat بررسی می‌شود؛ مقصد نامعتبر ذخیره نمی‌شود.</div></div>
         <div class="field"><label>عنوان نمایشی (اختیاری)</label><input type="text" name="title" placeholder="کانال اصلی خبر"></div>
-        <div class="field"><label>توکن ربات (اختیاری)</label><input type="password" name="bot_token" autocomplete="new-password"  class="ltr"><div class="hint">اگر این کانال ربات دیگری دارد، توکنش را اینجا بدهید؛ رمزنگاری‌شده ذخیره و هرگز نمایش داده نمی‌شود. خالی = توکن سراسری سکو.</div></div>
-        <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env"  class="ltr" placeholder="خالی = توکن سراسری"><div class="hint">فقط نام متغیر.</div></div>
+        <div class="field"><label>توکن ربات (اختیاری)</label><input type="password" name="bot_token" autocomplete="new-password" style="direction:ltr;text-align:left"><div class="hint">اگر این کانال ربات دیگری دارد، توکنش را اینجا بدهید؛ رمزنگاری‌شده ذخیره و هرگز نمایش داده نمی‌شود. خالی = توکن سراسری سکو.</div></div>
+        <div class="field"><label>نام متغیر توکن اختصاصی (اختیاری)</label><input type="text" name="bot_token_env" style="direction:ltr;text-align:left" placeholder="خالی = توکن سراسری"><div class="hint">فقط نام متغیر.</div></div>
       </div>
       <button class="btn btn-primary" type="submit">بررسی و افزودن کانال</button>
     </form>

@@ -21,19 +21,19 @@
       </td>
       <td>
         {% if d.status == 'failed' %}
-        <form method="post" action="/deliveries/{{ d.id }}/retry"  class="inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
         {% elif d.status == 'awaiting_confirmation' %}
-        <form method="post" action="/deliveries/{{ d.id }}/release"  class="inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">آزادسازی</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">آزادسازی</button></form>
         {% else %}
-        <a class="rowbtn plain" href="/records/{{ d.main_id }}" >مشاهدهٔ خبر</a>
+        <a class="rowbtn" href="/records/{{ d.main_id }}" style="text-decoration:none">مشاهدهٔ خبر</a>
         {% endif %}
         {# Recovery for every stuck state: cancel anything not yet sent, and
            delete the message once it has been published. Both confirm first. #}
         {% if d.status in ('awaiting_confirmation', 'pending') %}
-        <form method="post" action="/deliveries/{{ d.id }}/cancel"  class="inline" onsubmit="return confirm('این ارسال لغو شود؟ ردیف با وضعیت ناموفق باقی می‌ماند و قابل تلاش مجدد است.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">لغو ارسال</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/cancel" style="display:inline" onsubmit="return confirm('این ارسال لغو شود؟ ردیف با وضعیت ناموفق باقی می‌ماند و قابل تلاش مجدد است.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">لغو ارسال</button></form>
         {% elif d.status == 'sent' %}
-        <form method="post" action="/deliveries/{{ d.id }}/delete-from-channel"  class="inline" onsubmit="return confirm('پیام منتشرشده همین حالا از کانال حذف شود؟ این کار روی خود سکو (tapi/bale یا تلگرام) انجام می‌شود و پیام واقعاً ناپدید می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف واقعی از کانال</button></form>
-        <form method="post" action="/deliveries/{{ d.id }}/mark-deleted"  class="inline" onsubmit="return confirm('پیام را خودتان در اپلیکیشن کانال حذف کرده‌اید؟ این فقط وضعیت ردیف را ثبت می‌کند و چیزی برای سکو ارسال نمی‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">ثبت حذف دستی</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/delete-from-channel" style="display:inline" onsubmit="return confirm('پیام منتشرشده همین حالا از کانال حذف شود؟ این کار روی خود سکو (tapi/bale یا تلگرام) انجام می‌شود و پیام واقعاً ناپدید می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف واقعی از کانال</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/mark-deleted" style="display:inline" onsubmit="return confirm('پیام را خودتان در اپلیکیشن کانال حذف کرده‌اید؟ این فقط وضعیت ردیف را ثبت می‌کند و چیزی برای سکو ارسال نمی‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">ثبت حذف دستی</button></form>
         {% endif %}
       </td></tr>
     {% endfor %}

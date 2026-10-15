@@ -19,17 +19,17 @@
       {% else %}<span class="badge s-off">{{ record.status }}</span>{% endif %}
     </h3>
     <div class="tabs">
-      <a href="/records/{{ record.id }}?tab=text"  class="plain"><span class="{% if tab=='text' %}on{% endif %}">متن خبر</span></a>
-      <a href="/records/{{ record.id }}?tab=raw"  class="plain"><span class="{% if tab=='raw' %}on{% endif %}">خروجی خام مدل</span></a>
-      <a href="/records/{{ record.id }}?tab=meta"  class="plain"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
-      <a href="/records/{{ record.id }}?tab=history"  class="plain"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
-      <a href="/records/{{ record.id }}?tab=delivery"  class="plain"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
-      <a href="/records/{{ record.id }}?tab=final"  class="plain"><span class="{% if tab=='final' %}on{% endif %}">پرامپت نهایی</span></a>
+      <a href="/records/{{ record.id }}?tab=text" style="text-decoration:none;color:inherit"><span class="{% if tab=='text' %}on{% endif %}">متن خبر</span></a>
+      <a href="/records/{{ record.id }}?tab=raw" style="text-decoration:none;color:inherit"><span class="{% if tab=='raw' %}on{% endif %}">خروجی خام مدل</span></a>
+      <a href="/records/{{ record.id }}?tab=meta" style="text-decoration:none;color:inherit"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
+      <a href="/records/{{ record.id }}?tab=history" style="text-decoration:none;color:inherit"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
+      <a href="/records/{{ record.id }}?tab=delivery" style="text-decoration:none;color:inherit"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
+      <a href="/records/{{ record.id }}?tab=final" style="text-decoration:none;color:inherit"><span class="{% if tab=='final' %}on{% endif %}">پرامپت نهایی</span></a>
     </div>
     {% if tab == 'raw' %}
     <div class="body">
       <div class="code">{{ record.output_json | tojson_fa if record.output_json else '{}' }}</div>
-      <div class="hint mt2" >اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
+      <div class="hint" style="margin-top:9px">اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
     </div>
     {% elif tab == 'meta' %}
     <div class="body">
@@ -77,9 +77,9 @@
     <div class="body">
       <div class="preview">
         <h4>پیش‌نمایش پیام {{ preview_channel }}</h4>
-        <p  class="pre">{{ message_preview }}</p>
+        <p style="white-space:pre-wrap">{{ message_preview }}</p>
       </div>
-      <div class="hint mt2" >این دقیقاً همان متنی است که با تأیید، به کانال ارسال می‌شود.</div>
+      <div class="hint" style="margin-top:9px">این دقیقاً همان متنی است که با تأیید، به کانال ارسال می‌شود.</div>
     </div>
     {% endif %}
     {% elif tab == 'final' %}
@@ -88,9 +88,9 @@
         <dt>مدل</dt><dd><span class="num">{{ prompt_preview.model_name }}</span></dd>
         <dt>نقطهٔ اتصال</dt><dd><span class="num">{{ prompt_preview.base_url }}</span></dd>
       </dl>
-      <div class="field"><label>system prompt</label><div class="code pre" >{{ prompt_preview.system_prompt }}</div></div>
-      <div class="field"><label>user message</label><div class="code pre" >{{ prompt_preview.user_message }}</div></div>
-      <div class="hint mt2" >همین متن‌ها برای این رکورد به مدل ارسال شد (یا می‌شود)؛ هیچ کلیدی اینجا نمایش داده نمی‌شود.</div>
+      <div class="field"><label>system prompt</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.system_prompt }}</div></div>
+      <div class="field"><label>user message</label><div class="code" style="white-space:pre-wrap">{{ prompt_preview.user_message }}</div></div>
+      <div class="hint" style="margin-top:9px">همین متن‌ها برای این رکورد به مدل ارسال شد (یا می‌شود)؛ هیچ کلیدی اینجا نمایش داده نمی‌شود.</div>
       <div class="hint">ترتیب وضوح: بازنویسی رکورد ← سطر فعال ← پیکربندی بسته‌بندی‌شده. کلید همیشه از سطری می‌آید که نقطهٔ اتصال را داده است.</div>
     </div>
     {% else %}
@@ -107,7 +107,7 @@
         <button class="btn btn-primary" name="action" value="approve" type="submit">تأیید و انتشار</button>
         <button class="btn btn-ghost" name="action" value="save_draft" type="submit">ذخیرهٔ ویرایش</button>
         {# Rejecting is irreversible and stops delivery: ask first, and say why. #}
-        <button class="btn btn-ghost red" name="action" value="reject" type="submit" 
+        <button class="btn btn-ghost" name="action" value="reject" type="submit" style="color:var(--red)"
                 onclick="return confirm('این خبر رد شود؟ رد کردن برگشت‌پذیر نیست و خبر هرگز به کانال نمی‌رسد.')">رد این خبر</button>
       </div>
       {% elif record.status in ('approved', 'published') %}
@@ -129,16 +129,16 @@
       <div class="body" style="border-top:1px solid var(--line2)">
         <button class="btn btn-ghost" type="submit"
                 onclick="return confirm('متن فعلی با خروجی تازهٔ مدل جایگزین شود؟ متن کنونی از دست می‌رود.')">تولید دوباره با مدل</button>
-        <div class="hint mt2" >متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
+        <div class="hint" style="margin-top:8px">متن فعلی با خروجی تازهٔ مدل جایگزین می‌شود و رکورد به بازبینی برمی‌گردد.</div>
       </div>
     </form>
     {% endif %}
     {% else %}
     <div class="body">
       <p>خروجی هنوز تولید نشده است.</p>
-      {% if record.error_message %}<div class="note mt2" >{{ record.error_message }}</div>{% endif %}
+      {% if record.error_message %}<div class="note" style="margin-top:10px">{{ record.error_message }}</div>{% endif %}
       {% if record.status == 'failed' %}
-      <form method="post" action="/records/{{ record.id }}/regenerate"  class="mt2">{{ csrf_field(request) | safe }}
+      <form method="post" action="/records/{{ record.id }}/regenerate" style="margin-top:10px">{{ csrf_field(request) | safe }}
         <button class="btn btn-ghost" type="submit">تولید دوباره با مدل</button>
       </form>
       {% endif %}
@@ -147,7 +147,7 @@
     {% endif %}
   </div>
 
-  <div  class="stack">
+  <div style="display:flex;flex-direction:column;gap:14px">
     <div class="card">
       <h3>متادیتای پایان‌نامه</h3>
       <div class="body">
@@ -163,9 +163,9 @@
           <dt>کانال مسیرشده</dt><dd>{{ routed_channels or '—' }}</dd>
         </dl>
         {% if snapshot_category and current_category and snapshot_category != current_category %}
-        <div class="note mt2" >دستهٔ رشته از زمان پردازش تغییر کرده است؛ رکورد، دستهٔ ثبت‌شده را نگه می‌دارد.</div>
+        <div class="note" style="margin-top:10px">دستهٔ رشته از زمان پردازش تغییر کرده است؛ رکورد، دستهٔ ثبت‌شده را نگه می‌دارد.</div>
         {% endif %}
-        <div class="hint mt2" >عنوان پایان‌نامه: «{{ record.title }}»</div>
+        <div class="hint" style="margin-top:10px">عنوان پایان‌نامه: «{{ record.title }}»</div>
       </div>
     </div>
 
@@ -177,7 +177,7 @@
           <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ t.title }}</b><small>{{ t.sub }}</small></div></div>
           {% endfor %}
         </div>
-        <div class="hint mt2" >ثبت درخواست ← تعیین رشته و دسته ← تولید با مدل/پرامپت ← بازبینی ← ارسال به کانال (با شناسهٔ پیام).</div>
+        <div class="hint" style="margin-top:9px">ثبت درخواست ← تعیین رشته و دسته ← تولید با مدل/پرامپت ← بازبینی ← ارسال به کانال (با شناسهٔ پیام).</div>
       </div>
     </div>
 
@@ -187,7 +187,7 @@
       <h3>اصلاح دستهٔ رکورد</h3>
       <div class="body">
         <form method="post" action="/records/{{ record.id }}/category">{{ csrf_field(request) | safe }}
-          <div class="field m0" ><label>دسته</label>
+          <div class="field" style="margin:0"><label>دسته</label>
             <select name="category_id">
               {% for c in categories %}<option value="{{ c.id }}" {% if c.id == record.category_id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
             </select>

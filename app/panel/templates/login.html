@@ -6,13 +6,13 @@
     <div class="logo">ا</div>
     <h2>ورود به کنسول ایران‌داک</h2>
     <p class="sub">تولید خودکار خبر از متادیتای پایان‌نامه‌ها</p>
-    {% if error %}<div class="note mb3" >{{ error }}</div>{% endif %}
+    {% if error %}<div class="note" style="margin-bottom:12px">{{ error }}</div>{% endif %}
     <form method="post" action="/login">{{ csrf_field(request) | safe }}
       <div class="field"><label>نام کاربری</label><input type="text" name="username" autocomplete="username"></div>
       <div class="field"><label>گذرواژه</label><input type="password" name="password" autocomplete="current-password"></div>
       <button class="btn btn-primary" type="submit">ورود</button>
     </form>
-    <div class="ok-note mt3" >نقش‌ها: <b>بیننده</b> (فقط دیدن) · <b>بازبین</b> (ویرایش و تأیید خبر) · <b>ادمین</b> (تنظیمات، کاربران، کانال‌ها)</div>
+    <div class="ok-note" style="margin-top:14px">نقش‌ها: <b>بیننده</b> (فقط دیدن) · <b>بازبین</b> (ویرایش و تأیید خبر) · <b>ادمین</b> (تنظیمات، کاربران، کانال‌ها)</div>
     <div class="hint">ورود با کوکی نشست؛ کلید مشترک فقط برای سیستم‌های ایران‌داک و API ماشین‌به‌ماشین است، نه برای کاربران.</div>
   </div>
 </div>

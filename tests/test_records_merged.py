@@ -1,10 +1,9 @@
-"""Records/review and deliveries are two independent pages; multi-select holds.
+"""Records, review and deliveries on one page; multi-select that holds (items 2, 3).
 
-Two owner requests, opposite directions over time:
+Two owner requests, one page:
 
-* deliveries were merged into ``/records`` as a tab, and the owner later asked
-  for the pages back — "Records & Review" and "Submissions & Delivery" must
-  each be independently reachable from the sidebar;
+* item 2 — merge the records/review page with the deliveries page, and stop
+  saying "سیاست تلاش دوباره", use "Retry Policy";
 * item 3 — select several theses at once.
 
 The part of item 3 worth testing is NOT the checkbox (it existed) but that the
@@ -71,19 +70,17 @@ async def _records(session: AsyncSession, n: int = 3) -> list[Main]:
 
 
 @pytest.mark.asyncio
-async def test_each_is_its_own_page(session: AsyncSession):
+async def test_both_tabs_live_on_the_records_page(session: AsyncSession):
     await _admin(session)
     await _records(session)
     async with panel_client() as client:
         await _login(client)
         records = await client.get("/records")
-        deliveries = await client.get("/deliveries")
-    assert records.status_code == 200 and deliveries.status_code == 200
+        deliveries = await client.get("/records?tab=deliveries")
     assert "رکوردها و بازبینی" in records.text
     assert "ارسال‌ها و تحویل" in deliveries.text
-    # Neither page is the other page wearing a different query string.
-    assert "تحویل‌ها" not in records.text, "the records page carries no deliveries table"
-    assert "/records/bulk-approve" not in deliveries.text
+    assert "/records?tab=deliveries" in records.text
+    assert 'href="/records"' in deliveries.text
 
 
 @pytest.mark.asyncio
@@ -95,64 +92,32 @@ async def test_the_retry_card_uses_english(session: AsyncSession):
     await session.commit()
     async with panel_client() as client:
         await _login(client)
-        page = await client.get("/deliveries")
+        page = await client.get("/records?tab=deliveries")
     assert "Retry Policy" in page.text
     assert "سیاست تلاش دوباره" not in page.text
 
 
 @pytest.mark.asyncio
-async def test_the_old_tab_url_redirects_to_the_restored_page(session: AsyncSession):
-    """A bookmark or a link from an old email must not 404."""
+async def test_the_old_deliveries_url_redirects(session: AsyncSession):
     await _admin(session)
     async with panel_client() as client:
         await _login(client)
-        response = await client.get("/records", params={"tab": "deliveries"},
-                                    follow_redirects=False)
+        response = await client.get("/deliveries", follow_redirects=False)
         assert response.status_code == 301
-        assert response.headers["location"] == "/deliveries"
-        landed = await client.get("/deliveries")
+        assert response.headers["location"] == "/records?tab=deliveries"
+        landed = await client.get(response.headers["location"])
     assert landed.status_code == 200
-    assert "ارسال‌ها و تحویل" in landed.text
 
 
-def test_the_deliveries_page_is_a_real_template():
+def test_the_standalone_deliveries_page_is_gone():
     from pathlib import Path
 
-    assert Path("app/panel/templates/deliveries.html").exists()
-
-
-@pytest.mark.asyncio
-async def test_each_page_shows_its_own_kpis(session: AsyncSession):
-    """The reason for splitting: one strip of mixed numbers answered neither.
-
-    A record and its delivery are related, but the two pages are asked
-    different questions, so each carries the numbers that answer its own.
-    """
-    await _admin(session)
-    article = (await _records(session, 1))[0]
-    channel = Channel(platform="bale", chat_id=93031, is_active=True)
-    session.add(channel)
-    await session.commit()
-    session.add(Delivery(main_id=article.id, channel_id=channel.id, status="sent",
-                         platform_message_id=4242))
-    await session.commit()
-    async with panel_client() as client:
-        await _login(client)
-        records = await client.get("/records")
-        deliveries = await client.get("/deliveries")
-    # Records counts records; the delivered article is a RECORD in review, not
-    # a delivered one, so "منتشرشده" must read zero on the records page.
-    assert "در انتظار بازبینی" in records.text
-    assert "منتشرشده" in records.text
-    # Deliveries counts deliveries, so the one sent row shows there.
-    assert "تحویل‌شده" in deliveries.text
-    assert "در صف ارسال" in deliveries.text
-    assert "منتظر تأیید شما" in deliveries.text
+    assert not Path("app/panel/templates/deliveries.html").exists()
 
 
 @pytest.mark.asyncio
 async def test_deliveries_still_list_and_filter(session: AsyncSession):
-    """Splitting must not cost the page its data or its filters."""
+    """Merging must not cost the deliveries tab its data or its filters."""
     await _admin(session)
     first = Channel(platform="bale", chat_id=93011, is_active=True)
     second = Channel(platform="bale", chat_id=93012, is_active=True)
@@ -167,8 +132,8 @@ async def test_deliveries_still_list_and_filter(session: AsyncSession):
     await session.commit()
     async with panel_client() as client:
         await _login(client)
-        everything = await client.get("/deliveries")
-        only_failed = await client.get("/deliveries", params={"status": "failed"})
+        everything = await client.get("/records?tab=deliveries")
+        only_failed = await client.get("/records?tab=deliveries&status=failed")
     # The message id is shown only for a row in the result set, so it is what
     # the filter actually controls. (The "boom" text also appears via
     # last_error in the footer, which is not a row.)
@@ -193,26 +158,13 @@ async def test_the_htmx_partial_still_works(session: AsyncSession):
     assert "<table" in partial.text
 
 
-def test_no_link_goes_through_the_old_tab_url():
-    """The tab form is only for inbound bookmarks, never for our own links."""
+@pytest.mark.asyncio
+async def test_no_link_points_at_the_removed_page(session: AsyncSession):
     from pathlib import Path
 
     for name in Path("app/panel/templates").glob("*.html"):
         html = name.read_text(encoding="utf-8")
-        assert "tab=deliveries" not in html, f"{name} still links via the old tab URL"
-
-
-@pytest.mark.asyncio
-async def test_the_sidebar_offers_both_pages_separately(session: AsyncSession):
-    """The owner's actual requirement: independently reachable, not tabbed."""
-    await _admin(session)
-    async with panel_client() as client:
-        await _login(client)
-        page = await client.get("/")
-    assert 'href="/records"' in page.text
-    assert 'href="/deliveries"' in page.text
-    # Two distinct nav items, not one item with two states.
-    assert page.text.count('href="/deliveries"') == 1
+        assert 'href="/deliveries"' not in html, f"{name} still links to the merged page"
 
 
 # --------------------------------------------------------------------------

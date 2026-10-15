@@ -1,74 +1,42 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl" class="no-js">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title>{# ?v is the content hash of panel.css/panel.js (see _asset_version in app.py).
-   Without it the URL never changes, so a browser keeps serving the CSS it
-   fetched days ago — which for an admin panel means the owner sees the old
-   interface while the server has already changed. #}
-<link rel="stylesheet" href="/static/panel.css?v={{ asset_v }}"></head>
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css"></head>
 <body>
 {% block layout %}
-<div class="grid" id="shell">
-  {# The drawer backdrop. A scrim only exists in the <=820px drawer layout;
-     below that the sidebar is always visible and the scrim stays hidden. #}
-  <div class="scrim" data-close-drawer></div>
-
+<div class="grid">
   <aside>
-    {# Collapsing is the operator's choice and it is remembered per browser.
-       Below 820px this control is replaced by the header's hamburger, which
-       drives the same state. #}
-    <button class="rail-btn" type="button" data-rail-toggle
-            aria-controls="shell" aria-expanded="true">
-      <span class="ic" aria-hidden="true">⇤</span><span class="rail-label">جمع کردن منو</span>
-    </button>
-
-    <div class="brand"><div class="logo">ا</div><div class="rail-label"><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
+    <div class="brand"><div class="logo">ا</div><div><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
     <nav>
-      {# Each link keeps its full label in the DOM. In icon-only mode the label
-         collapses to zero width, so no route is merged, removed or unreachable;
-         the title attribute carries it for hover and assistive tech. #}
-      <a href="/" title="داشبورد" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic" aria-hidden="true">◧</span><span class="rail-label">داشبورد</span></a>
-      <a href="/records" title="رکوردها و بازبینی" class="{% if active=='records' %}on{% endif %}"><span class="ic" aria-hidden="true">☰</span><span class="rail-label">رکوردها و بازبینی</span>{% if review_count %}<span class="cnt" title="{{ review_count|fa }} در انتظار بازبینی">{{ review_count|fa }}</span>{% endif %}</a>
-      <a href="/deliveries" title="ارسال‌ها و تحویل" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic" aria-hidden="true">➤</span><span class="rail-label">ارسال‌ها و تحویل</span>{% if gated_count %}<span class="cnt" title="{{ gated_count|fa }} در انتظار تأیید">{{ gated_count|fa }}</span>{% endif %}</a>
-      <div class="sep rail-label">تنظیمات</div>
-      <a href="/fields" title="رشته‌ها" class="{% if active=='fields' %}on{% endif %}"><span class="ic" aria-hidden="true">◈</span><span class="rail-label">رشته‌ها</span></a>
-      <a href="/categories" title="دسته‌ها و کلیدواژه‌ها" class="{% if active=='categories' %}on{% endif %}"><span class="ic" aria-hidden="true">◫</span><span class="rail-label">دسته‌ها و کلیدواژه‌ها</span></a>
-      <a href="/channels" title="کانال‌ها" class="{% if active=='channels' %}on{% endif %}"><span class="ic" aria-hidden="true">⇄</span><span class="rail-label">کانال‌ها</span></a>
-      <a href="/prompts" title="پرامپت‌ها" class="{% if active=='prompts' %}on{% endif %}"><span class="ic" aria-hidden="true">✎</span><span class="rail-label">پرامپت‌ها</span></a>
-      <a href="/models" title="مدل‌ها" class="{% if active=='models' %}on{% endif %}"><span class="ic" aria-hidden="true">⚙</span><span class="rail-label">مدل‌ها</span></a>
-      <div class="sep rail-label">مدیریت</div>
-      <a href="/users" title="کاربران و نقش‌ها" class="{% if active=='users' %}on{% endif %}"><span class="ic" aria-hidden="true">◕</span><span class="rail-label">کاربران و نقش‌ها</span></a>
-      <a href="/audit" title="رویدادها" class="{% if active=='audit' %}on{% endif %}"><span class="ic" aria-hidden="true">⌘</span><span class="rail-label">رویدادها</span></a>
-      {# Not for everyday use: it exists because "the panel is blank" could not
-         be reproduced from the server, only from the browser. #}
-      <div class="sep rail-label">تشخیص</div>
-      <a href="/diagnose" title="تشخیص نمایش" class="{% if active=='diagnose' %}on{% endif %}"><span class="ic" aria-hidden="true">✚</span><span class="rail-label">تشخیص نمایش</span></a>
+      <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
+      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if review_count %}<span class="cnt">{{ review_count|fa }}</span>{% endif %}</a>
+      <a href="/records?tab=deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
+      <div class="sep">تنظیمات</div>
+      <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها و دسته‌ها</a>
+      <a href="/fields?tab=categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>
+      <a href="/channels" class="{% if active=='channels' %}on{% endif %}"><span class="ic">⇄</span>کانال‌ها و مسیرها</a>
+      <a href="/prompts" class="{% if active=='prompts' %}on{% endif %}"><span class="ic">✎</span>پرامپت‌ها</a>
+      <a href="/models" class="{% if active=='models' %}on{% endif %}"><span class="ic">⚙</span>مدل‌ها</a>
+      <div class="sep">مدیریت</div>
+      <a href="/users" class="{% if active=='users' %}on{% endif %}"><span class="ic">◕</span>کاربران و نقش‌ها</a>
+      <a href="/audit" class="{% if active=='audit' %}on{% endif %}"><span class="ic">⌘</span>رویدادها</a>
     </nav>
     {% if current_user %}
-    <div class="side-foot"><div class="avatar">{{ current_user.username[:1] }}</div><div class="rail-label"><b style="font-size:12.5px"><a href="/profile" style="color:inherit;text-decoration:none">{{ current_user.username }}</a></b><small>{{ role_fa(current_user) }}</small></div></div>
+    <div class="side-foot"><div class="avatar">{{ current_user.username[:1] }}</div><div><b style="font-size:12.5px"><a href="/profile" style="color:inherit;text-decoration:none">{{ current_user.username }}</a></b><small>{{ role_fa(current_user) }}</small></div></div>
     {% endif %}
   </aside>
-
   <main>
     <header class="top">
-      {# Below 820px the sidebar is a drawer, so the only way to navigation is
-          this button. Hidden above that width, where the rail is always there. #}
-      <button class="menu-btn" type="button" data-rail-toggle
-              aria-label="نمایش منو" aria-controls="shell">☰</button>
-      <div class="page-id"><h1>{% block h1 %}{% endblock %}</h1><span class="crumb">{% block crumb %}کنسول{% endblock %}</span></div>
+      <div><h1>{% block h1 %}{% endblock %}</h1><div class="crumb">{% block crumb %}کنسول{% endblock %}</div></div>
       <div class="grow"></div>
-      <div class="top-actions">{% block top_actions %}{% endblock %}</div>
+      {% block top_actions %}{% endblock %}
     </header>
     <div class="wrap">
       {% if error %}<div class="note">{{ error }}</div>{% endif %}
       {% if ok %}<div class="ok-note">{{ ok }}</div>{% endif %}
       {% block content %}{% endblock %}
     </div>
-    {# Which build is this? A cached stylesheet from a page that has been open
-       since before a deploy looks exactly like a deploy that never happened. #}
-    <div class="build-stamp"><span class="grow"></span><span>نسخهٔ {{ build_stamp() }}</span></div>
   </main>
 </div>
 {% endblock %}
 <script src="/static/htmx.min.js" defer></script>
-<script src="/static/panel.js?v={{ asset_v }}" defer></script>
 </body></html>

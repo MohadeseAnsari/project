@@ -6,12 +6,6 @@ authoritative requirements live in `docs/irandoc_four_assignments_english_only.t
 (one directory above the project root); this guide explains how the code
 satisfies them.
 
-## Panel shell
-
-`app/panel/templates/base.html` is the single layout every page extends; `static/panel.css` (266 lines) holds the design tokens and the responsive rules; `static/panel.js` (dependency-free, ~90 lines) drives only the sidebar collapse and the tablet drawer.
-
-The rule that shapes the implementation: **collapsing the sidebar must never remove a navigation route.** Labels carry `.rail-label` and are hidden with `width:0 + overflow:hidden` under `body.rail-collapsed` — not `display:none` — so the links keep their `href`, stay focusable and stay in find-in-page. `tests/test_panel_shell.py` asserts this, along with the breakpoints, the density tokens and the 12.5px readability floor.
-
 ## 1. Overall architecture
 
 The service is a **modular monolith**: one Python codebase, one deployable
