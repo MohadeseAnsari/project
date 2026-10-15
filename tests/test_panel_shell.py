@@ -254,3 +254,74 @@ def test_the_login_page_is_not_wrapped_in_the_shell():
     login = Path("app/panel/templates/login.html").read_text(encoding="utf-8")
     assert "{% block layout %}" in login
     assert "if (!shell) return" in JS, "the script must no-op without a shell"
+
+# --------------------------------------------------------------------------
+# the page that answers "the panel is blank" from the browser's side
+# --------------------------------------------------------------------------
+
+
+def test_every_template_compiles():
+    """A duplicate or malformed block is a 500, and it takes the page with it.
+
+    The diagnose page shipped broken twice this way: once with a duplicate
+    ``content`` block, once with ``h1``/``crumb`` declared both at the top and
+    inside the layout override. Jinja refuses to compile either, so the route
+    500s and the operator sees an error page rather than a diagnostic.
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader("app/panel/templates"))
+    broken = []
+    for path in sorted(Path("app/panel/templates").glob("*.html")):
+        try:
+            env.parse(path.read_text(encoding="utf-8"))
+        except Exception as exc:                      # noqa: BLE001
+            broken.append(f"{path.name}: {exc}")
+    assert not broken, "templates that do not compile:\n" + "\n".join(broken)
+
+
+def test_no_block_is_declared_twice_in_a_template():
+    """The exact cause of both diagnose-page 500s."""
+    import re as _re
+
+    for path in sorted(Path("app/panel/templates").glob("*.html")):
+        names = _re.findall(r"{%\s*block\s+([a-z_]+)", path.read_text(encoding="utf-8"))
+        dupes = {n for n in names if names.count(n) > 1}
+        assert not dupes, f"{path.name} declares {sorted(dupes)} more than once"
+
+
+@pytest.mark.asyncio
+async def test_the_diagnose_page_renders_and_answers_the_real_questions(session: AsyncSession):
+    """It must measure, not assert.
+
+    Every question on the page is one the SERVER cannot answer about itself:
+    which stylesheet the browser got, whether the script ran, what the CSS
+    viewport is (zoom changes it), and whether the menu overlaps the content.
+    """
+    await _admin(session)
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "shell-admin", "password": "secret123"},
+                          follow_redirects=False)
+        page = await client.get("/diagnose")
+    assert page.status_code == 200
+    body = page.text
+    for probe in ("live-version", "css-state", "js-state", "vw", "mode",
+                  "main-w", "main-h", "overlap", "verdict"):
+        assert f'id="{probe}"' in body, f"the page must measure {probe}"
+    # It compares what the browser fetched against what the server says.
+    # The call is resolved at render time, so the VALUE is what arrives.
+    assert re.search(r"نسخهٔ [0-9a-f]{10} · built", body), (
+        "the page must print the build stamp it compares against"
+    )
+    assert "document.styleSheets" in body, "CSS presence is read from the CSSOM, not assumed"
+    assert "documentElement.classList.contains('no-js')" in body, (
+        "script execution is proven by the marker panel.js removes as its first act"
+    )
+    assert "getBoundingClientRect" in body, "overlap is measured, not guessed"
+
+
+def test_the_diagnose_page_is_reachable_from_the_sidebar():
+    """An owner who cannot see the panel still has to be able to find it."""
+    base = Path("app/panel/templates/base.html").read_text(encoding="utf-8")
+    assert 'href="/diagnose"' in base
+    assert 'title="تشخیص نمایش"' in base

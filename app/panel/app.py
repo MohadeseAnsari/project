@@ -471,6 +471,27 @@ def _audit_title(entry) -> str:
 # --------------------------------------------------------------------------
 
 
+@panel_app.get("/diagnose", response_class=HTMLResponse)
+async def diagnose(request: Request, session: AsyncSession = Depends(session_dep)):
+    """Report the panel's health from the BROWSER's point of view.
+
+    The server can prove it serves correct HTML to every authenticated
+    request, and it did -- repeatedly -- while the owner reported a blank
+    panel. What the server cannot see is what the browser ended up with: a
+    cached stylesheet, a script that failed to run, a zoomed viewport that
+    silently crossed a media-query breakpoint, or a layout that collapses at
+    one particular width.
+
+    So this page measures it client-side and reports the answer. It is the
+    difference between "the server says it works" and "your browser says it
+    works", which is the only distinction that was ever in question.
+    """
+    user = await require_login(request, session)
+    counts_ctx = await dashboard_service.sidebar_badges(session)
+    return templates.TemplateResponse(request, "diagnose.html",
+        _ctx(request, user, active="diagnose", **counts_ctx))
+
+
 @panel_app.get("/records", response_class=HTMLResponse)
 async def records_page(
     request: Request, session: AsyncSession = Depends(session_dep),

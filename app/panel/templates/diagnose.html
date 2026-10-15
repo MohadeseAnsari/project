@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}تشخیص نمایش{% endblock %}
+{% block layout %}
+<div class="grid" id="shell">
+  <div class="scrim" data-close-drawer></div>
+  <aside>
+    <button class="rail-btn" type="button" data-rail-toggle aria-controls="shell"><span class="ic" aria-hidden="true">⇤</span><span class="rail-label">جمع کردن منو</span></button>
+    <div class="brand"><div class="logo">ا</div><div class="rail-label"><b>ایران‌داک</b><span>تشخیص نمایش</span></div></div>
+    <nav>
+      <a href="/" title="داشبورد"><span class="ic" aria-hidden="true">◧</span><span class="rail-label">داشبورد</span></a>
+      <a href="/records" title="رکوردها و بازبینی"><span class="ic" aria-hidden="true">☰</span><span class="rail-label">رکوردها و بازبینی</span></a>
+      <a href="/deliveries" title="ارسال‌ها و تحویل"><span class="ic" aria-hidden="true">➤</span><span class="rail-label">ارسال‌ها و تحویل</span></a>
+      <div class="sep rail-label">تنظیمات</div>
+      <a href="/fields" title="رشته‌ها"><span class="ic" aria-hidden="true">◈</span><span class="rail-label">رشته‌ها</span></a>
+      <a href="/categories" title="دسته‌ها و کلیدواژه‌ها"><span class="ic" aria-hidden="true">◫</span><span class="rail-label">دسته‌ها و کلیدواژه‌ها</span></a>
+      <a href="/channels" title="کانال‌ها"><span class="ic" aria-hidden="true">⇄</span><span class="rail-label">کانال‌ها</span></a>
+      <a href="/prompts" title="پرامپت‌ها"><span class="ic" aria-hidden="true">✎</span><span class="rail-label">پرامپت‌ها</span></a>
+      <a href="/models" title="مدل‌ها"><span class="ic" aria-hidden="true">⚙</span><span class="rail-label">مدل‌ها</span></a>
+      <div class="sep rail-label">مدیریت</div>
+      <a href="/users" title="کاربران و نقش‌ها"><span class="ic" aria-hidden="true">◕</span><span class="rail-label">کاربران و نقش‌ها</span></a>
+      <a href="/audit" title="رویدادها"><span class="ic" aria-hidden="true">⌘</span><span class="rail-label">رویدادها</span></a>
+      <div class="sep rail-label">تشخیص</div>
+      <a href="/diagnose" title="تشخیص نمایش" class="on"><span class="ic" aria-hidden="true">✚</span><span class="rail-label">تشخیص نمایش</span></a>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="top">
+      <button class="menu-btn" type="button" data-rail-toggle aria-label="نمایش منو" aria-controls="shell">☰</button>
+      <div class="page-id"><h1>تشخیص نمایش پنل</h1><span class="crumb">کنسول › تشخیص</span></div>
+      <div class="grow"></div>
+      <div class="top-actions"><a class="btn btn-ghost btn-sm" href="/">بازگشت به داشبورد</a></div>
+    </header>
+    <div class="wrap">
+      <div class="note">
+        این صفحه وضعیت را از زاویهٔ <b>مرورگر شما</b> می‌سنجد، نه از زاویهٔ سرور. اگر همهٔ نشان‌ها سبز بود
+        ولی پنل را خالی می‌بینید، مشکل از حافظهٔ نهان مرورگر است.
+      </div>
+
+      <div class="card"><h3>۱. کدام نسخه در حال اجراست؟</h3><div class="body stack-sm">
+        <div class="hrow"><b>نسخهٔ اعلام‌شده در صفحه</b><span class="grow"></span><span class="badge s-sent">{{ build_stamp() }}</span></div>
+        <div class="hrow"><b>نسخه‌ای که مرورگر واقعاً گرفت</b><span class="grow"></span><span class="badge" id="live-version">…</span></div>
+        <div class="hint">اگر این دو یکی نباشند، مرورگر نسخهٔ کهنه را از حافظهٔ نهان خود سرو می‌کند.</div>
+      </div></div>
+
+      <div class="card"><h3>۲. فایل‌ها بارگذاری شدند؟</h3><div class="body stack-sm">
+        <div class="hrow"><b>panel.css</b><span class="grow"></span><span class="badge" id="css-state">…</span></div>
+        <div class="hrow"><b>panel.js</b><span class="grow"></span><span class="badge" id="js-state">…</span></div>
+        <div class="hint">اگر CSS بارگذاری نشده باشد، صفحه بدون هیچ قالبی نمایش داده می‌شود.</div>
+      </div></div>
+
+      <div class="card"><h3>۳. پنجره و بزرگ‌نمایی</h3><div class="body stack-sm">
+        <div class="hrow"><b>عرض واقعی صفحه (CSS px)</b><span class="grow"></span><span class="badge" id="vw">…</span></div>
+        <div class="hrow"><b>حالت نمایش</b><span class="grow"></span><span class="badge" id="mode">…</span></div>
+        <div class="hint">بزرگ‌نمایی مرورگر باعث می‌شود عرض واقعی از عرض پنجره کمتر شود و قانون ۸۲۰ پیکسل ناخواسته فعال گردد.</div>
+      </div></div>
+
+      <div class="card"><h3>۴. آیا محتوا واقعاً در صفحه هست؟</h3><div class="body stack-sm">
+        <div class="hrow"><b>عرض ستون محتوا</b><span class="grow"></span><span class="badge" id="main-w">…</span></div>
+        <div class="hrow"><b>ارتفاع ستون محتوا</b><span class="grow"></span><span class="badge" id="main-h">…</span></div>
+        <div class="hrow"><b>آیا منو روی محتوا افتاده؟</b><span class="grow"></span><span class="badge" id="overlap">…</span></div>
+      </div></div>
+
+      <div class="card"><h3>۵. نتیجه</h3><div class="body"><div id="verdict" class="hint empty">در حال بررسی…</div></div></div>
+    </div>
+    <div class="build-stamp"><span class="grow"></span><span>نسخهٔ {{ build_stamp() }}</span></div>
+  </main>
+</div>
+
+<script>
+/* Measured in the page, never assumed. Everything here is the browser's own
+   answer to "what did you actually get" — the one question the server cannot
+   answer about itself. */
+(function () {
+  function set(id, text, cls) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'badge ' + (cls || 's-off');
+  }
+  var problems = [];
+
+  // 1. Did the stylesheet the page linked actually arrive, and is it the one?
+  var sheets = document.styleSheets;
+  var panelSheet = null, cssLoaded = false;
+  for (var i = 0; i < sheets.length; i++) {
+    var href = sheets[i].href || '';
+    if (href.indexOf('panel.css') > -1) { panelSheet = sheets[i]; cssLoaded = true; }
+  }
+  var rules = 0, hasGrid = false;
+  try { rules = panelSheet ? panelSheet.cssRules.length : 0;
+        hasGrid = false;
+        for (var j = 0; j < (panelSheet ? panelSheet.cssRules.length : 0); j++) {
+          if ((panelSheet.cssRules[j].cssText || '').indexOf('.grid.collapsed') > -1) hasGrid = true;
+        }
+  } catch (e) { /* cross-origin sheet; treat as present but uninspected */ }
+  set('css-state', cssLoaded ? (rules ? (rules + ' قانون') : 'بارگذاری شد') : 'بارگذاری نشد',
+      cssLoaded ? 's-sent' : 's-failed');
+  if (!cssLoaded) problems.push('panel.css بارگذاری نشده است.');
+  if (cssLoaded && rules && !hasGrid) problems.push('stylesheet قدیمی است (کلاس کشوی کناری ندارد).');
+
+  var liveVersion = 'نامشخص';
+  var link = document.querySelector('link[href*="panel.css"]');
+  if (link) { var m = link.href.match(/v=([a-f0-9]+)/); if (m) liveVersion = m[1]; }
+  var stated = '{{ build_stamp() }}'.split(' ')[0].replace('نسخهٔ', '').trim();
+  set('live-version', liveVersion, liveVersion === stated ? 's-sent' : 's-failed');
+  if (liveVersion !== stated) problems.push('نسخهٔ مرورگر با نسخهٔ سرور یکی نیست: ' + liveVersion + ' ≠ ' + stated);
+
+  // 2. Did the script run? The shell removes no-js as its first act.
+  var jsRan = !document.documentElement.classList.contains('no-js');
+  set('js-state', jsRan ? 'اجرا شد' : 'اجرا نشد', jsRan ? 's-sent' : 's-failed');
+  if (!jsRan) problems.push('panel.js اجرا نشده است.');
+
+  // 3. Viewport and zoom. This is the one that hides itself: a 1280px window
+  //    at 150% zoom reports 853 CSS px, which crosses the 820px breakpoint.
+  var vw = window.innerWidth;
+  set('vw', vw + ' px', vw <= 820 ? 's-ready' : 's-sent');
+  set('mode', vw <= 820 ? 'حالت کشوی کناری' : 'حالت دسکتاپ', vw <= 820 ? 's-ready' : 's-sent');
+  if (vw <= 820) problems.push('عرض واقعی زیر ۸۲۰ پیکسل است — بزرگ‌نمایی مرورگر را بررسی کنید (Ctrl+0).');
+
+  // 4. Is the content column actually laid out, and is the menu on top of it?
+  var main = document.querySelector('main');
+  var aside = document.querySelector('aside');
+  var mw = main ? Math.round(main.getBoundingClientRect().width) : 0;
+  var mh = main ? Math.round(main.getBoundingClientRect().height) : 0;
+  set('main-w', mw + ' px', mw > 300 ? 's-sent' : 's-failed');
+  set('main-h', mh + ' px', mh > 200 ? 's-sent' : 's-failed');
+  if (mw <= 300) problems.push('ستون محتوا تقریباً عرضی ندارد (' + mw + 'px).');
+
+  var overlapping = 'خیر';
+  var overlapCls = 's-sent';
+  if (main && aside) {
+    var a = aside.getBoundingClientRect(), m = main.getBoundingClientRect();
+    var asideVisible = a.right > 0 && a.left < window.innerWidth;
+    var overlapped = asideVisible && a.left < (m.right - 2) && a.right > (m.left + 2);
+    if (overlapped) { overlapping = 'بله — منو روی محتوا است'; overlapCls = 's-failed'; }
+  }
+  set('overlap', overlapping, overlapCls);
+
+  var verdict = document.getElementById('verdict');
+  if (verdict) {
+    if (problems.length === 0) {
+      verdict.className = 'ok-note';
+      verdict.textContent = 'همه‌چیز درست است: نسخه تازه است، فایل‌ها بارگذاری شده‌اند و چیدمان سالم است. '
+        + 'اگر باز هم پنل را خالی می‌بینید، در یک پنجرهٔ ناشناس (Incognito) باز کنید.';
+    } else {
+      verdict.className = 'note';
+      verdict.textContent = 'مشکلات: ' + problems.join(' | ');
+    }
+  }
+})();
+</script>
+{% endblock %}
