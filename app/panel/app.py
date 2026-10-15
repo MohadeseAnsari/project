@@ -475,7 +475,7 @@ def _audit_title(entry) -> str:
 async def records_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
-    q: str = "", order: str = "newest", page: int = 1, approved: str = "no",
+    q: str = "", order: str = "newest", page: int = 1, approved: str = "",
     tab: str = "", platform: str = "", main_id: str = "",
 ):
     """Records and review — one page, records only.
@@ -489,6 +489,15 @@ async def records_page(
 
     ``?tab=deliveries`` still redirects to ``/deliveries`` so old links and
     bookmarks keep working instead of 404ing.
+
+    ``approved`` defaults to "" — show everything. It used to default to "no",
+    meaning "not yet approved", which was defensible while the dashboard was the
+    entry point and most records were awaiting review. It stopped being true:
+    once records reached "published" the page went BLANK, and the «منتشرشده» tab
+    could never match anything, because the default filter excluded exactly the
+    status that tab selects. A list whose default view hides its own contents is
+    indistinguishable from a broken one, so "needs review" is now an explicit
+    filter and the dashboard's KPI card links straight to it.
     """
     user = await require_login(request, session)
     from urllib.parse import urlencode

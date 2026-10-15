@@ -286,3 +286,77 @@ async def test_ordering_is_now_reachable_rather_than_a_hidden_input(session: Asy
     assert re.findall(pattern, oldest) == list(reversed(re.findall(pattern, newest))), (
         "ordering by oldest really reverses the list"
     )
+
+# --------------------------------------------------------------------------
+# the default view must not hide the page's own contents
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_default_view_shows_every_record(session: AsyncSession):
+    """The bug: the page defaulted to "not yet approved".
+
+    So once records reached ``published`` — which is what the panel is FOR —
+    the records page rendered blank, and looked identical to a broken panel.
+    The owner reported "I don't see anything on any page"; that was this.
+    """
+    await _admin(session)
+    rows = await _records(session)
+    rows[0].status = "published"
+    await session.commit()
+    async with panel_client() as client:
+        await _login(client)
+        page = await _page(client)
+    assert "Thesis 0" in _table(page), "a published record must be visible by default"
+
+
+@pytest.mark.asyncio
+async def test_every_status_tab_can_actually_match(session: AsyncSession):
+    """«منتشرشده» could never show anything.
+
+    The default ``approved=no`` filter excluded exactly the records the
+    published tab selects, so the two cancelled out and the tab was empty
+    forever — a permanently broken control that looked perfectly normal.
+    """
+    await _admin(session)
+    rows = await _records(session)
+    for row in rows:
+        row.status = "published"
+    await session.commit()
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/records", params={"status": "published"})
+    assert "Thesis 0" in _table(page.text), "the published tab must show published records"
+
+
+@pytest.mark.asyncio
+async def test_needing_review_is_still_one_click_away(session: AsyncSession):
+    """The useful default is preserved, just not imposed."""
+    await _admin(session)
+    await _records(session)
+    async with panel_client() as client:
+        await _login(client)
+        page = await _page(client, approved="no")
+        assert "Thesis 0" in _table(page), "the explicit filter still works"
+        all_records = await _page(client)
+    assert "نیازمند بازبینی" in all_records, "and the option is still offered"
+
+
+@pytest.mark.asyncio
+async def test_the_dashboard_kpi_still_lands_on_the_pending_queue(session: AsyncSession):
+    """The dashboard points at the filter that used to be the default."""
+    await _admin(session)
+    rows = await _records(session)
+    for row in rows:
+        row.status = "published"
+    await session.commit()
+    async with panel_client() as client:
+        await _login(client)
+        dashboard = (await client.get("/")).text   # the card lives here
+        href = re.search(r'href="(/records\?status=review[^"]*)"', dashboard)
+        assert href, "the review card must link somewhere"
+        landed = await client.get(href.group(1))
+    assert landed.status_code == 200
+    # Everything is published, so the pending queue is legitimately empty — but
+    # it must be empty BECAUSE nothing is pending, not because of a stale default.
+    assert 'value="no" selected' in landed.text

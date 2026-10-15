@@ -50,9 +50,9 @@
           <select id="f-uni" name="university"><option value="">همهٔ دانشگاه‌ها</option>{% for u in university_options %}<option value="{{ u }}" {% if university==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>
           <label for="f-appr">وضعیت تأیید</label>
           <select id="f-appr" name="approved">
+            <option value="" {% if not approved %}selected{% endif %}>همه</option>
             <option value="no" {% if approved=='no' %}selected{% endif %}>نیازمند بازبینی</option>
             <option value="yes" {% if approved=='yes' %}selected{% endif %}>تأییدشده</option>
-            <option value="" {% if not approved %}selected{% endif %}>همه (با تأییدشده‌ها)</option>
           </select>
           <label for="f-order">ترتیب</label>
           <select id="f-order" name="order">
