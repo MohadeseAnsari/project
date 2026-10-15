@@ -196,3 +196,24 @@ this panel is the only place counts appear.
    (`message_id=174486`, audit `submit,approve`).
 10. **Machine API untouched.** `POST /submit`, `/health`, `GET /records/{id}`
     keep their exact contracts (covered by the existing suite).
+
+## Shell
+
+`base.html` renders `#shell` once for every page; `static/panel.css` and `static/panel.js` own the frame and nothing else.
+
+**Collapsible sidebar.** 230px expanded, 60px icon rail collapsed, chosen by the operator and remembered in `localStorage`. Labels are collapsed to **zero width**, never removed from the DOM, so every route stays focusable, findable and reachable from a keyboard or screen reader — and the collapse works with CSS alone if the script fails to load.
+
+**Responsive.** There were no breakpoints before; the grid was `250px + 1fr` at every width.
+
+| Width | Layout |
+|---|---|
+| ≥1281px | full: 230px sidebar, two-column card rows |
+| 1025–1280px | tighter gutter, card rows stack to one column |
+| 821–1024px | **rail by default** — 230px of nav is a third of a landscape tablet; an explicit toggle still overrides |
+| ≤820px | sidebar becomes an off-canvas drawer behind a hamburger, with a scrim, Escape-to-close and close-on-navigate |
+| ≤560px | single-column KPIs, breadcrumb hidden |
+
+Also: `prefers-reduced-motion` honoured, and a print stylesheet that drops the navigation.
+
+**Density tokens.** Every gap, padding, row height and width comes from `--sp-*`, `--row-pad`, `--fs-*`, `--sidebar-w`, `--rail-w`, `--header-h`, so "make it tighter" is one edit. Rows went from ~40px to ~34px, and the page header from a stacked two lines (~62px) to a single 48px line whose breadcrumb truncates rather than wrapping. Table text is **12.5px, a deliberate floor** — denser would be cheaper on scrolling and worse to read for every hour spent here.
+
