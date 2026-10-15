@@ -1,14 +1,16 @@
-"""One page for fields, categories and keywords (item 4).
+"""Fields and categories are two independent pages.
 
-The owner asked to merge the three and fix their structure. They were split
-because they were written at different times, not because the concepts are
-different: a field IS a row, its category IS a column on that row, and the
-matched keyword is why the column holds what it holds. Splitting them meant
-changing one thing in one tab while the consequence sat in another.
+They were merged into one page with two tabs, and the owner later asked for
+them back as separate pages. The reasoning that justified the merge is still
+worth keeping, though, and this file keeps testing it: a field IS a row, its
+category IS a column on that row, and the matched keyword is why the column
+holds what it holds. So the field table still carries category and keyword
+inline with an editable select — editing a field's category stays on the field
+row.
 
-So this is ONE page with two tabs, and the field table carries category and
-keyword inline with an editable category select. ``/categories`` redirects to
-the categories tab rather than 404ing, so old links and bookmarks work.
+What changed is only the browsing job. ``/categories`` is a real page again,
+listing the buckets and what falls into each. ``/fields?tab=categories`` still
+redirects there, so old links and bookmarks work.
 """
 
 import pytest
@@ -62,18 +64,34 @@ async def _login(client):
 
 
 @pytest.mark.asyncio
-async def test_one_page_holds_fields_and_categories(session: AsyncSession):
+async def test_each_is_its_own_page(session: AsyncSession):
     await _admin(session)
     await _seed(session)
     async with panel_client() as client:
         await _login(client)
-        page = await client.get("/fields")
-    assert page.status_code == 200
-    # Both concepts on one page, as tabs.
-    assert "رشته‌ها" in page.text
-    assert "دسته‌ها" in page.text
-    # And the old separate page is gone from the sidebar.
-    assert 'href="/categories"' not in page.text
+        fields = await client.get("/fields")
+        categories = await client.get("/categories")
+    assert fields.status_code == 200 and categories.status_code == 200
+    assert "رشته‌ها" in fields.text
+    assert "دسته‌ها و کلیدواژه‌ها" in categories.text
+    # The fields page LINKS to the categories page; it does not embed the list.
+    # Category names do appear there, but only as <option>s of the per-row
+    # editor, so the check is for the list's own chrome rather than its names.
+    assert 'href="/categories"' in fields.text
+    assert "تغییر دستهٔ یک رشته" not in fields.text
+    assert "تغییر دستهٔ یک رشته" in categories.text
+
+
+@pytest.mark.asyncio
+async def test_the_sidebar_offers_both_pages_separately(session: AsyncSession):
+    """The owner's actual requirement: independently reachable, not tabbed."""
+    await _admin(session)
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/")
+    assert 'href="/fields"' in page.text
+    assert 'href="/categories"' in page.text
+    assert page.text.count('href="/categories"') == 1
 
 
 @pytest.mark.asyncio
@@ -91,12 +109,12 @@ async def test_the_field_table_carries_category_and_keyword_inline(session: Asyn
 
 
 @pytest.mark.asyncio
-async def test_categories_tab_lists_categories_with_their_fields(session: AsyncSession):
+async def test_the_categories_page_lists_categories_with_their_fields(session: AsyncSession):
     await _admin(session)
     await _seed(session)
     async with panel_client() as client:
         await _login(client)
-        page = await client.get("/fields?tab=categories")
+        page = await client.get("/categories")
     assert page.status_code == 200
     assert "پزشکی و علوم سلامت" in page.text
     assert "فنی و مهندسی" in page.text
@@ -104,15 +122,40 @@ async def test_categories_tab_lists_categories_with_their_fields(session: AsyncS
 
 
 @pytest.mark.asyncio
-async def test_the_two_tabs_are_both_reachable(session: AsyncSession):
+async def test_the_two_pages_cross_link(session: AsyncSession):
+    """Each page points at the other, so neither is a dead end."""
     await _admin(session)
     await _seed(session)
     async with panel_client() as client:
         await _login(client)
-        fields_tab = await client.get("/fields")
-        categories_tab = await client.get("/fields?tab=categories")
-    assert "/fields?tab=categories" in fields_tab.text
-    assert "/fields" in categories_tab.text
+        fields_page = await client.get("/fields")
+        categories_page = await client.get("/categories")
+    assert 'href="/categories"' in fields_page.text
+    assert 'href="/fields"' in categories_page.text
+
+
+@pytest.mark.asyncio
+async def test_the_categories_page_can_be_searched(session: AsyncSession):
+    await _admin(session)
+    await _seed(session)
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/categories", params={"q": "فنی"})
+    assert "فنی و مهندسی" in page.text
+    assert "پزشکی و علوم سلامت" not in page.text, "the filter actually filters"
+
+
+@pytest.mark.asyncio
+async def test_a_category_with_no_fields_says_so(session: AsyncSession):
+    """An empty bucket is information; a blank card is a bug."""
+    await _admin(session)
+    session.add(Category(name="دستهٔ خالی", description="Empty"))
+    await session.commit()
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/categories")
+    assert "دستهٔ خالی" in page.text
+    assert "هنوز رشته‌ای در این دسته نیست" in page.text
 
 
 # --------------------------------------------------------------------------
@@ -121,27 +164,36 @@ async def test_the_two_tabs_are_both_reachable(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_the_old_categories_url_redirects_instead_of_404(session: AsyncSession):
+async def test_the_old_tab_url_redirects_instead_of_404(session: AsyncSession):
+    """A bookmark or a link from an old email must not 404."""
     await _admin(session)
     async with panel_client() as client:
         await _login(client)
-        response = await client.get("/categories", follow_redirects=False)
-        assert response.status_code in (301, 302)
-        landed = await client.get(response.headers["location"])
+        response = await client.get("/fields", params={"tab": "categories"},
+                                    follow_redirects=False)
+        assert response.status_code == 301
+        assert response.headers["location"] == "/categories"
+        landed = await client.get("/categories")
     assert landed.status_code == 200
     assert "دسته" in landed.text
 
 
-def test_the_standalone_page_and_template_are_gone():
+def test_the_standalone_page_is_a_real_template():
     from pathlib import Path
 
-    assert not Path("app/panel/templates/categories.html").exists(), (
-        "the separate categories page was merged into /fields"
-    )
+    assert Path("app/panel/templates/categories.html").exists()
+
+
+def test_no_link_goes_through_the_old_tab_url():
+    from pathlib import Path
+
+    for name in Path("app/panel/templates").glob("*.html"):
+        html = name.read_text(encoding="utf-8")
+        assert "tab=categories" not in html, f"{name} still links via the old tab URL"
 
 
 # --------------------------------------------------------------------------
-# editing still works from the merged page
+# editing still works from the field row
 # --------------------------------------------------------------------------
 
 
@@ -169,7 +221,7 @@ async def test_category_can_be_changed_from_the_field_row(session: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_search_filters_the_merged_page(session: AsyncSession):
+async def test_search_filters_the_fields_page(session: AsyncSession):
     await _admin(session)
     await _seed(session)
     async with panel_client() as client:
