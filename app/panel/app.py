@@ -6,8 +6,10 @@ Human auth uses panel users + signed cookies (not the machine shared secret);
 every review/retry/config change is written to ``audit_logs`` for history.
 """
 
+import hashlib
 import logging
 import time
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -121,6 +123,45 @@ panel_app = FastAPI(
     dependencies=[Depends(verify_csrf)],
 )
 panel_app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
+
+
+@lru_cache(maxsize=1)
+def _asset_version() -> str:
+    """A short content hash of the panel's own assets, for cache-busting.
+
+    ``/static/panel.css`` is a stable URL, so a browser that fetched it once
+    keeps serving its copy — and an admin panel where the CSS *is* the design
+    change means the owner sees the old interface while the server has already
+    changed. No Cache-Control was being sent, which left freshness to browser
+    heuristics.
+
+    The fix is the standard one: keep the URL stable but vary the query string
+    with the content, so a changed file is a different URL and an unchanged one
+    is still cacheable. Hashed once per process, not per request.
+    """
+    digest = hashlib.sha256()
+    for name in ("panel.css", "panel.js"):
+        asset = _here / "static" / name
+        if asset.exists():
+            digest.update(asset.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+templates.env.globals["asset_v"] = _asset_version()
+
+
+@panel_app.middleware("http")
+async def _no_store_html(request: Request, call_next):
+    """Never let a browser cache panel HTML.
+
+    The data changes constantly — a record is approved, a delivery fails — and
+    a cached page would show a status that stopped being true minutes ago. The
+    static mount sets its own headers, so this only ever sees HTML.
+    """
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 @panel_app.exception_handler(CSRFError)

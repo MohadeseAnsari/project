@@ -197,6 +197,14 @@ this panel is the only place counts appear.
 10. **Machine API untouched.** `POST /submit`, `/health`, `GET /records/{id}`
     keep their exact contracts (covered by the existing suite).
 
+## Asset delivery
+
+`base.html` requests `/static/panel.css?v=<hash>` and `/static/panel.js?v=<hash>`, where the hash is a SHA-256 prefix over both files, computed once per process (`_asset_version()` in `app/panel/app.py`). Panel HTML is sent `Cache-Control: no-store, must-revalidate`.
+
+Both exist because of a miss worth recording: a whole round of redesign — shell, page split, pagination — was verified with an **in-process ASGI client**, which proves the code renders correctly, and the owner still saw an unchanged panel. The static assets are served from a stable URL and no `Cache-Control` was sent, so the browser kept its old copy. No check asked a real HTTP client what the server actually sent.
+
+`tests/test_asset_cache_busting.py` closes that gap: it asks the running server over HTTP what it emits. It runs where the panel is reachable (`docker compose exec web`) and **skips loudly** elsewhere rather than passing silently.
+
 ## Shell
 
 `base.html` renders `#shell` once for every page; `static/panel.css` and `static/panel.js` own the frame and nothing else.

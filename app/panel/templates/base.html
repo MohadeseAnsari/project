@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title>{# ?v is the content hash of panel.css/panel.js (see _asset_version in app.py).
+   Without it the URL never changes, so a browser keeps serving the CSS it
+   fetched days ago — which for an admin panel means the owner sees the old
+   interface while the server has already changed. #}
+<link rel="stylesheet" href="/static/panel.css?v={{ asset_v }}"></head>
 <body>
 {% block layout %}
 <div class="grid" id="shell">
@@ -60,5 +64,5 @@
 </div>
 {% endblock %}
 <script src="/static/htmx.min.js" defer></script>
-<script src="/static/panel.js" defer></script>
+<script src="/static/panel.js?v={{ asset_v }}" defer></script>
 </body></html>
