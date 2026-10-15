@@ -1,0 +1,40 @@
+{# Live numbers + health, polled by the dashboard (item 19).
+
+   Split into its own partial so the dashboard re-fetches ONLY this region on
+   a timer: the 7-day chart, the event timeline and the channel table are
+   stable over a few seconds, and re-rendering them would only add flicker.
+   Every figure here is a cheap GROUP BY count, which is why the cadence can
+   stay generous (settings.panel_dashboard_refresh_seconds). #}
+<div class="kpis">
+  <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی انسانی</div></div></div>
+  <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف / در حال پردازش</div></div></div>
+  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده در کانال‌ها</div></div></div>
+  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق — نیازمند بررسی</div></div></div>
+</div>
+
+<div class="card">
+  <h3>سلامت سامانه<span class="grow"></span><span class="hint" style="font-weight:400">به‌روزرسانی خودکار</span></h3>
+  <div class="body" style="display:flex;flex-direction:column;gap:11px">
+    <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">API</b><span class="grow"></span><span class="badge s-sent">ok</span></div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">پایگاه‌داده</b><span class="grow"></span><span class="badge s-sent">connected</span></div>
+    {# The model that actually writes the news. Its state is computed in the
+       service layer, so this row and any other consumer cannot disagree. #}
+    {% set m = model_health %}
+    {% set m_state = m.state %}
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="dot{% if m_state != 'connected' %} a{% endif %}"></span>
+      <b style="font-size:13px">مدل فعال (تولید خبر)</b>
+      <span class="grow"></span>
+      <span class="badge {% if m_state == 'connected' %}s-sent{% elif m_state == 'untested' %}s-ready{% else %}s-failed{% endif %}">
+        {{ {'connected': 'Connected', 'untested': 'Checking', 'disconnected': 'Disconnected', 'degraded': 'Degraded', 'missing': 'Not configured'}[m_state] }}
+      </span>
+    </div>
+    <div class="hint" style="margin-top:-6px">
+      {% if m.name %}<span class="num" style="direction:ltr;display:inline-block">{{ m.api_model }}</span> ·
+      {% endif %}{% if m.tested_at %}آخرین بررسی: {{ m.tested_at|jalali }}{% else %}هنوز بررسی نشده{% endif %}{% if m.latency_ms %} · {{ m.latency_ms|fa }} میلی‌ثانیه{% endif %}
+      {%- if m.error %} · {{ m.error }}{% endif %}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if not worker_fresh %} a{% endif %}"></span><b style="font-size:13px">worker تولید</b><span class="grow"></span><span class="badge {% if worker_fresh %}s-sent{% else %}s-ready{% endif %}">{{ 'Active' if worker_fresh else 'Idle' }}</span></div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if pending_deliveries %} a{% endif %}"></span><b style="font-size:13px">worker ارسال</b><span class="grow"></span><span class="badge {% if pending_deliveries %}s-ready{% else %}s-sent{% endif %}">{{ ('صف ' ~ pending_deliveries ~ ' مورد') if pending_deliveries else 'صف خالی' }}</span></div>
+  </div>
+</div>

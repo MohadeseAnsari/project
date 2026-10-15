@@ -19,7 +19,8 @@ from app.db.models import AuditLog, Category, Channel, Delivery, Main
 from app.messaging.dispatcher import claim_next_delivery, deliver_one, ensure_pending_deliveries
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
-from app.worker.worker import process_job
+from app.worker.worker import claim_next_job, process_job
+from tests.panel_test_client import panel_client
 
 
 class StubClient:
@@ -50,8 +51,9 @@ async def _admin(session: AsyncSession) -> None:
     await session.commit()
 
 
-def _panel() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _panel():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 @pytest.mark.asyncio
@@ -85,9 +87,13 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
         assert row.status == "ready"
 
         # Generation Worker picks it up on its next poll (LLM call faked).
+        # Claim first, exactly like app.worker.worker.run_worker does: the
+        # state machine only allows processing -> review.
+        claimed = await claim_next_job(session)
+        assert claimed is not None and claimed.id == record_id
         with patch("app.worker.worker.generate_news") as mock_gen:
             mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
-            await process_job(session, row)
+            await process_job(session, claimed)
         await session.refresh(row)
         assert row.status == "review"
         assert row.output_json == {"title": "T", "lead": "L", "body": "B"}
@@ -125,7 +131,8 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
         )
         assert actions == ["approve", "submit"]
 
-    # The machine API is untouched: the IranDoc client reads the same record.
+    # The machine API is untouched: the IranDoc client reads the same record,
+    # and now sees the true lifecycle state: approved + delivered = published.
     from httpx import AsyncClient as HttpxClient
 
     async with HttpxClient(transport=ASGITransport(app=api_app), base_url="http://test") as api:
@@ -133,4 +140,6 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
             f"/records/{record_id}", params={"shared_Secret": settings.shared_secret}
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "review"
+        assert response.json()["status"] == "published"
+        assert response.json()["approved_at"] is not None
+        assert response.json()["published_at"] is not None

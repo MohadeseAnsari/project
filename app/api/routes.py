@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.limits import limiter
 from app.auth.secret import verify_secret
 from app.db.connection import get_session
-from app.db.models import Main
 from app.schemas.news import (
     ConnectionTestResponse,
     DeliveryInfo,
@@ -86,10 +85,10 @@ async def submit(request: Request, session: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=422, detail=str(e))
 
     try:
-        from app.submissions import create_thesis_record
+        from app.services import records as record_service
 
         try:
-            record = await create_thesis_record(
+            record = await record_service.create_thesis_record(
                 session,
                 username=data.username,
                 title=data.title,
@@ -156,6 +155,7 @@ async def list_records(
     university: str | None = Query(None, description="Substring filter on university (case-insensitive)."),
     q: str | None = Query(None, description="Search across title/abstract/field/university/author/supervisor."),
     order: str = Query("newest", description="Result order: newest (default) or oldest."),
+    approved: bool | None = Query(None, description="True: only approved; False: only needs-review; omit: all."),
     session: AsyncSession = Depends(get_session),
 ):
     """List records with SQL LIMIT/OFFSET pagination for the review panel.
@@ -165,50 +165,20 @@ async def list_records(
     ``q`` is a case-insensitive substring match across the main thesis text
     columns; ``field``/``university`` narrow it further. ``order`` selects
     creation order only, keeping the listing deterministic for review.
+    ``approved`` splits reviewed rows into approved vs still-needs-review
+    (``approved_at`` set or not); omitted means both.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
     if order not in ("newest", "oldest"):
         raise HTTPException(status_code=422, detail="order must be newest or oldest")
 
-    from sqlalchemy import func, or_, select
+    from app.services import records as record_service
 
-    filters = []
-    if status:
-        filters.append(Main.status == status)
-    if field:
-        filters.append(Main.field.ilike(f"%{field}%"))
-    if university:
-        filters.append(Main.university.ilike(f"%{university}%"))
-    if q:
-        like = f"%{q}%"
-        filters.append(
-            or_(
-                Main.title.ilike(like),
-                Main.abstract.ilike(like),
-                Main.field.ilike(like),
-                Main.university.ilike(like),
-                Main.author.ilike(like),
-                Main.supervisor.ilike(like),
-            )
-        )
-
-    count_result = await session.execute(
-        select(func.count()).select_from(Main).where(*filters) if filters else select(func.count()).select_from(Main)
+    rows, total = await record_service.list_records(
+        session, page=page, page_size=page_size, status=status, field=field,
+        university=university, q=q, order=order, approved=approved,
     )
-    total = count_result.scalar_one()
-
-    ordering = (
-        [Main.created_at.desc(), Main.id.desc()]
-        if order == "newest"
-        else [Main.created_at.asc(), Main.id.asc()]
-    )
-    query = select(Main)
-    if filters:
-        query = query.where(*filters)
-    query = query.order_by(*ordering).limit(page_size).offset((page - 1) * page_size)
-    result = await session.execute(query)
-    rows = list(result.scalars().all())
     return {
         "items": [
             {
@@ -220,6 +190,7 @@ async def list_records(
                 "author": r.author,
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
+                "approved_at": r.approved_at,
             }
             for r in rows
         ],
@@ -260,60 +231,19 @@ async def get_record(
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    from sqlalchemy import select
+    from app.services import records as record_service
 
-    from app.db.models import Channel, Delivery
-
-    result = await session.execute(select(Main).where(Main.id == record_id))
-    record = result.scalar_one_or_none()
+    record = await record_service.get_record(session, record_id)
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
     return await _record_detail_payload(session, record)
 
 
-async def _record_detail_payload(session: AsyncSession, record: Main) -> dict:
+async def _record_detail_payload(session: AsyncSession, record) -> dict:
     """Build the extended record payload (shared by GET and PATCH)."""
-    from sqlalchemy import select
+    from app.services import records as record_service
 
-    from app.db.models import Channel, Delivery
-
-    deliveries_result = await session.execute(
-        select(Delivery, Channel)
-        .join(Channel, Channel.id == Delivery.channel_id)
-        .where(Delivery.main_id == record.id)
-        .order_by(Delivery.id)
-    )
-    return {
-        "id": record.id,
-        "status": record.status,
-        "field": record.field,
-        "output_json": record.output_json,
-        "error_message": record.error_message,
-        "author": record.author,
-        "supervisor": record.supervisor,
-        "university": record.university,
-        "table_of_contents": record.table_of_contents,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-        "field_id": record.field_id,
-        "category_id": record.category_id,
-        "model_id": record.model_id,
-        "prompt_id": record.prompt_id,
-        "deliveries": [
-            {
-                "id": delivery.id,
-                "channel_id": delivery.channel_id,
-                "main_id": delivery.main_id,
-                "platform": channel.platform,
-                "username": channel.username,
-                "status": delivery.status,
-                "attempts": delivery.attempts,
-                "error_message": delivery.error_message,
-                "sent_at": delivery.sent_at,
-            }
-            for delivery, channel in deliveries_result.all()
-        ],
-    }
+    return await record_service.record_detail(session, record)
 
 
 @router.patch(
@@ -334,7 +264,8 @@ async def review_record(
     """Apply a human review decision to a ``review`` record.
 
     Only ``review`` rows may transition (409 otherwise) so an already-decided
-    or still-processing job is never overwritten. ``approve`` flips gated
+    or still-processing job is never overwritten. ``approve`` stamps
+    ``approved_at`` (first approval wins) and flips gated
     ``awaiting_confirmation`` deliveries to ``pending``; ``reject`` moves the
     record to ``rejected`` (gated deliveries stay gated and are therefore never
     sent); ``save_draft`` only edits the stored ``output_json``. Optional
@@ -344,8 +275,8 @@ async def review_record(
 
     from sqlalchemy import select
 
-    from app.messaging.dispatcher import confirm_deliveries_for_article
     from app.schemas.news import ReviewActionRequest
+    from app.services import records as record_service
 
     body = payload or {}
     secret = body.get("shared_Secret")
@@ -358,37 +289,18 @@ async def review_record(
     if data.action not in ("approve", "reject", "save_draft"):
         raise HTTPException(status_code=422, detail="action must be approve, reject or save_draft")
 
-    result = await session.execute(select(Main).where(Main.id == record_id))
-    record = result.scalar_one_or_none()
+    record = await record_service.get_record(session, record_id)
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
-    if record.status != "review":
-        raise HTTPException(status_code=409, detail="Record is not in review state")
-
-    if data.title is not None or data.lead is not None or data.body is not None:
-        current = dict(record.output_json or {})
-        if data.title is not None:
-            current["title"] = data.title
-        if data.lead is not None:
-            current["lead"] = data.lead
-        if data.body is not None:
-            current["body"] = data.body
-        record.output_json = current
-
-    if data.action == "approve":
-        record.updated_at = datetime.utcnow()
-        await session.commit()
-        await confirm_deliveries_for_article(session, record.id)
-        await session.refresh(record)
-    elif data.action == "reject":
-        record.status = "rejected"
-        record.updated_at = datetime.utcnow()
-        await session.commit()
-        await session.refresh(record)
-    else:  # save_draft
-        record.updated_at = datetime.utcnow()
-        await session.commit()
-        await session.refresh(record)
+    try:
+        record = await record_service.apply_review(
+            session, record, action=data.action,
+            title=data.title, lead=data.lead, body=data.body,
+        )
+    except ValueError as e:
+        if str(e) == "not-in-review":
+            raise HTTPException(status_code=409, detail="Record is not in review state")
+        raise HTTPException(status_code=422, detail=str(e))
 
     return await _record_detail_payload(session, record)
 
@@ -419,39 +331,12 @@ async def list_deliveries(
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    from sqlalchemy import func, select
+    from app.services import deliveries as delivery_service
 
-    from app.db.models import Channel, Delivery
-
-    filters = []
-    if status:
-        filters.append(Delivery.status == status)
-    if main_id is not None:
-        filters.append(Delivery.main_id == main_id)
-
-    base = select(func.count()).select_from(Delivery)
-    if platform:
-        base = base.join(Channel, Channel.id == Delivery.channel_id).where(
-            Channel.platform == platform
-        )
-    if filters:
-        base = base.where(*filters)
-    total = (await session.execute(base)).scalar_one()
-
-    query = (
-        select(Delivery, Channel)
-        .join(Channel, Channel.id == Delivery.channel_id)
-        .order_by(Delivery.id.desc())
-        .limit(page_size)
-        .offset((page - 1) * page_size)
+    pairs, total = await delivery_service.fetch_deliveries(
+        session, page=page, page_size=page_size, status=status,
+        platform=platform, main_id=main_id,
     )
-    if status:
-        query = query.where(Delivery.status == status)
-    if platform:
-        query = query.where(Channel.platform == platform)
-    if main_id is not None:
-        query = query.where(Delivery.main_id == main_id)
-    rows = (await session.execute(query)).all()
     return {
         "items": [
             {
@@ -465,7 +350,7 @@ async def list_deliveries(
                 "error_message": delivery.error_message,
                 "sent_at": delivery.sent_at,
             }
-            for delivery, channel in rows
+            for delivery, channel, _article in pairs
         ],
         "total": total,
         "page": page,
@@ -493,45 +378,63 @@ async def retry_delivery(
     an already-sent article is never duplicated by a retry click. Attempts are
     reset to 0 (owner-approved) so the sender's bounded retry budget restarts.
     """
-    from datetime import datetime
-
-    from sqlalchemy import select
-
-    from app.db.models import Channel, Delivery
+    from app.services import deliveries as delivery_service
 
     body = payload or {}
     secret = body.get("shared_Secret")
     if not secret or not verify_secret(secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    result = await session.execute(select(Delivery).where(Delivery.id == delivery_id))
-    delivery = result.scalar_one_or_none()
-    if not delivery:
+    found = await delivery_service.delivery_with_channel(session, delivery_id)
+    if found is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.status != "failed":
+    delivery, channel = found
+    try:
+        delivery = await delivery_service.retry_delivery(session, delivery)
+    except ValueError:
         raise HTTPException(status_code=409, detail="Delivery is not retryable")
 
-    delivery.status = "pending"
-    delivery.attempts = 0
-    delivery.claimed_at = None
-    delivery.error_message = None
-    delivery.next_attempt_at = datetime.utcnow()
-    delivery.updated_at = datetime.utcnow()
-    await session.commit()
-    await session.refresh(delivery)
+    return delivery_service.delivery_info(delivery, channel)
 
-    channel = await session.get(Channel, delivery.channel_id)
-    return {
-        "id": delivery.id,
-        "channel_id": delivery.channel_id,
-        "main_id": delivery.main_id,
-        "platform": channel.platform if channel else None,
-        "username": channel.username if channel else None,
-        "status": delivery.status,
-        "attempts": delivery.attempts,
-        "error_message": delivery.error_message,
-        "sent_at": delivery.sent_at,
-    }
+
+@router.post(
+    "/deliveries/{delivery_id}/release",
+    response_model=DeliveryInfo,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Delivery not found"},
+        409: {"model": ErrorResponse, "description": "Delivery is not awaiting confirmation"},
+    },
+)
+async def release_delivery(
+    delivery_id: int = Path(..., description="The delivery identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Release one gated delivery for sending (the per-delivery approve).
+
+    Only ``awaiting_confirmation`` rows move (409 otherwise): already-queued,
+    in-flight, sent, or failed rows are never touched, so a release click
+    cannot duplicate a send. Unlike retry, attempts are kept — this is the
+    delivery's first release, not a re-queue after failure.
+    """
+    from app.services import deliveries as delivery_service
+
+    body = payload or {}
+    secret = body.get("shared_Secret")
+    if not secret or not verify_secret(secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    found = await delivery_service.delivery_with_channel(session, delivery_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    delivery, channel = found
+    try:
+        delivery = await delivery_service.release_delivery(session, delivery)
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Delivery is not awaiting confirmation")
+
+    return delivery_service.delivery_info(delivery, channel)
 
 
 @router.get(
@@ -555,19 +458,13 @@ async def get_stats(
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    from sqlalchemy import func, select
+    from app.services import deliveries as delivery_service
+    from app.services import records as record_service
 
-    from app.db.models import Delivery
-
-    record_rows = (await session.execute(select(Main.status, func.count()).group_by(Main.status))).all()
-    delivery_rows = (await session.execute(select(Delivery.status, func.count()).group_by(Delivery.status))).all()
-    last_heartbeat = (
-        await session.execute(select(func.max(Main.heartbeat_at)))
-    ).scalar_one_or_none()
     return {
-        "records": {status: count for status, count in record_rows},
-        "deliveries": {status: count for status, count in delivery_rows},
-        "worker_last_heartbeat_at": last_heartbeat,
+        "records": await record_service.record_status_counts(session),
+        "deliveries": await delivery_service.delivery_status_counts(session),
+        "worker_last_heartbeat_at": await record_service.worker_heartbeat(session),
     }
 
 
@@ -606,6 +503,31 @@ async def routing_preview(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+def _model_response(row):
+    """Build a model response that can never carry a key value.
+
+    The ORM row has ``api_key_encrypted`` (ciphertext); the schema has no
+    field for it and this projection fills only non-secret facts: whether a
+    key exists, where it comes from, and the recorded probe outcome.
+    """
+    from app.schemas.news import ModelResponse
+    from app.services import models as model_service
+
+    creds = model_service.describe(row)
+    return ModelResponse(
+        id=row.id, name=row.name, provider=row.provider, version=row.version,
+        is_active=row.is_active, base_url=creds["base_url"],
+        api_key_env=creds["key_env"], api_model=creds["api_model"],
+        has_key=bool(creds["key_present"]), key_source=creds["key_source"],
+        needs_own_key=bool(creds["needs_own_key"]),
+        temperature=row.temperature, max_output_tokens=row.max_output_tokens,
+        description=row.description, created_at=row.created_at,
+        last_tested_at=row.last_tested_at, last_test_ok=row.last_test_ok,
+        last_test_error=row.last_test_error,
+        last_test_latency_ms=row.last_test_latency_ms,
+    )
+
+
 def _require_secret(body: dict | None) -> None:
     """Reject missing/invalid shared secrets for body-authenticated calls."""
     secret = (body or {}).get("shared_Secret")
@@ -619,15 +541,13 @@ async def list_models(
     session: AsyncSession = Depends(get_session),
 ):
     """List model configurations (key values never included)."""
-    from sqlalchemy import select
-
-    from app.db.models import Model
     from app.schemas.news import ModelResponse
+    from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    rows = (await session.execute(select(Model).order_by(Model.id))).scalars().all()
-    return [ModelResponse.model_validate(r) for r in rows]
+    rows = await model_service.list_models(session)
+    return [_model_response(r) for r in rows]
 
 
 @router.post("/models", response_model=ModelResponse, status_code=201)
@@ -635,38 +555,25 @@ async def create_model(
     payload: dict | None = None, session: AsyncSession = Depends(get_session)
 ):
     """Create a model row (inactive by default; use activate for single-active)."""
-    from sqlalchemy import select, update
-
-    from app.db.models import Model
     from app.schemas.news import ModelCreateRequest, ModelResponse
+    from app.services import models as model_service
 
     _require_secret(payload)
     try:
         data = ModelCreateRequest(**(payload or {}))
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
-    existing = await session.execute(select(Model).where(Model.name == data.name))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=422, detail="model name already exists")
-    row = Model(
-        name=data.name,
-        provider=data.provider,
-        version=data.version,
-        base_url=data.base_url,
-        api_key_env=data.api_key_env,
-        temperature=data.temperature,
-        max_output_tokens=data.max_output_tokens,
-        description=data.description,
-        is_active=False,
-    )
-    session.add(row)
-    await session.flush()
-    if data.is_active:
-        await session.execute(update(Model).where(Model.id != row.id).values(is_active=False))
-        row.is_active = True
-    await session.commit()
-    await session.refresh(row)
-    return ModelResponse.model_validate(row)
+    try:
+        row = await model_service.create_model(
+            session, name=data.name, provider=data.provider, version=data.version,
+            base_url=data.base_url, api_key_env=data.api_key_env,
+            api_model=data.api_model, api_key=data.api_key,
+            temperature=data.temperature, max_output_tokens=data.max_output_tokens,
+            description=data.description, is_active=data.is_active,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _model_response(row)
 
 
 @router.get("/models/{model_id}", response_model=ModelResponse)
@@ -676,15 +583,15 @@ async def get_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Retrieve one model configuration."""
-    from app.db.models import Model
     from app.schemas.news import ModelResponse
+    from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    row = await session.get(Model, model_id)
+    row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    return ModelResponse.model_validate(row)
+    return _model_response(row)
 
 
 @router.patch("/models/{model_id}", response_model=ModelResponse)
@@ -694,8 +601,8 @@ async def update_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Update a model row (is_active only via activate, never here)."""
-    from app.db.models import Model
     from app.schemas.news import ModelResponse, ModelUpdateRequest
+    from app.services import models as model_service
 
     _require_secret(payload)
     body = dict(payload or {})
@@ -705,16 +612,20 @@ async def update_model(
         data = ModelUpdateRequest(**body)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
-    row = await session.get(Model, model_id)
+    row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    for field in ("provider", "version", "base_url", "api_key_env", "temperature", "max_output_tokens", "description"):
-        value = getattr(data, field)
-        if value is not None:
-            setattr(row, field, value)
-    await session.commit()
-    await session.refresh(row)
-    return ModelResponse.model_validate(row)
+    updates = {
+        field: getattr(data, field)
+        for field in ("provider", "version", "base_url", "api_key_env", "api_model",
+                      "temperature", "max_output_tokens", "description")
+        if getattr(data, field) is not None
+    }
+    # api_key is write-only: accepted, encrypted, never echoed back.
+    if data.api_key:
+        updates["api_key"] = data.api_key
+    row = await model_service.update_model(session, row, updates)
+    return _model_response(row)
 
 
 @router.post("/models/{model_id}/activate", response_model=ModelResponse)
@@ -724,20 +635,15 @@ async def activate_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Activate one model atomically (exactly one active row afterwards)."""
-    from sqlalchemy import update
-
-    from app.db.models import Model
     from app.schemas.news import ModelResponse
+    from app.services import models as model_service
 
     _require_secret(payload)
-    row = await session.get(Model, model_id)
+    row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    await session.execute(update(Model).where(Model.id != row.id).values(is_active=False))
-    row.is_active = True
-    await session.commit()
-    await session.refresh(row)
-    return ModelResponse.model_validate(row)
+    row = await model_service.activate_model(session, row)
+    return _model_response(row)
 
 
 @router.post("/models/{model_id}/test-connection", response_model=ConnectionTestResponse)
@@ -754,17 +660,26 @@ async def test_model_connection(
     (truncated) instead of raising, so the panel can show the failure without
     leaking credentials.
     """
-    from app.db.models import Model
-    from app.news.generation import probe_model_connection, resolve_api_key
+    from app.services import models as model_service
 
     _require_secret(payload)
-    row = await session.get(Model, model_id)
+    row = await model_service.get_model(session, model_id)
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
-    ok, error = await probe_model_connection(
-        row.name, row.base_url, resolve_api_key(row.api_key_env)
-    )
-    return {"ok": ok, "model": row.name, "error": error}
+    import time
+
+    started = time.perf_counter()
+    ok, error = await model_service.test_model_connection(row)
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    # Same recorded outcome the panel writes, so both surfaces agree.
+    await model_service.record_test_result(session, row, ok=ok, error=error, latency_ms=latency_ms)
+    return {
+        "ok": ok,
+        "model": row.name,
+        "error": error,
+        "latency_ms": latency_ms,
+        "tested_at": row.last_tested_at,
+    }
 
 
 @router.get("/prompts", response_model=list[PromptResponse])
@@ -773,14 +688,12 @@ async def list_prompts(
     session: AsyncSession = Depends(get_session),
 ):
     """List prompt versions (newest last; immutable rows)."""
-    from sqlalchemy import select
-
-    from app.db.models import Prompt
     from app.schemas.news import PromptResponse
+    from app.services import prompts as prompt_service
 
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    rows = (await session.execute(select(Prompt).order_by(Prompt.id))).scalars().all()
+    rows = await prompt_service.list_prompts(session)
     return [PromptResponse.model_validate(r) for r in rows]
 
 
@@ -789,27 +702,21 @@ async def create_prompt(
     payload: dict | None = None, session: AsyncSession = Depends(get_session)
 ):
     """Create a new prompt version (never edits in place; activate to release)."""
-    from sqlalchemy import select, update
-
-    from app.db.models import Prompt
     from app.schemas.news import PromptCreateRequest, PromptResponse
+    from app.services import prompts as prompt_service
 
     _require_secret(payload)
     try:
         data = PromptCreateRequest(**(payload or {}))
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
-    existing = await session.execute(select(Prompt).where(Prompt.version == data.version))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=422, detail="prompt version already exists")
-    row = Prompt(version=data.version, system_prompt=data.system_prompt, is_active=False)
-    session.add(row)
-    await session.flush()
-    if data.is_active:
-        await session.execute(update(Prompt).where(Prompt.id != row.id).values(is_active=False))
-        row.is_active = True
-    await session.commit()
-    await session.refresh(row)
+    try:
+        row = await prompt_service.create_prompt(
+            session, version=data.version, system_prompt=data.system_prompt,
+            is_active=data.is_active,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return PromptResponse.model_validate(row)
 
 
@@ -820,12 +727,12 @@ async def get_prompt(
     session: AsyncSession = Depends(get_session),
 ):
     """Retrieve one prompt version."""
-    from app.db.models import Prompt
     from app.schemas.news import PromptResponse
+    from app.services import prompts as prompt_service
 
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    row = await session.get(Prompt, prompt_id)
+    row = await prompt_service.get_prompt(session, prompt_id)
     if not row:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return PromptResponse.model_validate(row)
@@ -838,17 +745,12 @@ async def activate_prompt(
     session: AsyncSession = Depends(get_session),
 ):
     """Activate one prompt version atomically (exactly one active row)."""
-    from sqlalchemy import update
-
-    from app.db.models import Prompt
     from app.schemas.news import PromptResponse
+    from app.services import prompts as prompt_service
 
     _require_secret(payload)
-    row = await session.get(Prompt, prompt_id)
+    row = await prompt_service.get_prompt(session, prompt_id)
     if not row:
         raise HTTPException(status_code=404, detail="Prompt not found")
-    await session.execute(update(Prompt).where(Prompt.id != row.id).values(is_active=False))
-    row.is_active = True
-    await session.commit()
-    await session.refresh(row)
+    row = await prompt_service.activate_prompt(session, row)
     return PromptResponse.model_validate(row)

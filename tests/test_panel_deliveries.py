@@ -132,3 +132,38 @@ async def test_retry_rejects_non_retryable(session: AsyncSession):
             json={"shared_Secret": "wrong"},
         )
         assert bad.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_release_gated_delivery(session: AsyncSession):
+    """Release flips one awaiting_confirmation row to pending, keeping attempts."""
+    article, channel = await _setup(session, "bale", 9305)
+    gated = Delivery(main_id=article.id, channel_id=channel.id, status="awaiting_confirmation", attempts=0)
+    session.add(gated)
+    await session.commit()
+    async with _client() as client:
+        response = await client.post(
+            f"/deliveries/{gated.id}/release",
+            json={"shared_Secret": settings.shared_secret},
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    await session.refresh(gated)
+    assert gated.status == "pending"
+    assert gated.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_release_rejects_other_states(session: AsyncSession):
+    """Only gated rows release; everything else is 409, unknown is 404."""
+    article, channel = await _setup(session, "bale", 9306)
+    sent = Delivery(main_id=article.id, channel_id=channel.id, status="sent")
+    session.add(sent)
+    await session.commit()
+    async with _client() as client:
+        assert (await client.post(
+            f"/deliveries/{sent.id}/release", json={"shared_Secret": settings.shared_secret}
+        )).status_code == 409
+        assert (await client.post(
+            "/deliveries/999999/release", json={"shared_Secret": settings.shared_secret}
+        )).status_code == 404

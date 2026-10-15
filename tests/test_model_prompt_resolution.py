@@ -34,11 +34,60 @@ def test_resolve_system_prompt_priority():
 def test_resolve_base_url_and_key_fallback(monkeypatch):
     assert resolve_base_url("https://custom/v1") == "https://custom/v1"
     assert resolve_base_url(None) == settings.avalai_base_url
-    assert resolve_api_key(None) == settings.avalai_api_key
+    # No base_url: legacy path, global key applies.
+    assert resolve_api_key(None, None) == settings.avalai_api_key
     monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
-    assert resolve_api_key("CUSTOM_TEST_KEY_ENV") == "secret-value"
-    # Missing env var falls back without ever returning the var name as a key.
-    assert resolve_api_key("DEFINITELY_MISSING_ENV_VAR") == settings.avalai_api_key
+    assert resolve_api_key("CUSTOM_TEST_KEY_ENV", None) == "secret-value"
+    # Missing env var without a base_url still falls back (shared endpoint).
+    assert resolve_api_key("DEFINITELY_MISSING_ENV_VAR", None) == settings.avalai_api_key
+
+
+def test_resolve_api_key_fails_loudly_with_custom_base(monkeypatch):
+    """A row with its own endpoint but no usable key raises, never substitutes."""
+    from app.news.generation import MissingModelKeyError
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    assert (
+        resolve_api_key("CUSTOM_TEST_KEY_ENV", "https://custom/v1") == "secret-value"
+    )
+    with pytest.raises(MissingModelKeyError, match="api_key_env"):
+        resolve_api_key(None, "https://custom/v1")
+    with pytest.raises(MissingModelKeyError, match="DEFINITELY_MISSING_ENV_VAR"):
+        resolve_api_key("DEFINITELY_MISSING_ENV_VAR", "https://custom/v1")
+    monkeypatch.setenv("CUSTOM_TEST_EMPTY", "")
+    with pytest.raises(MissingModelKeyError):
+        resolve_api_key("CUSTOM_TEST_EMPTY", "https://custom/v1")
+
+
+def test_describe_model_credentials_never_contains_key(monkeypatch):
+    """The panel display carries source + presence, never a key value."""
+    from app.news.generation import describe_model_credentials
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    described = describe_model_credentials(
+        _Row(base_url="https://custom/v1", api_key_env="CUSTOM_TEST_KEY_ENV", api_key_encrypted=None)
+    )
+    # The facts the panel renders: endpoint, where the key comes from, whether
+    # one is usable, and a masked hint (last 4 only).
+    assert described["base_url"] == "https://custom/v1"
+    assert described["key_env"] == "CUSTOM_TEST_KEY_ENV"
+    assert described["key_present"] is True
+    assert described["uses_global_key"] is False
+    assert described["key_source"] == "env"
+    assert described["key_hint"] == "••••alue"
+    assert described["api_model"] is None
+
+    missing = describe_model_credentials(
+        _Row(base_url="https://custom/v1", api_key_env="DEFINITELY_MISSING_ENV_VAR", api_key_encrypted=None)
+    )
+    assert missing["key_present"] is False
+    assert missing["needs_own_key"] is True, "a row with its own endpoint must be told it needs a key"
+    # The secret itself never appears — only the last four characters.
+    assert "secret-value" not in str(described) + str(missing)
 
 
 def test_resolve_generation_config_priority():
@@ -48,7 +97,7 @@ def test_resolve_generation_config_priority():
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
-    override_model = _Row(name="override-model", base_url="https://override/v1", api_key_env=None)
+    override_model = _Row(name="override-model", base_url=None, api_key_env=None)
     override_prompt = _Row(system_prompt="override prompt")
     active_model = _Row(name="active-model", base_url=None, api_key_env=None)
     active_prompt = _Row(system_prompt="active prompt")
@@ -56,7 +105,7 @@ def test_resolve_generation_config_priority():
     full = resolve_generation_config(override_model, override_prompt, active_model, active_prompt)
     assert full["model_name"] == "override-model"
     assert full["system_prompt"] == "override prompt"
-    assert full["base_url"] == "https://override/v1"
+    assert full["base_url"] == settings.avalai_base_url
 
     active_only = resolve_generation_config(None, None, active_model, active_prompt)
     assert active_only["model_name"] == "active-model"
@@ -68,15 +117,35 @@ def test_resolve_generation_config_priority():
     assert empty["system_prompt"] == SYSTEM_PROMPT
 
 
-@pytest.mark.asyncio
-async def test_probe_model_connection_reports_failure_without_raising():
-    """Shared API/panel probe: missing keys and dead endpoints return, not raise."""
-    ok, error = await probe_model_connection("any-model", None, "")
-    assert ok is False
-    assert error == "no API key configured"
+def test_generation_config_key_travels_with_endpoint(monkeypatch):
+    """The key always comes from the row that provides the base_url."""
+    from app.news.generation import MissingModelKeyError
 
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setenv("CUSTOM_TEST_KEY_ENV", "secret-value")
+    keyed = _Row(name="m", base_url="https://m/v1", api_key_env="CUSTOM_TEST_KEY_ENV")
+    assert resolve_generation_config(keyed, None, None, None)["api_key"] == "secret-value"
+    # Override endpoint without its own key fails even if the active row has one.
+    active = _Row(name="a", base_url=None, api_key_env="CUSTOM_TEST_KEY_ENV")
+    with pytest.raises(MissingModelKeyError):
+        resolve_generation_config(
+            _Row(name="m", base_url="https://m/v1", api_key_env=None), None, active, None
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_model_connection_reports_failure_without_raising(monkeypatch):
+    """Shared API/panel probe: missing keys and dead endpoints return, not raise."""
+    ok, error = await probe_model_connection("any-model", "http://127.0.0.1:9/v1", None)
+    assert ok is False
+    assert "api_key_env" in error
+
+    monkeypatch.setenv("CUSTOM_TEST_PROBE_KEY", "dummy-key-for-test")
     ok, error = await probe_model_connection(
-        "any-model", "http://127.0.0.1:1/v1", "dummy-key-for-test"
+        "any-model", "http://127.0.0.1:1/v1", "CUSTOM_TEST_PROBE_KEY"
     )
     assert ok is False
     assert error
@@ -155,3 +224,17 @@ async def test_process_job_falls_back_to_active_then_config(session: AsyncSessio
         _, kwargs = mock_gen.call_args
         assert kwargs["model_name"] == "active-model"
         assert kwargs["system_prompt"] == "active prompt"
+
+
+def test_build_user_message_template():
+    """The shared builder renders the exact documented template."""
+    from app.news.generation import build_user_message
+
+    assert build_user_message({
+        "title": "T", "abstract": "A", "field": "F", "university": "U",
+        "table_of_contents": None, "author": "Au", "supervisor": "Su",
+    }) == (
+        "Thesis metadata:\n"
+        "title: T\nabstract: A\nfield: F\nuniversity: U\n"
+        "table_of_contents: \nauthor: Au\nsupervisor: Su"
+    )

@@ -63,6 +63,7 @@ class Field(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     source = Column(String(20), nullable=False, default="spreadsheet")
     matched_keyword = Column(String(200), nullable=True)
+    category_source = Column(String(20), nullable=False, default="rules")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     category = relationship("Category", back_populates="fields")
@@ -92,6 +93,17 @@ class Model(Base):
     max_output_tokens = Column(Integer, nullable=True)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    #: Fernet ciphertext of the provider key (never plaintext). Managed from
+    #: the panel; the master key lives in CREDENTIALS_KEY, never in the DB.
+    api_key_encrypted = Column(Text, nullable=True)
+    #: The provider's real model id, when it differs from the display ``name``.
+    api_model = Column(String(200), nullable=True)
+    #: Connection-probe outcome (endpoint + HTTP status only, never the key).
+    last_tested_at = Column(DateTime, nullable=True)
+    last_test_ok = Column(Boolean, nullable=True)
+    last_test_error = Column(Text, nullable=True)
+    last_test_latency_ms = Column(Integer, nullable=True)
 
     main_records = relationship("Main", back_populates="model")
 
@@ -133,6 +145,10 @@ class PanelUser(Base):
     password_hash = Column(Text, nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    #: Set when an admin deletes the account. The row is kept so
+    #: ``audit_logs.user_id`` keeps resolving an author, but it is filtered out
+    #: of every panel listing and can no longer log in.
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     role = relationship("Role", back_populates="users")
@@ -154,17 +170,19 @@ class AuditLog(Base):
 class Main(Base):
     """The thesis/news record and job-state queue entry.
 
-    Status lifecycle: ``ready`` → ``processing`` → ``review`` | ``failed``,
-    plus ``rejected`` for an explicit human rejection from ``review``.
+    Status lifecycle (one state machine, ``app/services/transitions.py``):
+    ``ready`` → ``processing`` → ``review`` → ``approved`` → ``published``,
+    plus ``rejected`` (human rejection from ``review``) and ``failed``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
     ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
-    auditability of the classification and generation configuration used.
+    auditability of the classification and generation configuration used;
+    ``approved_at``/``published_at`` record the decision/publication times.
     """
 
     __tablename__ = "main"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('ready', 'processing', 'review', 'failed', 'rejected')",
+            "status IN ('ready', 'processing', 'review', 'approved', 'published', 'failed', 'rejected')",
             name="ck_main_status",
         ),
         Index("ix_main_status_created_at", "status", "created_at"),
@@ -190,6 +208,8 @@ class Main(Base):
     error_message = Column(Text, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
     heartbeat_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -211,6 +231,11 @@ class Channel(Base):
 
     ``username`` is rendered as the message footer so readers know which
     channel the article came from.
+
+    ``bot_token_env`` optionally names the environment variable holding THIS
+    channel's bot token (never the token itself); when set and present it
+    overrides the platform-wide token, so a second channel on the same
+    platform needs no code change.
     """
 
     __tablename__ = "channels"
@@ -223,8 +248,16 @@ class Channel(Base):
     chat_id = Column(BigInteger, nullable=False)
     username = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
+    bot_token_env = Column(String(100), nullable=True)
+    #: Fernet ciphertext of this channel's own bot token, when it has one.
+    bot_token_encrypted = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+    #: When this channel started receiving news. Refreshed every time it is
+    #: switched ON. The sender only fans an article out to a channel whose
+    #: ``activated_at`` is not later than the article's ``created_at``, so a
+    #: channel added today never inherits the archive that predates it.
+    activated_at = Column(DateTime, nullable=False, server_default=func.now())
 
     routes = relationship("FieldChannelRoute", back_populates="channel")
     category_routes = relationship("CategoryChannelRoute", back_populates="channel")
@@ -277,10 +310,13 @@ class Delivery(Base):
     sent" answerable: once a field fans out to several channels an article has
     many independent send states, each with its own attempts and error.
 
-    Status lifecycle: ``pending`` → ``sending`` → ``sent`` | ``failed``, with
-    ``pending`` returned after a retryable failure. ``awaiting_confirmation``
-    is the gated initial status when ``REQUIRE_HUMAN_CONFIRMATION`` is on:
-    approval flips it to ``pending``.
+    Status lifecycle (one state machine,
+    ``app/services/transitions.py``): ``awaiting_confirmation`` → ``pending``
+    → ``sending`` → ``sent``, plus ``failed`` (with ``pending`` after a
+    retryable failure or an operator cancel) and ``deleted_from_channel``
+    (the operator removed the published message; the row is kept as history).
+    ``awaiting_confirmation`` is the gated initial status when
+    ``REQUIRE_HUMAN_CONFIRMATION`` is on: approval flips it to ``pending``.
 
     ``category_id``/``route_source`` snapshot which category and which route
     level (``category`` | ``field`` | ``fallback``) produced the row, so a
@@ -295,7 +331,8 @@ class Delivery(Base):
     __tablename__ = "deliveries"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'sending', 'sent', 'failed', 'awaiting_confirmation')",
+            "status IN ('awaiting_confirmation', 'pending', 'sending', 'sent', "
+            "'failed', 'deleted_from_channel')",
             name="ck_deliveries_status",
         ),
         Index("ix_deliveries_status_next_attempt", "status", "next_attempt_at"),

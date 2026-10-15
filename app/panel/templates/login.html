@@ -7,7 +7,7 @@
     <h2>ورود به کنسول ایران‌داک</h2>
     <p class="sub">تولید خودکار خبر از متادیتای پایان‌نامه‌ها</p>
     {% if error %}<div class="note" style="margin-bottom:12px">{{ error }}</div>{% endif %}
-    <form method="post" action="/login">
+    <form method="post" action="/login">{{ csrf_field(request) | safe }}
       <div class="field"><label>نام کاربری</label><input type="text" name="username" autocomplete="username"></div>
       <div class="field"><label>گذرواژه</label><input type="password" name="password" autocomplete="current-password"></div>
       <button class="btn btn-primary" type="submit">ورود</button>

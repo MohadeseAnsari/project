@@ -50,15 +50,53 @@ def resolve_base_url(model_base_url: str | None) -> str:
     return model_base_url or settings.avalai_base_url
 
 
-def resolve_api_key(api_key_env: str | None) -> str:
-    """Resolve the provider key without ever returning or logging it.
+#: Credential resolution lives in one place and is shared by the Worker, the
+#: panel regenerate action, the connection probe and the machine API. Re-exported
+#: here because callers already import from this module.
+from app.credentials_resolve import (  # noqa: E402
+    MissingModelKeyError,
+    describe_credentials as _describe_credentials,
+    resolve_model_credentials,
+)
 
-    ``api_key_env`` is the ENVIRONMENT VARIABLE NAME (never the key itself);
-    when unset or missing from the environment, fall back to the configured key.
+
+def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str:
+    """Resolve the provider key for a model row, explicitly.
+
+    Kept for callers that only have a variable name (the API probe path);
+    full rows should use :func:`app.credentials_resolve.resolve_model_credentials`.
+
+    - The row defines ``base_url``: only that endpoint's own key is usable
+      (``api_key_env`` read from the environment). A missing variable name,
+      an unset variable, or an empty value raises :class:`MissingModelKeyError`
+      instead of silently substituting the global key.
+    - The row defines no ``base_url``: the row shares the configured
+      endpoint, so its ``api_key_env`` (when usable) or otherwise the global
+      ``settings.avalai_api_key`` applies — the historical behavior.
     """
-    if api_key_env:
-        return os.environ.get(api_key_env, "") or settings.avalai_api_key
-    return settings.avalai_api_key
+    usable = api_key_env and os.environ.get(api_key_env)
+    if base_url:
+        if usable:
+            return usable
+        if not api_key_env:
+            raise MissingModelKeyError(
+                f"model defines base_url '{base_url}' but has no api_key_env configured; "
+                "set the variable name instead of falling back to the global key"
+            )
+        raise MissingModelKeyError(
+            f"model defines base_url '{base_url}' but environment variable "
+            f"'{api_key_env}' is not set or empty"
+        )
+    return usable or settings.avalai_api_key
+
+
+def describe_model_credentials(model_row) -> dict[str, object]:
+    """Describe a model row's resolved endpoint/key WITHOUT key values.
+
+    Thin alias to :func:`app.credentials_resolve.describe_credentials`, which
+    is the single implementation used by the panel and the API.
+    """
+    return _describe_credentials(model_row)
 
 
 def resolve_generation_config(
@@ -75,8 +113,23 @@ def resolve_generation_config(
     """
     override_base = getattr(model_override, "base_url", None)
     active_base = getattr(active_model, "base_url", None)
-    override_env = getattr(model_override, "api_key_env", None)
-    active_env = getattr(active_model, "api_key_env", None)
+    effective_base = override_base or active_base
+
+    # The row that owns the endpoint also owns the key (PART D3). A row with its
+    # own base_url and no usable key raises MissingModelKeyError instead of
+    # borrowing another provider's key — the bug that produced HTTP 401.
+    credential_row = None
+    if override_base:
+        credential_row = model_override
+    elif active_base:
+        credential_row = active_model
+    elif model_override is not None:
+        credential_row = model_override
+    elif active_model is not None:
+        credential_row = active_model
+
+    resolved = resolve_model_credentials(credential_row) if credential_row is not None else None
+
     return {
         "model_name": resolve_model_name(
             getattr(model_override, "name", None),
@@ -86,24 +139,38 @@ def resolve_generation_config(
             getattr(prompt_override, "system_prompt", None),
             getattr(active_prompt, "system_prompt", None),
         ),
-        "base_url": resolve_base_url(override_base or active_base),
-        "api_key": resolve_api_key(override_env or active_env),
+        "base_url": resolved.base_url if resolved else resolve_base_url(None),
+        "api_key": resolved.api_key if resolved else settings.avalai_api_key,
+        # The provider's real model id when the row defines one.
+        "api_model": resolved.api_model if resolved else None,
     }
 
 
 async def probe_model_connection(
-    model_name: str, base_url: str | None, api_key: str | None
+    model_name: str,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[bool, str | None]:
     """Make a real minimal 1-token provider call; return ``(ok, error)``.
 
     Shared by the machine API (``POST /models/{id}/test-connection``) and the
-    panel model test button, so both report the same result for the same row.
-    A missing key, DNS failure, auth error, or timeout returns ``(False,
-    error)`` instead of raising, and the key value is never included in the
+    panel model test button, so both report the same result for the same row:
+    the resolved key/base_url are exercised, and a missing key reports its
+    real reason instead of raising. The key value is never included in the
     error text or logged anywhere.
+
+    ``api_key`` lets a row's own stored (encrypted) key be used; callers that
+    only have a variable name keep using ``api_key_env``.
     """
     effective_base_url = base_url or settings.avalai_base_url
-    effective_key = api_key or ""
+    try:
+        if api_key:
+            effective_key = api_key
+        else:
+            effective_key = resolve_api_key(api_key_env, base_url)
+    except MissingModelKeyError as e:
+        return False, str(e)
     if not effective_key:
         return False, "no API key configured"
     try:
@@ -155,12 +222,31 @@ def _get_agent() -> Agent:
     return _agent
 
 
+def build_user_message(thesis_data: dict[str, Any]) -> str:
+    """Build the exact user message sent to the LLM for a thesis.
+
+    Single template shared by generation and the panel preview, so what the
+    reviewer sees is byte-identical to what the model received. Thesis values
+    are data, never instructions (see the system prompt); missing values
+    render empty rather than failing the job.
+    """
+    return f"""Thesis metadata:
+title: {thesis_data.get('title', '')}
+abstract: {thesis_data.get('abstract', '')}
+field: {thesis_data.get('field', '')}
+university: {thesis_data.get('university', '')}
+table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
+author: {thesis_data.get('author', '')}
+supervisor: {thesis_data.get('supervisor', '')}"""
+
+
 async def generate_news(
     thesis_data: dict[str, Any],
     model_name: str | None = None,
     system_prompt: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    api_model: str | None = None,
 ) -> GeneratedNews:
     """Generate a journalistic news item from thesis metadata.
 
@@ -175,6 +261,11 @@ async def generate_news(
             When None, the packaged ``SYSTEM_PROMPT`` is used.
         base_url: Resolved provider endpoint (per-model else config).
         api_key: Resolved provider key (never logged).
+        api_model: The provider's REAL model id when the row defines one
+            (``models.api_model``). It wins over ``model_name``, which is the
+            row's display name. Accepting it here is what lets every caller
+            pass ``resolve_generation_config(...)`` straight through with
+            ``**config``.
 
     Returns:
         A structured ``GeneratedNews`` with Persian ``title``, ``lead`` and
@@ -184,7 +275,8 @@ async def generate_news(
         Exception: Any provider/validation error propagates to the caller
             (the Worker marks the job as ``failed``).
     """
-    effective_model = model_name or settings.llm_model
+    # The provider is called with the real model id when the row has one.
+    effective_model = api_model or model_name or settings.llm_model
     effective_prompt = system_prompt or SYSTEM_PROMPT
     effective_base_url = base_url or settings.avalai_base_url
     # Note: api_key resolution stays here so every path uses the same fallback;
@@ -210,14 +302,7 @@ async def generate_news(
         )
         agent = Agent(model, output_type=GeneratedNews, system_prompt=effective_prompt)
 
-    user_message = f"""Thesis metadata:
-title: {thesis_data.get('title', '')}
-abstract: {thesis_data.get('abstract', '')}
-field: {thesis_data.get('field', '')}
-university: {thesis_data.get('university', '')}
-table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
-author: {thesis_data.get('author', '')}
-supervisor: {thesis_data.get('supervisor', '')}"""
+    user_message = build_user_message(thesis_data)
 
     result = await agent.run(user_message)
     return result.output

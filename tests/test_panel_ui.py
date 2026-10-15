@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.panel.app import panel_app
 from app.panel.auth import hash_password
+from tests.panel_test_client import panel_client
 
 
 async def _user(session: AsyncSession, username: str = "panel-tester") -> None:
@@ -55,8 +56,9 @@ async def _user_with_role(session: AsyncSession, username: str, role_name: str) 
     await session.commit()
 
 
-def _client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=panel_app), base_url="http://test")
+def _client():
+    """CSRF-compliant panel client (browser simulation; see panel_test_client)."""
+    return panel_client()
 
 
 @pytest.mark.asyncio
@@ -435,6 +437,35 @@ async def test_session_expiry_follows_setting(session: AsyncSession, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_templates_have_balanced_jinja_comments():
+    """A typo'd ``#}`` silently deletes whole sections from a page.
+
+    This cost real time: a malformed comment separator in channels.html
+    swallowed the entire field -> category card, and the page rendered fine —
+    just missing a section, with nothing in the logs. Jinja does not complain
+    about an unclosed comment, so nothing else would have caught it.
+    """
+    from pathlib import Path
+
+    unbalanced = []
+    for template in Path("app/panel/templates").glob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        if text.count("{#") != text.count("#}"):
+            unbalanced.append(f"{template.name} ({{#={text.count('{#')}, #}}={text.count('#}')})")
+    assert not unbalanced, f"unbalanced Jinja comments: {unbalanced}"
+
+
+def test_every_template_still_parses():
+    """Catch a broken block/if/endif at import time rather than on a request."""
+    from jinja2 import Environment, FileSystemLoader
+    from pathlib import Path
+
+    env = Environment(loader=FileSystemLoader("app/panel/templates"))
+    for template in Path("app/panel/templates").glob("*.html"):
+        env.parse(template.read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
 async def test_all_panel_pages_render(session: AsyncSession):
     """Every GET page returns 200 with its Persian title (template smoke)."""
     from app.db.models import Category, Channel, Delivery, Main
@@ -462,14 +493,13 @@ async def test_all_panel_pages_render(session: AsyncSession):
         "/records": "رکوردها و بازبینی",
         "/deliveries": "ارسال‌ها و تحویل",
         "/fields": "رشته‌ها",
-        "/categories": "دسته‌ها",
-        "/channels": "کانال‌ها و مسیرها",
+        "/categories": "دسته‌ها و کلیدواژه‌ها",
+        "/channels": "کانال‌ها",
         "/models": "مدل‌ها",
         "/prompts": "پرامپت‌ها",
         "/submit": "ثبت پایان‌نامه",
         "/users": "کاربران و نقش‌ها",
         "/audit": "رویدادها",
-        "/routing": "پیش‌نمایش مسیریابی",
         "/profile": "حساب من",
     }
     async with _client() as client:
@@ -478,6 +508,17 @@ async def test_all_panel_pages_render(session: AsyncSession):
             response = await client.get(path)
             assert response.status_code == 200, path
             assert title in response.text, path
+        # The pages are independent again, so the old tab URLs redirect rather
+        # than 404ing. Asserted here so a future removal of the redirect breaks
+        # a test, not a bookmark.
+        for old_path, new_path in (
+            ("/records?tab=deliveries", "/deliveries"),
+            ("/fields?tab=categories", "/categories"),
+        ):
+            moved = await client.get(old_path, follow_redirects=False)
+            assert moved.status_code == 301, f"{old_path} must not 404"
+            assert moved.headers["location"] == new_path
+            assert (await client.get(new_path)).status_code == 200
         detail = await client.get(f"/records/{row.id}")
         assert detail.status_code == 200
         assert "دستهٔ ثبت‌شده" in detail.text
@@ -591,3 +632,310 @@ async def test_admin_deactivates_user_over_http(session: AsyncSession):
         assert toggled.status_code == 302
     async with _client() as client:
         assert (await client.post("/login", data={"username": "panel-editor", "password": "secret123"}, follow_redirects=False)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_raw_output_renders_persian_literally(session: AsyncSession):
+    """The raw tab shows real Persian characters in stable order, not escapes."""
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="t", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "خبر پزشکی", "lead": "لید آزمایشی", "body": "متن کامل خبر"},
+    )
+    session.add(row)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        first = await client.get(f"/records/{row.id}", params={"tab": "raw"})
+        assert first.status_code == 200
+        assert "خبر پزشکی" in first.text
+        assert "\\u062e" not in first.text
+        import html as _html
+
+        decoded = _html.unescape(first.text)
+        assert decoded.index('"body"') < decoded.index('"lead"') < decoded.index('"title"')
+        second = await client.get(f"/records/{row.id}", params={"tab": "raw"})
+        assert second.text == first.text
+
+
+@pytest.mark.asyncio
+async def test_approved_record_leaves_review_list(session: AsyncSession):
+    """Panel review list defaults to needs-review; approved shows its banner."""
+    from datetime import datetime
+
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    fresh = Main(
+        username="t", title="Fresh", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    done = Main(
+        username="t", title="Done", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="approved", approved_at=datetime.utcnow(),
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add_all([fresh, done])
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        # The default view lists everything. It used to hide approved records,
+        # which meant a published record disappeared from the list the panel
+        # exists to maintain -- and the «منتشرشده» tab, which selects exactly
+        # that status, could never return anything. "نیازمند بازبینی" is now an
+        # explicit filter rather than an imposed default.
+        everything = await client.get("/records/table")
+        assert "Fresh" in everything.text
+        assert "Done" in everything.text, "an approved record must not vanish"
+        pending = await client.get("/records/table", params={"approved": "no"})
+        assert "Fresh" in pending.text
+        assert "Done" not in pending.text, "the pending filter still narrows"
+        approved = await client.get("/records/table", params={"approved": "yes"})
+        assert "Done" in approved.text
+        assert "Fresh" not in approved.text
+        detail = await client.get(f"/records/{done.id}")
+        assert "تأیید شده" in detail.text
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_releases_backlog(session: AsyncSession):
+    """Bulk approve stamps, releases, and audits each eligible record; skips the rest."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, Delivery, Main
+
+    await _user(session, "panel-admin")
+    rows = []
+    for title in ("Bulk-A", "Bulk-B", "Bulk-C"):
+        row = Main(
+            username="t", title=title, abstract="A", field="پزشکی", university="U",
+            author="A", supervisor="S", status="review",
+            output_json={"title": "T", "lead": "L", "body": "B"},
+        )
+        session.add(row)
+        rows.append(row)
+    failed = Main(
+        username="t", title="Skip-Me", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="failed",
+    )
+    session.add(failed)
+    await session.commit()
+    ids = [r.id for r in rows]
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        from urllib.parse import urlencode
+
+        body = urlencode([("ids", str(i)) for i in ids + [failed.id, 999999]])
+        response = await client.post(
+            "/records/bulk-approve", content=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        # They leave the PENDING queue, not the list. The default view shows
+        # everything, so what bulk approval empties is the review queue.
+        pending = await client.get("/records/table", params={"approved": "no"})
+        for title in ("Bulk-A", "Bulk-B", "Bulk-C"):
+            assert title not in pending.text
+    for record_id in ids:
+        session.expire_all()
+        row = await session.get(Main, record_id)
+        assert row.status == "approved"
+        assert row.approved_at is not None
+    actions = sorted(
+        (await session.execute(select(AuditLog.action).where(AuditLog.action == "approve"))).scalars().all()
+    )
+    assert actions == ["approve", "approve", "approve"]
+    await session.refresh(failed)
+    assert failed.status == "failed"
+    assert failed.approved_at is None
+
+
+@pytest.mark.asyncio
+async def test_panel_release_is_audited(session: AsyncSession):
+    """Panel release flips the row and records who released it."""
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, Channel, Delivery, Main
+
+    await _user(session, "panel-admin")
+    row = Main(
+        username="t", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    channel = Channel(platform="bale", chat_id=96011, username="@c", is_active=True)
+    session.add(channel)
+    await session.commit()
+    delivery = Delivery(main_id=row.id, channel_id=channel.id, status="awaiting_confirmation")
+    session.add(delivery)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        response = await client.post(f"/deliveries/{delivery.id}/release", follow_redirects=False)
+        assert response.status_code == 302
+    await session.refresh(delivery)
+    assert delivery.status == "pending"
+    audits = (
+        await session.execute(select(AuditLog.action).where(AuditLog.main_id == row.id))
+    ).scalars().all()
+    assert "release" in audits
+
+
+@pytest.mark.asyncio
+async def test_dashboard_review_kpi_excludes_approved(session: AsyncSession):
+    """The 'needs review' KPI counts exactly the 'review' rows (approved left)."""
+    from datetime import datetime
+
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    session.add(Main(
+        username="t", title="Fresh", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review",
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    ))
+    session.add(Main(
+        username="t", title="Done", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="approved", approved_at=datetime.utcnow(),
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    ))
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get("/")
+        assert page.status_code == 200
+        assert "در انتظار بازبینی انسانی" in page.text
+        assert '<div class="n">۱</div>' in page.text
+
+
+@pytest.mark.asyncio
+async def test_final_prompt_tab_shows_exact_messages(session: AsyncSession):
+    """پرامپت نهایی renders the exact system prompt, user message, and model — no secrets."""
+    from app.config import settings
+    from app.db.models import Main, Model, Prompt
+
+    await _user(session, "panel-admin")
+    model = Model(name="preview-model", provider="openai", version="v1", is_active=False)
+    prompt = Prompt(version="v-preview", system_prompt="SYSTEM PROMPT TEXT", is_active=False)
+    session.add_all([model, prompt])
+    await session.commit()
+    row = Main(
+        username="t", title="Thesis Title", abstract="Abs", field="پزشکی", university="U",
+        author="Author", supervisor="Sup", status="review",
+        model_id=model.id, prompt_id=prompt.id,
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    )
+    session.add(row)
+    await session.commit()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        page = await client.get(f"/records/{row.id}", params={"tab": "final"})
+        assert page.status_code == 200
+        assert "SYSTEM PROMPT TEXT" in page.text
+        assert "title: Thesis Title" in page.text
+        assert "author: Author" in page.text
+        assert "preview-model" in page.text
+        assert settings.shared_secret not in page.text
+        assert settings.avalai_api_key not in page.text
+
+
+@pytest.mark.asyncio
+async def test_user_delete_safeguards(session: AsyncSession):
+    """Self-delete and last-admin delete are refused; every delete tombstones."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, PanelUser
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    admin = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one()
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        assert (await client.post(f"/users/{admin.id}/delete", follow_redirects=False)).status_code == 422
+        assert (await client.post("/users/999999/delete", follow_redirects=False)).status_code == 404
+        assert (await client.post(f"/users/{editor.id}/delete", follow_redirects=False)).status_code == 302
+    session.expunge_all()
+    row = await session.get(PanelUser, editor.id)
+    # Deleted accounts are tombstoned, never erased: audit_logs.user_id is
+    # ON DELETE SET NULL, so erasing the row would lose its author name.
+    assert row is not None
+    assert row.deleted_at is not None
+    assert row.is_active is False
+    # Last active admin cannot be deleted even with a second admin present-but-inactive.
+    assert (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one().is_active is True
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_user_disappears_from_the_panel(session: AsyncSession):
+    """The owner's requirement: a deleted user is not seen in the panel again."""
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, PanelUser
+    from app.services import users as user_service
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    # Give the editor authored history (audits record the actor, not the
+    # target): they change their own password, then the admin deletes them.
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        changed = await client.post(
+            "/profile/password",
+            data={"current_password": "secret123", "new_password": "rotated99"},
+        )
+        assert changed.status_code == 200
+    async with _client() as client:
+        await _login(client, "panel-admin")
+        response = await client.post(f"/users/{editor.id}/delete", follow_redirects=False)
+        assert response.status_code == 302
+        page = await client.get("/users")
+    session.expunge_all()
+    row = await session.get(PanelUser, editor.id)
+    assert row is not None, "the row is kept so history keeps its author"
+    assert row.deleted_at is not None
+    assert row.is_active is False
+    assert "panel-editor" not in page.text, "a deleted user must not appear in the panel"
+    # And they cannot log back in.
+    async with _client() as client:
+        login = await client.post(
+            "/login", data={"username": "panel-editor", "password": "rotated99"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 401
+    # The trail still names them.
+    actions = (await session.execute(
+        select(AuditLog.action).where(AuditLog.detail.contains("panel-editor"))
+    )).scalars().all()
+    assert "user_delete" in actions
+    listed = {u["username"] for u in await user_service.list_users(session)}
+    assert "panel-editor" not in listed
+
+
+@pytest.mark.asyncio
+async def test_delete_last_admin_refused_at_service(session: AsyncSession):
+    """The sole active admin survives even a privileged delete call."""
+    import pytest
+
+    from sqlalchemy import select
+
+    from app.db.models import PanelUser
+    from app.services import users as user_service
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    admin = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-admin"))).scalar_one()
+    editor = (await session.execute(select(PanelUser).where(PanelUser.username == "panel-editor"))).scalar_one()
+    with pytest.raises(ValueError, match="last-admin"):
+        await user_service.delete_user(session, admin, actor_id=editor.id)
+    assert (await session.get(PanelUser, admin.id)).is_active is True

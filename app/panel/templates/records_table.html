@@ -1,7 +1,7 @@
 <table>
   <thead>
     <tr>
-      <th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
+      <th style="width:36px"><input type="checkbox" data-select-all title="انتخاب همهٔ این صفحه"></th><th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
       <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
       <th style="width:196px">عملیات</th>
     </tr>
@@ -9,12 +9,15 @@
   <tbody>
     {% for r in items %}
     <tr>
+      <td>{% if r.status == 'review' %}<input type="checkbox" name="ids" value="{{ r.id }}">{% endif %}</td>
       <td class="num">{{ r.id|fa }}</td>
       <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
       <td>{{ r.field }}</td>
       <td>{{ r.university }}</td>
       <td>
         {% if r.status == 'review' %}<span class="badge s-review">★ در انتظار بازبینی</span>
+        {% elif r.status == 'approved' %}<span class="badge s-ready">✓ تأیید شده</span>
+        {% elif r.status == 'published' %}<span class="badge s-sent">✓ منتشر شده</span>
         {% elif r.status == 'processing' %}<span class="badge s-processing">… در حال تولید خبر</span>
         {% elif r.status == 'ready' %}<span class="badge s-ready">… در صف، منتظر worker</span>
         {% elif r.status == 'failed' %}<span class="badge s-failed">! تولید ناموفق</span>
@@ -23,8 +26,9 @@
       </td>
       <td class="num">{{ r.created_at|jalali }}</td>
       <td>
+        {# Approving releases the article for sending: confirm, since it publishes. #}
         {% if r.status == 'review' %}
-        <form method="post" action="/records/{{ r.id }}/review" style="display:inline"><input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
+        <form method="post" action="/records/{{ r.id }}/review" style="display:inline" onsubmit="return confirm('این خبر تأیید و برای ارسال آزاد شود؟')">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
         <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
         {% else %}
         <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">مشاهده</a>

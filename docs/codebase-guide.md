@@ -73,7 +73,7 @@ project/
 │   └── manage_channels.py    # channels + field -> channel routes CLI
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
-├── docs/                     # this guide, architecture.md, erd.md
+├── docs/                     # this guide, architecture.md, erd.md, llm-prompt.md
 ├── Dockerfile                # python:3.12-slim, non-root user
 ├── docker-compose.yml        # postgres + api + worker + sender, named volume
 ├── requirements.txt
@@ -150,17 +150,25 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   CHECK), `chat_id` (BIGINT, because chat ids exceed 2³¹), `username` (rendered
   as the message footer), `title`, `is_active`. Unique per
   `(platform, chat_id)`. Migration 005 seeds the one Bale channel in use.
-  **No credentials here** — bot tokens live in configuration, so a channel row
-  is never a secret.
-- **category_channel_routes** — the primary category → channel mapping,
-  `(category_id, channel_id)` primary key, cascading deletes. The sender
-  consults it first; seeded permissively (every category to every active
-  channel) so publishing behavior never changes on deploy — the owner
-  narrows it per category in the panel.
-- **field_channel_routes** — the field → channel exception table,
-  `(field_id, channel_id)` primary key, cascading deletes. Fires only when
-  the article's category has no route; unmapped categories fall back to all
-  active channels rather than dropping the article.
+  **Many rows coexist**: the panel adds a channel beside the existing ones and
+  edits, switches on/off and deletes each one independently; a channel with
+  deliveries is disabled rather than deleted, so published history keeps
+  resolving. `bot_token_encrypted` (Fernet, migration 019) is an *optional*
+  per-channel token written from the panel form — it wins over the
+  platform-wide one, is never rendered back, and is what lets a channel be
+  added with no environment change. `activated_at` (migration 022) is the
+  channel's start line: an article is only delivered there if it was created at
+  or after that moment, and the value is refreshed every time the channel is
+  switched ON. Without it, adding a channel made the sender enqueue the whole
+  archive to it — a new channel has no delivery rows for anything, so every
+  historical record looked like pending work.
+- **category_channel_routes** — retired. No longer written, no longer read, and
+  the panel has no screen for it: the owner removed the category → channel
+  configuration because news goes to every active channel regardless. Kept so
+  existing rows are not lost.
+- **field_channel_routes** — retired from the delivery decision (item 6) and no
+  longer written by the panel. The table is kept so existing rows and the
+  history they explain are not lost.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
@@ -381,11 +389,27 @@ windows/panes instead of background shell jobs you cannot reattach to.
   broken channel must not stall every article queued behind it. Permanent
   errors (unknown chat, revoked token) fail immediately rather than burning
   attempts that could never succeed.
-- Bot tokens in configuration instead of on the `channels` row: a channel is a
-  destination, not a credential, so channel rows stay safe to read and audit.
-- A field with no route falls back to all active channels: fields discovered at
-  runtime have no route row, and silently dropping their articles would be worse
-  than publishing them to the current channel set.
+- Bot tokens in configuration by default, with an optional encrypted per-channel
+  token: a channel is a destination, not a credential, so channel rows stay safe
+  to read and audit; the exception exists so a second channel can be added from
+  the panel without editing the environment.
+- The panel records `deleted_from_channel` only after the platform confirms the
+  delete, so the row can never claim a message is gone while it is still in the
+  channel; a refusal leaves it `sent` and retryable.
+- Fan-out delete is per channel, not all-or-nothing: removing one article from
+  several channels calls each platform separately and reports the ones that
+  refused, because a single uncooperative channel must not strand the rest.
+- A platform "message not found" counts as a successful delete, not a refusal.
+  The postcondition ("this message is no longer published") already holds, and
+  treating it as a failure would leave the row `sent` forever for a message
+  that is gone. It is told apart from a genuine refusal (no rights, wrong
+  chat) by the provider's own description, since the HTTP status differs
+  between Bale (404) and Telegram (400).
+- Delivery to EVERY active channel rather than a routed subset: the owner
+  redefined the core rule, and the previous chain meant that adding one
+  category mapping silently stopped delivery to all the other channels. A
+  channel is excluded only by switching it off, which is explicit and
+  reversible.
 - `awaiting_confirmation` is the gated initial delivery status when
   `REQUIRE_HUMAN_CONFIRMATION=true` (default): queued by the sender but never
   claimed until approval flips it to `pending`. With the flag off, queueing

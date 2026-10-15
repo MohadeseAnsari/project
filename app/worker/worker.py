@@ -32,6 +32,7 @@ from app.db.models import Category, Field, Main, Model, Prompt
 from app.fields.classification import classify_with_reason
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
+from app.services.transitions import assert_record_transition
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ async def recover_stale_jobs(session) -> int:
         Number of jobs recovered.
     """
     cutoff = datetime.utcnow() - timedelta(minutes=settings.worker_lease_minutes)
+    # processing -> ready is a declared transition (see app.services.transitions).
+    assert_record_transition("processing", "ready")
     result = await session.execute(
         update(Main)
         .where(Main.status == "processing")
@@ -79,6 +82,7 @@ async def claim_next_job(session) -> Main | None:
     )
     job = result.scalar_one_or_none()
     if job:
+        assert_record_transition(job.status, "processing")
         job.status = "processing"
         job.claimed_at = datetime.utcnow()
         job.heartbeat_at = datetime.utcnow()
@@ -90,11 +94,19 @@ async def claim_next_job(session) -> Main | None:
 async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category | None]:
     """Resolve a raw thesis field to a stored ``Field`` and its ``Category``.
 
-    First tries an exact match on the normalized name (fast path, no write).
-    For unknown fields, deterministically classifies the normalized name with
-    rule-based keywords (never the LLM) and inserts a new ``Field`` with
-    ``source='runtime'`` and a stable normalized identity, so repeated
-    submissions of the same unknown field reuse one record.
+    The decision is made ONCE, the first time a field is seen, and stored on
+    the row (item 15) — later submissions reuse it and never re-classify.
+
+    For an unknown field the category comes from the deterministic rules in
+    ``app.fields.classification``, UNLESS ``USE_LLM_FOR_CATEGORIZATION`` is on
+    (item 20), in which case the active model is asked first and the rules are
+    the fallback for every failure. The LLM is offered only the category names
+    that already exist and its answer is verified against them, so it can
+    never invent a category or leave a dangling reference.
+
+    A new ``Field`` is inserted with ``source='runtime'`` and a stable
+    normalized identity, so repeated submissions of the same unknown field
+    reuse one record.
 
     Returns:
         ``(field, category)``; ``field`` is ``None`` only if no category could
@@ -112,7 +124,7 @@ async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category
         )
         return field, cat_result.scalar_one()
 
-    cat_name, matched_keyword, _ = classify_with_reason(norm)
+    cat_name, matched_keyword, category_source = await _choose_category(session, norm)
     cat_result = await session.execute(
         select(Category).where(Category.name == cat_name)
     )
@@ -129,14 +141,42 @@ async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category
         category_id=category.id,
         source="runtime",
         matched_keyword=matched_keyword,
+        category_source=category_source,
     )
     session.add(field)
     await session.commit()
     logger.info(
-        "Created new field id=%s name=%s category=%s keyword=%s",
-        field.id, norm, cat_name, matched_keyword,
+        "Created new field id=%s name=%s category=%s keyword=%s source=%s",
+        field.id, norm, cat_name, matched_keyword, category_source,
     )
     return field, category
+
+
+async def _choose_category(session, norm: str) -> tuple[str, str | None, str]:
+    """Pick a category for a new field: LLM when enabled, rules as fallback.
+
+    Returns ``(category_name, matched_keyword, category_source)``. The keyword
+    is ``None`` when the LLM decided — the honest value, since there was no
+    keyword match — and ``category_source`` records which path answered.
+    """
+    rules_name, matched_keyword, _ = classify_with_reason(norm)
+    if not settings.use_llm_for_categorization:
+        return rules_name, matched_keyword, "rules"
+
+    from app.fields.llm_classification import classify_with_llm
+
+    names = [
+        name
+        for (name,) in (
+            await session.execute(select(Category.name).order_by(Category.name))
+        ).all()
+    ]
+    chosen = await classify_with_llm(norm, names)
+    if chosen is None:
+        logger.info("LLM categorisation gave no answer for %r, using the rules", norm)
+        return rules_name, matched_keyword, "rules"
+    logger.info("LLM categorised %r as %r (rules would say %r)", norm, chosen, rules_name)
+    return chosen, None, "llm"
 
 
 async def get_active_model(session) -> Model | None:
@@ -246,6 +286,7 @@ async def process_job(session, job: Main) -> None:
         await heartbeat_task
 
     job.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
+    assert_record_transition(job.status, "review")
     job.status = "review"
     job.updated_at = datetime.utcnow()
     await session.commit()
@@ -258,6 +299,8 @@ async def fail_job(session, job: Main, error: str) -> None:
     The error message is truncated to 2000 characters to fit the column and
     never contains secrets (only exception text from the LLM/provider).
     """
+    if job.status != "failed":
+        assert_record_transition(job.status, "failed")
     job.status = "failed"
     job.error_message = error[:2000]
     job.updated_at = datetime.utcnow()
