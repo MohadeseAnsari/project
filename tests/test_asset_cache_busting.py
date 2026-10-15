@@ -106,3 +106,50 @@ def test_the_running_server_serves_the_versioned_asset():
     assert status == 200, "the versioned URL must actually resolve"
     assert ".grid" in css, "the served asset is not the stylesheet"
     assert "@media" in css, "the served CSS is the one with the breakpoints in it"
+
+def test_every_page_says_which_build_it_is():
+    """When a change "does not show up", this is the first thing to read.
+
+    A cached stylesheet served to a page that has been open since before a
+    deploy looks exactly like a deploy that never happened, and nothing else on
+    screen distinguishes them.
+    """
+    base = Path("app/panel/templates/base.html").read_text(encoding="utf-8")
+    assert "build-stamp" in base, "the footer must carry the stamp"
+    assert "build_stamp()" in base
+    app = Path("app/panel/app.py").read_text(encoding="utf-8")
+    assert 'templates.env.globals["build_stamp"] = _build_stamp' in app
+    # Registered AFTER the function is defined, or the import dies.
+    assert app.index("def _build_stamp") < app.index(
+        'globals["build_stamp"] = _build_stamp'
+    ), "the global must be registered after the function exists"
+    config = Path("app/config.py").read_text(encoding="utf-8")
+    assert "panel_version" in config, "the label is overridable with PANEL_VERSION"
+
+
+@pytest.mark.asyncio
+async def test_the_stamp_appears_on_a_rendered_page(session):
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.db.models import PanelUser, Role
+    from app.panel.auth import hash_password
+    from tests.panel_test_client import panel_client
+
+    async def _admin(session: AsyncSession) -> None:
+        role = (await session.execute(select(Role).where(Role.name == "admin"))).scalar_one_or_none()
+        if role is None:
+            role = Role(name="admin", description="admin")
+            session.add(role)
+            await session.flush()
+        session.add(PanelUser(username="stamp-admin", password_hash=hash_password("secret123"),
+                              role_id=role.id, is_active=True))
+        await session.commit()
+
+    await _admin(session)
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "stamp-admin", "password": "secret123"},
+                          follow_redirects=False)
+        page = await client.get("/")
+    assert page.status_code == 200
+    assert "نسخهٔ" in page.text, "the stamp must be visible, not just present in a template"

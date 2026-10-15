@@ -150,6 +150,24 @@ def _asset_version() -> str:
 templates.env.globals["asset_v"] = _asset_version()
 
 
+def _build_stamp() -> str:
+    """A human-readable "which build am I looking at" marker.
+
+    Added because a whole round of redesign was invisible to the owner while
+    the server had already changed: their browser was serving a cached
+    stylesheet from a page that had been open since before the work started.
+    Nothing in the UI said which build it was, so "I cannot see the change"
+    could not be told apart from "the change did not deploy".
+
+    It now says so on every page. If this stamp is not the one in the commit
+    message, the browser is showing an old copy and the page needs a reload.
+    """
+    return f"{_asset_version()} · built {settings.panel_version}"
+
+
+templates.env.globals["build_stamp"] = _build_stamp
+
+
 @panel_app.middleware("http")
 async def _no_store_html(request: Request, call_next):
     """Never let a browser cache panel HTML.

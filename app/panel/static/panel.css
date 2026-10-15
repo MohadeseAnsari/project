@@ -354,3 +354,10 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
 .measure{max-width:72ch}
 .red{color:var(--red)}
 .grow-search{flex:1 1 200px;min-width:200px}
+
+/* Which build is on screen. Small, quiet, and always present: when a
+   deployment "does not show up", this is the first thing to read. */
+.build-stamp{display:flex;align-items:center;padding:0 var(--pad-x) 10px;
+  font-size:11px;color:var(--mut2);font-variant-numeric:tabular-nums}
+.build-stamp .grow{flex:1}
+@media print{.build-stamp{display:none}}

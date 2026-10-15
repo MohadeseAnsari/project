@@ -197,6 +197,23 @@ this panel is the only place counts appear.
 10. **Machine API untouched.** `POST /submit`, `/health`, `GET /records/{id}`
     keep their exact contracts (covered by the existing suite).
 
+## Build stamp
+
+Every page footer shows `نسخهٔ <asset hash> · built <PANEL_VERSION>`. It exists because a full round of redesign was invisible to the owner while the server had already changed: their browser was serving a cached stylesheet for a page that had been open since before the work started, and nothing on screen said which build it was — so "I cannot see the change" could not be told apart from "the change never deployed".
+
+Read the stamp: if it does not match the commit you are expecting, the browser is showing an old copy and the page needs a reload.
+
+### The proxy in front
+
+The panel is not reached directly. A **Caddy** container (`panel-proxy`, host network, config in `/root/panel-proxy`) is the only public door, at `https://185-19-33-26.sslip.io` and `:8443`, reverse-proxying to `127.0.0.1:8081`. It sets:
+
+```
+@static path /static/*
+header @static Cache-Control "public, max-age=86400"
+```
+
+That 24-hour static cache was written when asset URLs were versionless. It is now safe **because** the URLs carry a content hash, but it is worth knowing about: it is why a stale stylesheet can outlive several deploys in one browser. HTML is `no-store` from the app and is not overridden.
+
 ## Asset delivery
 
 `base.html` requests `/static/panel.css?v=<hash>` and `/static/panel.js?v=<hash>`, where the hash is a SHA-256 prefix over both files, computed once per process (`_asset_version()` in `app/panel/app.py`). Panel HTML is sent `Cache-Control: no-store, must-revalidate`.

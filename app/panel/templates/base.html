@@ -60,6 +60,9 @@
       {% if ok %}<div class="ok-note">{{ ok }}</div>{% endif %}
       {% block content %}{% endblock %}
     </div>
+    {# Which build is this? A cached stylesheet from a page that has been open
+       since before a deploy looks exactly like a deploy that never happened. #}
+    <div class="build-stamp"><span class="grow"></span><span>نسخهٔ {{ build_stamp() }}</span></div>
   </main>
 </div>
 {% endblock %}
