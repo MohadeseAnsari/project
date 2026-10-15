@@ -16,6 +16,12 @@
 (function () {
   'use strict';
 
+  /* The stylesheet pins the drawer open while this class is on the <html>, so a
+     browser with no script still has navigation on a narrow screen. Remove it
+     as the very first thing: leaving it on would pin the drawer open forever
+     the moment the script does run. */
+  document.documentElement.classList.remove('no-js');
+
   var shell = document.getElementById('shell');
   if (!shell) return;
 

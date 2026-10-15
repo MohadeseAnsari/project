@@ -236,6 +236,8 @@ Repeated patterns now have real names in `panel.css`: `.ltr` (Latin values insid
 
 **Responsive.** There were no breakpoints before; the grid was `250px + 1fr` at every width.
 
+The drawer geometry is asserted, not eyeballed (`tests/test_drawer_geometry.py`). It shipped wrong once: pinning to `inset-inline-end` put an RTL sidebar on the left and the RTL translate slid it back across the content, so below 820px the navigation lay permanently on top of the page — which reads as "blank panel".
+
 | Width | Layout |
 |---|---|
 | ≥1281px | full: 230px sidebar, two-column card rows |

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" class="no-js">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title>{# ?v is the content hash of panel.css/panel.js (see _asset_version in app.py).
    Without it the URL never changes, so a browser keeps serving the CSS it
    fetched days ago — which for an admin panel means the owner sees the old
@@ -49,8 +49,7 @@
       {# Below 820px the sidebar is a drawer, so the only way to navigation is
           this button. Hidden above that width, where the rail is always there. #}
       <button class="menu-btn" type="button" data-rail-toggle
-              style="display:none;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--line);border-radius:9px;background:#fff;cursor:pointer;font-size:15px;flex:0 0 auto"
-              aria-label="نمایش منو">☰</button>
+              aria-label="نمایش منو" aria-controls="shell">☰</button>
       <div class="page-id"><h1>{% block h1 %}{% endblock %}</h1><span class="crumb">{% block crumb %}کنسول{% endblock %}</span></div>
       <div class="grow"></div>
       <div class="top-actions">{% block top_actions %}{% endblock %}</div>

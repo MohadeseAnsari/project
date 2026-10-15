@@ -229,9 +229,18 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
 @media (max-width:820px){
  .grid,.grid.collapsed{grid-template-columns:1fr}
  /* Off-canvas. transform rather than display:none so the drawer can animate,
-    and so the links remain in the accessibility tree when it is open. */
- aside{position:fixed;inset-block:0;inset-inline-end:0;width:var(--sidebar-w);z-index:60;
+    and so the links remain in the accessibility tree when it is open.
+
+    The panel is dir="rtl", where inline-START is the RIGHT edge -- which is
+    also where the sidebar already sits, as the first grid child. So it is
+    pinned with inline-start, not inline-end: pinning to inline-end put it on
+    the LEFT and the RTL translate then slid it back across the content, so on
+    any screen at or below 820px the drawer lay permanently ON TOP of the page
+    instead of hiding. That was the "blank panel" report.
+ */
+ aside{position:fixed;inset-block:0;inset-inline-start:0;width:var(--sidebar-w);z-index:60;
        transform:translateX(-100%);transition:transform .18s ease;box-shadow:0 0 40px rgba(17,24,39,.18)}
+ /* RTL: the sidebar is on the right, so "further off-screen" is further right. */
  html[dir=rtl] aside{transform:translateX(100%)}
  .grid.drawer-open aside,.grid.drawer-open.collapsed aside{transform:none}
  /* Every label comes back when the drawer is open: icon-only is for the rail,
@@ -243,7 +252,13 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
  .grid.drawer-open .logo,.grid.drawer-open .avatar{margin:0}
  .scrim{position:fixed;inset:0;background:rgba(17,24,39,.34);z-index:55;display:none}
  .grid.drawer-open .scrim{display:block}
- .menu-btn{display:flex!important}
+  .menu-btn{display:flex!important}
+ /* The drawer toggle only exists at drawer widths, and is controlled here
+    rather than by an inline style: an inline display:none wins over a normal
+    stylesheet rule, so the button could get stuck invisible. */
+ .menu-btn{display:none;align-items:center;justify-content:center;width:32px;height:32px;
+   border:1px solid var(--line);border-radius:9px;background:#fff;cursor:pointer;
+   font-size:15px;flex:0 0 auto;font-family:inherit;color:var(--ink2)}
  .pager b,.pager a{min-width:28px;height:28px}
 }
 @media (max-width:560px){
@@ -361,3 +376,14 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
   font-size:11px;color:var(--mut2);font-variant-numeric:tabular-nums}
 .build-stamp .grow{flex:1}
 @media print{.build-stamp{display:none}}
+
+/* ── No JavaScript ────────────────────────────────────────────────────────
+   The drawer is opened by a class that panel.js toggles. Without the script
+   the toggle is gone AND the sidebar is translated off-screen, so on a narrow
+   screen there would be no navigation at all -- a panel you cannot use. This
+   pins it open instead. The script is an enhancement; the panel must not
+   depend on it to be navigable. # */
+@media (max-width:820px){
+ html.no-js .grid aside{transform:none!important}
+ html.no-js .menu-btn{display:none!important}
+}
