@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon %}
 {% block title %}پرامپت‌ها{% endblock %}
 {% block h1 %}پرامپت‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › پرامپت‌ها{% endblock %}
@@ -27,7 +28,7 @@
       {% if p.is_active %}
       <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><span class="badge s-sent">فعال</span><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
       {% else %}
-      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><form method="post" action="/prompts/{{ p.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">بازگرداندن</button></form><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
+      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><form method="post" action="/prompts/{{ p.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('retry', 'پرامپت نسخهٔ ' ~ p.version ~ ' را دوباره فعال کن') }}</form><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
       {% endif %}
       {% endfor %}
     </div></div>

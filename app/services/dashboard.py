@@ -38,6 +38,12 @@ async def live_counters(session) -> dict:
         "kpi_sent": delivery_counts.get("sent", 0),
         "kpi_failed": counts.get("failed", 0) + delivery_counts.get("failed", 0),
         "worker_fresh": worker_fresh,
+        # The raw timestamp, not just the boolean derived from it. "Idle" says
+        # the worker is unhealthy; "۱۲ دقیقه پیش" says whether it stopped just
+        # now or has been gone since last night, which is the difference between
+        # a blip and an outage. Only meaningful when worker_fresh is False, but
+        # passed unconditionally so the template never has to ask for it.
+        "worker_last_heartbeat_at": heartbeat,
         "pending_deliveries": delivery_counts.get("pending", 0),
         "model_health": await model_service.active_model_health(session),
     }

@@ -3,131 +3,37 @@
 {% block h1 %}رکوردها و بازبینی{% endblock %}
 {% block crumb %}کنسول › رکوردها{% endblock %}
 {% block top_actions %}
-{% if kpi_review %}<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>{% endif %}
-<a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
+{% if tab == 'deliveries' %}
+  {% if gated_count %}<span class="pill">{{ gated_count|fa }} ارسال منتظر تأیید</span>{% endif %}
+{% else %}
+  {% if kpi_review %}<span class="pill">{{ kpi_review|fa }} خبر منتظر تصمیم شما</span>{% endif %}
+  <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
+{% endif %}
 {% endblock %}
 {% block content %}
-<div class="kpis">
-  <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی</div></div></div>
-  <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف پردازش</div></div></div>
-  <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_published|fa }}</div><div class="t">منتشرشده</div></div></div>
-  <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">تولید ناموفق</div></div></div>
+
+{# Records and deliveries, one page with two tabs (the owner asked for this
+   merge). They were separate pages once, and what that split bought is kept
+   here: each tab carries its OWN filters and its OWN KPIs, because "what needs
+   my decision" and "did it reach the channel" are different questions and a
+   single strip of mixed numbers answers neither.
+
+   The tab is a plain link with ?tab=, not a JS widget, so each half is
+   bookmarkable and survives a reload. Filter state is deliberately NOT carried
+   across the tab bar: `status` means a record status on one tab and a
+   delivery status on the other, so passing it along would silently apply
+   "در انتظار بازبینی" to deliveries and show an empty table that looks
+   broken. #}
+<div class="page-section tight">
+  <div class="tabs">
+    <a href="/records"><span class="{% if tab != 'deliveries' %}on{% endif %}">رکوردها و بازبینی</span></a>
+    <a href="/records?tab=deliveries"><span class="{% if tab == 'deliveries' %}on{% endif %}">ارسال‌ها و تحویل{% if gated_count %} ({{ gated_count|fa }}){% endif %}</span></a>
+  </div>
 </div>
 
-<div class="card">
-  <form hx-get="/records/table" hx-target="#records-table" hx-swap="innerHTML" hx-trigger="submit">
-    <div class="filters">
-      <div class="seg">
-        <a href="/records?status=review" style="text-decoration:none;color:inherit"><span class="{% if status=='review' %}on{% endif %}">در انتظار بازبینی</span></a>
-        <a href="/records" style="text-decoration:none;color:inherit"><span class="{% if not status %}on{% endif %}">همه</span></a>
-        <a href="/records?status=published" style="text-decoration:none;color:inherit"><span class="{% if status=='published' %}on{% endif %}">منتشرشده</span></a>
-        <a href="/records?status=failed" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
-        <a href="/records?status=ready" style="text-decoration:none;color:inherit"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
-      </div>
-      <select name="field"><option value="">همهٔ رشته‌ها</option>{% for f in field_options %}<option value="{{ f }}" {% if field==f %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
-      <select name="university"><option value="">همهٔ دانشگاه‌ها</option>{% for u in university_options %}<option value="{{ u }}" {% if university==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>
-      {# "همه" is first because it is now the default. It used to sit last and
-         default to "نیازمند بازبینی", which hid every published record. #}
-      <select name="approved">
-        <option value="" {% if not approved %}selected{% endif %}>همه</option>
-        <option value="no" {% if approved=='no' %}selected{% endif %}>نیازمند بازبینی</option>
-        <option value="yes" {% if approved=='yes' %}selected{% endif %}>تأییدشده</option>
-      </select>
-      <input type="text" name="q" placeholder="جست‌وجو در عنوان، نویسنده، استاد یا شناسه…" value="{{ q or '' }}">
-      <input type="hidden" name="status" value="{{ status or '' }}">
-      <input type="hidden" name="order" value="{{ order }}">
-      <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>
-      <a class="btn btn-ghost btn-sm" href="/records">پاک‌کردن</a>
-    </div>
-  </form>
-  {# Multi-select (item 3). The table auto-refreshes every 15s, so the
-     selection is kept in a JS Set keyed by record id and re-applied after each
-     swap — otherwise a background refresh silently emptied the selection and
-     the operator approved nothing. #}
-  <form method="post" action="/records/bulk-approve" id="bulk-form">{{ csrf_field(request) | safe }}
-  <div id="records-table" hx-get="/records/table?{{ query }}" hx-trigger="load, every 15s">
-    {% include "records_table.html" %}
-  </div>
-  <div class="foot" style="display:flex;gap:11px;align-items:center;flex-wrap:wrap">
-    <button class="btn btn-primary btn-sm" type="submit" id="bulk-submit" disabled>تأیید گروهی انتخاب‌شده‌ها</button>
-    <span class="hint" id="bulk-count"><span class="num">۰</span> انتخاب‌شده</span>
-    <span class="hint">انتخاب‌ها با به‌روزرسانی خودکار جدول حفظ می‌شوند.</span>
-  </div>
-  </form>
-</div>
-<script>
-(function () {
-  // Selection survives the table's 15s auto-refresh: keep the ids here, not
-  // in the DOM that htmx replaces.
-  var selected = new Set();
-  var table = document.getElementById('records-table');
-  var form = document.getElementById('bulk-form');
-  var count = document.getElementById('bulk-count');
-  var submit = document.getElementById('bulk-submit');
-  if (!table || !form) return;
-
-  function fa(n) {
-    return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; });
-  }
-
-  function render() {
-    count.innerHTML = '<span class="num">' + fa(selected.size) + '</span> انتخاب‌شده';
-    submit.disabled = selected.size === 0;
-  }
-
-  function paint() {
-    table.querySelectorAll('input[name="ids"]').forEach(function (box) {
-      var id = box.value;
-      box.checked = selected.has(id);
-      box.disabled = false;
-    });
-    var all = table.querySelector('[data-select-all]');
-    if (all) {
-      var boxes = Array.prototype.slice.call(table.querySelectorAll('input[name="ids"]'));
-      all.checked = boxes.length > 0 && boxes.every(function (b) { return selected.has(b.value); });
-    }
-    render();
-  }
-
-  form.addEventListener('change', function (event) {
-    var box = event.target;
-    if (box.matches('[data-select-all]')) {
-      table.querySelectorAll('input[name="ids"]').forEach(function (b) {
-        if (box.checked) { selected.add(b.value); } else { selected.delete(b.value); }
-        b.checked = box.checked;
-      });
-    } else if (box.name === 'ids') {
-      if (box.checked) { selected.add(box.value); } else { selected.delete(box.value); }
-    } else {
-      return;
-    }
-    // Keep the POST body in step with the Set, so what is submitted is exactly
-    // what the counter says.
-    form.querySelectorAll('input[name="ids"]').forEach(function (n) { n.remove(); });
-    selected.forEach(function (id) {
-      var hidden = document.createElement('input');
-      hidden.type = 'hidden'; hidden.name = 'ids'; hidden.value = id;
-      form.appendChild(hidden);
-    });
-    render();
-  });
-
-  form.addEventListener('submit', function (event) {
-    if (selected.size === 0) {
-      event.preventDefault();
-      return;
-    }
-    if (!confirm('۱ خبر انتخاب شود؟ این کار خبرها را برای ارسال آزاد می‌کند.')) {
-      event.preventDefault();
-      return;
-    }
-    selected.clear();
-  });
-
-  document.body.addEventListener('htmx:afterSwap', function (event) {
-    if (event.detail && event.detail.target === table) paint();
-  });
-  paint();
-})();
-</script>
+{% if tab == 'deliveries' %}
+  {% include "deliveries.html" %}
+{% else %}
+  {% include "records_body.html" %}
+{% endif %}
 {% endblock %}

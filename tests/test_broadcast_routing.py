@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.messaging.dispatcher import channels_for_article, channels_for_article_with_source
 from app.panel.auth import hash_password
+from app.services import channels as channel_service
 from app.services import fields as field_service
 from tests.panel_test_client import panel_client
 
@@ -230,11 +231,142 @@ def test_the_routing_endpoints_no_longer_exist():
 
 
 def test_the_channels_service_no_longer_manages_routing():
+    """Routing is configuration-only again: writable, never read by the sender.
+
+    The per-row add helpers stay gone. ``set_category_channels`` REPLACES a
+    category's whole set instead, because the panel's checkbox list is the
+    complete truth about that category and an "add one row" helper could not
+    express "untick this".
+
+    What matters more is what this file exists to pin: filling the matrix in
+    must not change where news goes. That is asserted behaviourally in
+    ``test_a_filled_category_matrix_still_broadcasts`` below, which is a
+    stronger guarantee than checking that a function is absent -- a missing
+    function can always be re-added by accident, whereas a full matrix that
+    still broadcasts cannot.
+    """
     from app.services import channels as channel_service
 
-    for gone in ("category_channel_matrix", "set_category_channel",
-                 "add_field_route", "add_category_route"):
+    for gone in ("set_category_channel", "add_field_route", "add_category_route"):
         assert not hasattr(channel_service, gone), f"{gone} is dead code now"
+    assert hasattr(channel_service, "category_channel_matrix")
+    assert hasattr(channel_service, "set_category_channels")
+
+
+@pytest.mark.asyncio
+async def test_a_filled_category_matrix_still_broadcasts(session: AsyncSession):
+    """The owner's rule, checked against a matrix the operator has filled in.
+
+    The panel now lets a category name its channels. If that ever started
+    filtering delivery, this fails -- which is the whole point of writing it
+    against real rows rather than asserting a function is absent.
+    """
+    from app.services import channels as channel_service
+
+    category, channels = await _world(session)
+    field = (await session.execute(select(Field))).scalars().one()
+    article = await _article(session, category, field)
+
+    # Map the category to exactly one channel, the most selective thing the
+    # matrix can express.
+    await channel_service.set_category_channels(session, category.id, [channels[0].id])
+    matrix = await channel_service.category_channel_matrix(session)
+    assert [row["channel_ids"] for row in matrix if row["id"] == category.id] == [
+        [channels[0].id]
+    ]
+    # ...and the article still goes everywhere.
+    assert [c.id for c in await channels_for_article(session, article)] == [
+        c.id for c in channels
+    ]
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_category_matrix_removes_the_old_rows(session: AsyncSession):
+    """Set, not merge: an unticked channel must actually stop being routed."""
+    from app.services import channels as channel_service
+
+    category, channels = await _world(session)
+    await channel_service.set_category_channels(session, category.id, [c.id for c in channels])
+    await channel_service.set_category_channels(session, category.id, [channels[1].id])
+    matrix = await channel_service.category_channel_matrix(session)
+    assert [row["channel_ids"] for row in matrix if row["id"] == category.id] == [
+        [channels[1].id]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_selection_clears_a_category(session: AsyncSession):
+    category, channels = await _world(session)
+    await channel_service.set_category_channels(session, category.id, [c.id for c in channels])
+    assert await channel_service.set_category_channels(session, category.id, []) == []
+    matrix = await channel_service.category_channel_matrix(session)
+    assert [row["channel_ids"] for row in matrix if row["id"] == category.id] == [[]]
+
+
+@pytest.mark.asyncio
+async def test_the_categories_page_offers_the_mapping_and_says_it_is_not_live(
+    session: AsyncSession,
+):
+    """The matrix must never be mistaken for something the sender obeys."""
+    await _admin(session)
+    category, _channels = await _world(session)
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
+                          follow_redirects=False)
+        page = await client.get("/categories")
+    assert page.status_code == 200
+    assert f"/categories/{category.id}/channels" in page.text
+    assert "فعلاً اعمال نمی‌شود" in page.text, (
+        "the page must say the mapping is recorded, not enforced"
+    )
+
+
+@pytest.mark.asyncio
+async def test_saving_the_matrix_is_admin_only_and_audited(session: AsyncSession):
+    from sqlalchemy import select as _select
+
+    from app.db.models import AuditLog, PanelUser as _PanelUser
+
+    category, channels = await _world(session)
+    await _admin(session, username="matrix-admin")
+    viewer_role = (await session.execute(
+        _select(Role).where(Role.name == "viewer"))).scalar_one_or_none()
+    if viewer_role is None:
+        viewer_role = Role(name="viewer", description="viewer")
+        session.add(viewer_role)
+        await session.flush()
+    session.add(_PanelUser(username="matrix-viewer", password_hash=hash_password("secret123"),
+                           role_id=viewer_role.id, is_active=True))
+    await session.commit()
+
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "matrix-admin", "password": "secret123"},
+                          follow_redirects=False)
+        saved = await client.post(
+            f"/categories/{category.id}/channels",
+            data={"channel_ids": [str(c.id) for c in channels]},
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+        assert saved.headers["location"] == "/categories"
+
+        await client.post("/logout")
+        await client.post("/login", data={"username": "matrix-viewer", "password": "secret123"},
+                          follow_redirects=False)
+        refused = await client.post(
+            f"/categories/{category.id}/channels", data={"channel_ids": ["1"]},
+            follow_redirects=False,
+        )
+        assert refused.status_code == 403
+
+    matrix = await channel_service.category_channel_matrix(session)
+    assert [row["channel_ids"] for row in matrix if row["id"] == category.id] == [
+        [c.id for c in channels]
+    ], "the viewer's attempt must not have changed anything"
+    actions = (await session.execute(
+        _select(AuditLog.action).where(AuditLog.action == "category_channels")
+    )).scalars().all()
+    assert len(actions) == 1, "exactly the admin attempt is audited"
 
 
 @pytest.mark.asyncio

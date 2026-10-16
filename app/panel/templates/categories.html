@@ -1,20 +1,24 @@
 {% extends "base.html" %}
+{% from "icons.html" import glyph %}
 {% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block content %}
 
-{# An independent page again (the owner asked for four separate pages). A
-   category is a destination, not a field: this page answers "what buckets exist
-   and what falls into each", while /fields answers "what is each row and which
-   bucket is it in". The category of a FIELD is edited on /fields, because that
-   is a property of the row, and editing it here would mean hunting for it. #}
-<div class="note">
+{# A category is a destination, not a field: this page answers "what buckets
+   exist and what falls into each", while /fields answers "what is each row and
+   which bucket is it in". The category of a FIELD is edited on /fields, because
+   that is a property of the row and editing it here would mean hunting for it. #}
+<div class="note page-section">
   دسته‌ها مقصد دسته‌بندی‌اند. هر رشته دقیقاً یک دسته دارد و آن انتخاب در صفحهٔ
   <a href="/fields">رشته‌ها</a> انجام می‌شود؛ اینجا می‌بینید هر دسته چه رشته‌هایی دارد.
+  <br>
+  مسیریابی دسته به کانال در همین صفحه ثبت می‌شود، اما <b>فعلاً اعمال نمی‌شود</b>:
+  هر خبر به همهٔ کانال‌های فعال می‌رود و برای توقف، کانال را در صفحهٔ
+  <a href="/channels">کانال‌ها</a> خاموش کنید.
 </div>
 
-<div class="card">
+<div class="card page-section">
   <div class="filters">
     <form method="get" action="/categories" style="display:flex;gap:9px;align-items:center;flex:1">
       <input type="text" name="q" placeholder="جست‌وجو در نام دسته…" value="{{ q or '' }}" style="flex:1">
@@ -26,7 +30,7 @@
 
   <div class="two" style="padding:14px 22px">
     {% for c in categories %}
-    <div class="card" style="margin:0"><h3>{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+    <div class="card" style="margin:0"><h3 class="card-head">{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
       <div class="body">
         {% if c.field_names %}
         <div class="chips">
@@ -40,6 +44,40 @@
         {% endif %}
         {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
         <div class="hint" style="margin-top:10px">تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
+
+        {# The channel picker. <details> rather than a modal so it opens and
+           closes with no JS, and so the page keeps working if the script never
+           loads. The form posts the WHOLE list, because the checkbox set is the
+           complete truth about this category: a ticked box must start routing
+           and an unticked one must stop, which a "add" or "remove one" form
+           cannot express. #}
+        {% set routed = routes_by_category.get(c.id, []) if routes_by_category else [] %}
+        <details class="disclose" style="margin-top:11px">
+          <summary>
+            {{ glyph('chevron') }}
+            کانال‌ها
+            {% if routed %}<span class="badge s-off">{{ routed|length|fa }} مسیر</span>{% else %}<span class="badge s-off">بدون مسیر</span>{% endif %}
+          </summary>
+          <div class="disclose-body">
+            {% if not active_channels %}
+            <div class="hint" style="padding-top:10px">هیچ کانال فعالی وجود ندارد. ابتدا در صفحهٔ <a href="/channels">کانال‌ها</a> یک کانال فعال بسازید.</div>
+            {% else %}
+            <form method="post" action="/categories/{{ c.id }}/channels">{{ csrf_field(request) | safe }}
+              <div class="hint" style="padding-top:10px">کانال‌هایی که برای این دسته انتخاب می‌شوند. انتخاب خالی یعنی این دسته مسیری ندارد.</div>
+              {% for ch in active_channels %}
+              <label class="pick">
+                <input type="checkbox" name="channel_ids" value="{{ ch.id }}" {% if ch.id in routed %}checked{% endif %}>
+                <span class="grow">{{ ch.title or ch.username or ch.platform }}</span>
+                <small class="hint" style="margin:0">{{ ch.platform }}</small>
+              </label>
+              {% endfor %}
+              <div style="margin-top:9px">
+                <button class="btn btn-primary btn-sm" type="submit">ذخیرهٔ کانال‌های این دسته</button>
+              </div>
+            </form>
+            {% endif %}
+          </div>
+        </details>
       </div>
     </div>
     {% else %}

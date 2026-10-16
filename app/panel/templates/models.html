@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon, icon_link %}
 {% block title %}مدل‌ها{% endblock %}
 {% block h1 %}مدل‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › مدل‌ها{% endblock %}
@@ -33,13 +34,13 @@
         </td>
         <td>{% if m.is_active %}<span class="badge s-sent">✓ فعال</span>{% else %}<span class="badge s-ready">غیرفعال</span>{% endif %}</td>
         <td>
-          <form method="post" action="/models/{{ m.id }}/test" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">تست اتصال</button></form>
-          <a class="rowbtn" href="/models?model_id={{ m.id }}" style="text-decoration:none">ویرایش</a>
+          <form method="post" action="/models/{{ m.id }}/test" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('plug', 'اتصال به مدل ' ~ m.name ~ ' را آزمایش کن') }}</form>
+          {{ icon_link('/models?model_id=' ~ m.id, 'pencil', 'تنظیمات مدل ' ~ m.name ~ ' را ویرایش کن') }}
           {% if m.is_active %}
-          <form method="post" action="/models/{{ m.id }}/deactivate" style="display:inline" onsubmit="return confirm('این مدل غیرفعال شود؟ تا زمانی که مدل فعال دیگری نداشته باشید، تولید متوقف می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">غیرفعال</button></form>
+          <form method="post" action="/models/{{ m.id }}/deactivate" style="display:inline" onsubmit="return confirm('مدل «{{ m.name }}» غیرفعال شود؟ تا زمانی که مدل فعال دیگری نداشته باشید، تولید متوقف می‌شود.')">{{ csrf_field(request) | safe }}{{ icon('power-off', 'مدل ' ~ m.name ~ ' را غیرفعال کن', 'danger') }}</form>
           {% else %}
-          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">فعال‌کردن</button></form>
-          <form method="post" action="/models/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('این مدل حذف شود؟ مدل فعال قابل حذف نیست؛ ابتدا غیرفعال کنید.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف</button></form>
+          <form method="post" action="/models/{{ m.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('power', 'مدل ' ~ m.name ~ ' را فعال کن', 'ok') }}</form>
+          <form method="post" action="/models/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('مدل «{{ m.name }}» حذف شود؟ مدل فعال قابل حذف نیست؛ ابتدا غیرفعال کنید.')">{{ csrf_field(request) | safe }}{{ icon('trash', 'مدل ' ~ m.name ~ ' را حذف کن', 'danger') }}</form>
           {% endif %}
         </td></tr>
       {% endfor %}
@@ -67,7 +68,7 @@
       {% if selected.creds.key_hint or selected.api_key_env %}
       <div class="body" style="border-top:1px solid var(--line2)">
         <form method="post" action="/models/{{ selected.id }}/clear-key" style="display:inline" onsubmit="return confirm('کلید ذخیره‌شدهٔ این مدل پاک شود؟ اگر نقطهٔ اتصال خودش را دارد، تا ثبت کلید تازه تولید ناموفق می‌شود.')">{{ csrf_field(request) | safe }}
-          <button class="btn btn-ghost btn-sm" style="color:var(--red)" type="submit">پاک کردن کلید</button>
+          {{ icon('trash', 'کلید ذخیره‌شدهٔ این مدل را پاک کن', 'danger') }}
           <span class="hint">برای حذف کلید ذخیره‌شده (نه متغیر محیطی) این دکمه را بزنید.</span>
         </form>
       </div>

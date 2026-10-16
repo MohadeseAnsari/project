@@ -139,6 +139,7 @@ def test_every_panel_route_calls_a_service(path, methods, handler):
         "routing_page_removed",  # permanent redirect; the page it replaced is gone
         "categories_page_merged",  # permanent redirect; merged into /fields (item 4)
         "deliveries_page_merged",  # permanent redirect; merged into /records (item 2)
+        "deliveries_page",  # permanent redirect; the deliveries tab of /records
     }:
         return
     source = ast.parse(_source_of(handler))

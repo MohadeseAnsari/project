@@ -5,15 +5,15 @@
    stable over a few seconds, and re-rendering them would only add flicker.
    Every figure here is a cheap GROUP BY count, which is why the cadence can
    stay generous (settings.panel_dashboard_refresh_seconds). #}
-<div class="kpis">
+<div class="kpi-row">
   <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی انسانی</div></div></div>
   <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف / در حال پردازش</div></div></div>
   <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">منتشرشده در کانال‌ها</div></div></div>
   <div class="kpi"><div class="b b-red">!</div><div><div class="n">{{ kpi_failed|fa }}</div><div class="t">ناموفق — نیازمند بررسی</div></div></div>
 </div>
 
-<div class="card">
-  <h3>سلامت سامانه<span class="grow"></span><span class="hint" style="font-weight:400">به‌روزرسانی خودکار</span></h3>
+<div class="card page-section">
+  <h3 class="card-head">سلامت سامانه<span class="grow"></span><span class="hint" style="font-weight:400">به‌روزرسانی خودکار</span></h3>
   <div class="body" style="display:flex;flex-direction:column;gap:11px">
     <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">API</b><span class="grow"></span><span class="badge s-sent">ok</span></div>
     <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><b style="font-size:13px">پایگاه‌داده</b><span class="grow"></span><span class="badge s-sent">connected</span></div>
@@ -35,6 +35,15 @@
       {%- if m.error %} · {{ m.error }}{% endif %}
     </div>
     <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if not worker_fresh %} a{% endif %}"></span><b style="font-size:13px">worker تولید</b><span class="grow"></span><span class="badge {% if worker_fresh %}s-sent{% else %}s-ready{% endif %}">{{ 'Active' if worker_fresh else 'Idle' }}</span></div>
+    {# "Idle" says the worker is unhealthy; the timestamp says whether it
+       stopped a minute ago or has been gone since yesterday, which is the
+       difference between a blip and an outage. Only shown when it is the thing
+       that is wrong -- a stale heartbeat on a healthy worker is just history. #}
+    {% if not worker_fresh %}
+    <div class="hint" style="margin-top:-6px">
+      {% if worker_last_heartbeat_at %}آخرین ضربان: <span class="num">{{ worker_last_heartbeat_at|jalali }}</span>{% else %}تا این لحظه هیچ ضربانی ثبت نشده است.{% endif %}
+    </div>
+    {% endif %}
     <div style="display:flex;align-items:center;gap:8px"><span class="dot{% if pending_deliveries %} a{% endif %}"></span><b style="font-size:13px">worker ارسال</b><span class="grow"></span><span class="badge {% if pending_deliveries %}s-ready{% else %}s-sent{% endif %}">{{ ('صف ' ~ pending_deliveries ~ ' مورد') if pending_deliveries else 'صف خالی' }}</span></div>
   </div>
 </div>

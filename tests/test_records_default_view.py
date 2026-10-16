@@ -146,7 +146,9 @@ async def test_the_pending_filter_is_reachable_from_the_ui(session: AsyncSession
 
 def test_the_select_offers_all_first():
     """Order follows the default, so the control reads honestly."""
-    template = __import__("pathlib").Path("app/panel/templates/records.html").read_text(
+    # The records tab body lives in its own partial now that /records carries
+    # two tabs; the assertion is about the control, not which file holds it.
+    template = __import__("pathlib").Path("app/panel/templates/records_body.html").read_text(
         encoding="utf-8")
     block = template.split('<select name="approved">')[1].split("</select>")[0]
     options = re.findall(r'value="([^"]*)"', block)

@@ -491,7 +491,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
     pages = {
         "/": "داشبورد",
         "/records": "رکوردها و بازبینی",
-        "/deliveries": "ارسال‌ها و تحویل",
+        "/records?tab=deliveries": "ارسال‌ها و تحویل",
         "/fields": "رشته‌ها",
         "/categories": "دسته‌ها و کلیدواژه‌ها",
         "/channels": "کانال‌ها",
@@ -508,11 +508,11 @@ async def test_all_panel_pages_render(session: AsyncSession):
             response = await client.get(path)
             assert response.status_code == 200, path
             assert title in response.text, path
-        # The pages are independent again, so the old tab URLs redirect rather
+        # /deliveries is the tab now, so the bare address 301s to it rather
         # than 404ing. Asserted here so a future removal of the redirect breaks
         # a test, not a bookmark.
         for old_path, new_path in (
-            ("/records?tab=deliveries", "/deliveries"),
+            ("/deliveries", "/records?tab=deliveries"),
             ("/fields?tab=categories", "/categories"),
         ):
             moved = await client.get(old_path, follow_redirects=False)

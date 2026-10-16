@@ -7,11 +7,38 @@
    unconditionally, so it reported health it had never checked -- directly
    above a card that computes the real model and worker state. A status
    indicator that cannot report bad news is worse than none, because it is
-   trusted exactly when it matters. It now reads the same state. #}
+   trusted exactly when it matters. It now reads the same state.
+
+   It now also says WHAT is wrong. "نیازمند بررسی" tells an operator they have a
+   problem and nothing about which one, so they have to open the health card
+   below to find out -- one more click between seeing a warning and acting on
+   it. The reasons live in a <details> so they cost nothing until asked for,
+   and the pill keeps its width either way so the header does not jump. #}
 {% set mh = model_health.state if model_health else 'missing' %}
 {% set all_ok = (mh == 'connected') and worker_fresh %}
-<span class="pill"><span class="dot{% if not all_ok %} a{% endif %}"></span>
-  {% if all_ok %}همه‌چیز سالم{% else %}نیازمند بررسی{% endif %}</span><span class="pill">آخرین به‌روزرسانی: {{ now_label }}</span>
+{% set problems = [] %}
+{% if mh != 'connected' %}
+  {% set _ = problems.append('مدل فعال: ' ~ ({'connected': 'Connected', 'untested': 'هنوز بررسی نشده', 'disconnected': 'قطع', 'degraded': 'نیمه‌کاره', 'missing': 'پیکربندی نشده'}[mh])) %}
+  {% if model_health and model_health.error %}{% set _ = problems.append(model_health.error) %}{% endif %}
+{% endif %}
+{% if not worker_fresh %}
+  {% if worker_last_heartbeat_at %}
+    {% set _ = problems.append('worker تولید: آخرین ضربان ' ~ (worker_last_heartbeat_at|jalali)) %}
+  {% else %}
+    {% set _ = problems.append('worker تولید: هرگز ضربانی ثبت نشده') %}
+  {% endif %}
+{% endif %}
+{% if problems %}
+<details class="pill-disclose">
+  <summary class="pill"><span class="dot a"></span>نیازمند بررسی ({{ problems|length|fa }})</summary>
+  <div class="pill-body">
+    {% for p in problems %}<div class="pill-reason">{{ p }}</div>{% endfor %}
+  </div>
+</details>
+{% else %}
+<span class="pill"><span class="dot"></span>همه‌چیز سالم</span>
+{% endif %}
+<span class="pill">آخرین به‌روزرسانی: {{ now_label }}</span>
 <a class="btn btn-primary" href="/submit">ثبت پایان‌نامهٔ تازه</a>
 {% endblock %}
 {% block content %}
@@ -22,9 +49,9 @@
   {% include "dashboard_live.html" %}
 </div>
 
-<div class="side3">
+<div class="page-section">
   <div class="card">
-    <h3>خبرهای تولیدشده در ۷ روز گذشته</h3>
+    <h3 class="card-head">خبرهای تولیدشده در ۷ روز گذشته</h3>
     <div class="body">
       <div class="chart">
         {% for day in chart %}
@@ -37,7 +64,7 @@
 
 <div class="two">
   <div class="card">
-    <h3>آخرین رویدادها</h3>
+    <h3 class="card-head">آخرین رویدادها</h3>
     <div class="body">
       <div class="timeline">
         {% for e in timeline %}
@@ -48,13 +75,13 @@
   </div>
 
   <div class="card">
-    <h3>وضعیت کانال‌ها</h3>
+    <h3 class="card-head">وضعیت کانال‌ها</h3>
     <div class="body">
       <table>
         <thead><tr><th>کانال</th><th>خبرهای منتشرشده</th><th>حالت</th></tr></thead>
         <tbody>
           {% for c in channels %}
-          <tr><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.sent_count|fa }} خبر</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
+          <tr class="table-row"><td class="title">{{ c.title or c.username or c.platform }}</td><td>{{ c.sent_count|fa }} خبر</td><td><a href="/channels" title="مدیریت کانال‌ها"><span class="switch{% if not c.is_active %} off{% endif %}"></span></a></td></tr>
           {% endfor %}
         </tbody>
       </table>
