@@ -8,8 +8,13 @@
     <div class="brand"><div class="logo">ا</div><div><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
     <nav>
       <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
-      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if review_count %}<span class="cnt">{{ review_count|fa }}</span>{% endif %}</a>
-      <a href="/deliveries" class="{% if active=='deliveries' %}on{% endif %}"><span class="ic">➤</span>ارسال‌ها و تحویل{% if gated_count %}<span class="cnt">{{ gated_count|fa }}</span>{% endif %}</a>
+      {# One entry for both halves. Deliveries went back to being a tab of
+         /records (the owner asked for the merge), and a second sidebar item
+         pointing at a tab would be two doors to one room -- the operator would
+         have to know which room the door they were about to click led to.
+         The badge sums the two counts because both mean "waiting on you". #}
+      {% set waiting = ((review_count or 0) + (gated_count or 0)) %}
+      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if waiting %}<span class="cnt">{{ waiting|fa }}</span>{% endif %}</a>
       <div class="sep">تنظیمات</div>
       <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها</a>
       <a href="/categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>

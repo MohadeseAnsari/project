@@ -1,11 +1,12 @@
+{% from "icons.html" import icon, icon_link %}
 <table>
   <thead>
     <tr><th style="width:66px">شناسه</th><th>رکورد و خبر</th><th style="width:92px">کانال</th><th style="width:130px">دسته / مسیر</th><th style="width:96px">تلاش</th>
-    <th style="width:150px">شناسهٔ پیام کانال</th><th style="width:158px">وضعیت</th><th style="width:150px">عملیات</th></tr>
+    <th style="width:150px">شناسهٔ پیام کانال</th><th style="width:158px">وضعیت</th><th style="width:120px">عملیات</th></tr>
   </thead>
   <tbody>
     {% for d in items %}
-    <tr><td class="num">{{ d.id|fa }}</td>
+    <tr class="table-row"><td class="num">{{ d.id|fa }}</td>
       <td class="title">{{ d.title }}<span class="sub">رکورد {{ d.main_id|fa }} · {{ d.field }}</span></td>
       <td>{{ d.channel_name }}</td>
       <td><small>{{ d.category_name }}{% if d.route_source %} · {{ d.route_source }}{% endif %}</small></td>
@@ -21,19 +22,21 @@
       </td>
       <td>
         {% if d.status == 'failed' %}
-        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">ارسال دوباره</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/retry" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('retry', 'این ارسال ناموفق را دوباره بفرست', 'ok') }}</form>
         {% elif d.status == 'awaiting_confirmation' %}
-        <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn ok" type="submit">آزادسازی</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/release" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('unlock', 'ارسال این خبر را بدون بازبینی آزاد کن', 'ok') }}</form>
         {% else %}
-        <a class="rowbtn" href="/records/{{ d.main_id }}" style="text-decoration:none">مشاهدهٔ خبر</a>
+        {{ icon_link('/records/' ~ d.main_id, 'eye', 'این خبر را مشاهده کن') }}
         {% endif %}
         {# Recovery for every stuck state: cancel anything not yet sent, and
-           delete the message once it has been published. Both confirm first. #}
+           delete the message once it has been published. Both confirm first,
+           and each names what it is about to do — "حذف" alone told the operator
+           nothing about whether the message really leaves the channel. #}
         {% if d.status in ('awaiting_confirmation', 'pending') %}
-        <form method="post" action="/deliveries/{{ d.id }}/cancel" style="display:inline" onsubmit="return confirm('این ارسال لغو شود؟ ردیف با وضعیت ناموفق باقی می‌ماند و قابل تلاش مجدد است.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">لغو ارسال</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/cancel" style="display:inline" onsubmit="return confirm('ارسال این خبر لغو شود؟ ردیف با وضعیت ناموفق باقی می‌ماند و قابل تلاش مجدد است.')">{{ csrf_field(request) | safe }}{{ icon('slash-circle', 'ارسال این خبر را لغو کن', 'danger') }}</form>
         {% elif d.status == 'sent' %}
-        <form method="post" action="/deliveries/{{ d.id }}/delete-from-channel" style="display:inline" onsubmit="return confirm('پیام منتشرشده همین حالا از کانال حذف شود؟ این کار روی خود سکو (tapi/bale یا تلگرام) انجام می‌شود و پیام واقعاً ناپدید می‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف واقعی از کانال</button></form>
-        <form method="post" action="/deliveries/{{ d.id }}/mark-deleted" style="display:inline" onsubmit="return confirm('پیام را خودتان در اپلیکیشن کانال حذف کرده‌اید؟ این فقط وضعیت ردیف را ثبت می‌کند و چیزی برای سکو ارسال نمی‌شود.')">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">ثبت حذف دستی</button></form>
+        <form method="post" action="/deliveries/{{ d.id }}/delete-from-channel" style="display:inline" onsubmit="return confirm('پیام منتشرشده همین حالا از کانال حذف شود؟ این کار روی خود سکو (tapi/bale یا تلگرام) انجام می‌شود و پیام واقعاً ناپدید می‌شود.')">{{ csrf_field(request) | safe }}{{ icon('cloud-off', 'پیام منتشرشده را از کانال حذف کن', 'danger') }}</form>
+        <form method="post" action="/deliveries/{{ d.id }}/mark-deleted" style="display:inline" onsubmit="return confirm('پیام را خودتان در اپلیکیشن کانال حذف کرده‌اید؟ این فقط وضعیت ردیف را ثبت می‌کند و چیزی برای سکو ارسال نمی‌شود.')">{{ csrf_field(request) | safe }}{{ icon('check', 'ثبت کن که پیام را دستی از کانال حذف کرده‌ای') }}</form>
         {% endif %}
       </td></tr>
     {% endfor %}

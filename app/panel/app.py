@@ -435,6 +435,7 @@ _ACTION_FA = {
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
+    "category_channels": "تنظیم کانال‌های دسته",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
@@ -470,17 +471,23 @@ async def records_page(
     q: str = "", order: str = "newest", page: int = 1, approved: str = "",
     tab: str = "", platform: str = "", main_id: str = "",
 ):
-    """Records and review — one page, records only.
+    """Records/review and deliveries: one page, two bookmarkable tabs.
 
-    Deliveries used to be a tab of this page. The owner asked for four
-    independently reachable pages instead, so ``/deliveries`` is its own page
-    again and the tab is gone. A record and its deliveries ARE one thing seen
-    from two sides, but they are answered by two different questions — "what
-    needs my decision" and "did it reach the channel" — and each deserves its
-    own KPIs rather than one strip of mixed numbers.
+    They were one page, then two, then one again, and both changes came from
+    the owner. Merging is right because a record and its deliveries are one
+    story told from two sides, so making the operator pick a page first is
+    navigation for its own sake. Keeping the tabs preserves what the split
+    bought: each side carries its OWN filters and its OWN KPIs, because "what
+    needs my decision" and "did it reach the channel" are different questions
+    and one strip of mixed numbers answers neither.
 
-``?tab=deliveries`` still redirects to ``/deliveries`` so old links and
-    bookmarks keep working instead of 404ing.
+    The tab is addressed by a query string rather than JS, so each half is
+    bookmarkable, linkable and survives a reload, and ``?tab=deliveries``
+    renders in place instead of bouncing through a redirect.
+
+    Filter state is per-tab and deliberately NOT carried across the tab bar:
+    ``status`` means a record status on one tab and a delivery status on the
+    other, so carrying it would silently apply the record filter to deliveries.
 
     ``approved`` defaults to "" -- show everything. It used to default to "no",
     meaning "not yet approved", which was defensible while most records were
@@ -496,12 +503,49 @@ async def records_page(
     user = await require_login(request, session)
     from urllib.parse import urlencode
 
-    if tab == "deliveries":
-        return RedirectResponse(url="/deliveries", status_code=301)
     page = max(1, page)
     page_size = 20
+    counts_ctx = await dashboard_service.sidebar_badges(session)
+
+    # ── the deliveries tab ────────────────────────────────────────────
+    if tab == "deliveries":
+        mid = int(main_id.strip()) if main_id.strip().isdigit() else None
+        pairs, dtotal = await delivery_service.fetch_deliveries(
+            session, page=page, page_size=page_size, status=status or None,
+            platform=platform or None, main_id=mid,
+        )
+        items = await delivery_service.delivery_items(session, pairs)
+        newest_failure = await delivery_service.last_failed(session)
+        last_error = (
+            f"خطای آخر: «{newest_failure.error_message}» — {_jalali(newest_failure.updated_at)}"
+            if newest_failure and newest_failure.error_message else None
+        )
+        delivery_counts = await delivery_service.delivery_status_counts(session)
+        dquery = urlencode(
+            {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
+        )
+        return templates.TemplateResponse(request, "records.html",
+            _ctx(
+                request, user, active="records", tab="deliveries", **counts_ctx,
+                dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
+                total=dtotal, items=items, page=page, page_size=page_size, last_error=last_error,
+                max_attempts=settings.sender_max_attempts,
+                backoff_base=settings.sender_backoff_base_seconds,
+                failed_count=delivery_counts.get("failed", 0),
+                # Delivery KPIs, not record ones: this tab answers "did it
+                # reach the channel". "in the queue" is pending + sending,
+                # because both are committed work the operator may be waiting on.
+                kpi_sent=delivery_counts.get("sent", 0)
+                + delivery_counts.get("deleted_from_channel", 0),
+                kpi_pending=delivery_counts.get("pending", 0)
+                + delivery_counts.get("sending", 0),
+                kpi_gated=delivery_counts.get("awaiting_confirmation", 0),
+                kpi_failed=delivery_counts.get("failed", 0),
+            ),
+        )
+
+    # ── the records tab (the default) ─────────────────────────────────
     counts = await record_service.record_status_counts(session)
-    delivery_counts = await delivery_service.delivery_status_counts(session)
     options = await record_service.filter_options(session)
     approved_flag = {"yes": True, "no": False}.get(approved)
     items, total = await record_service.list_records(
@@ -510,11 +554,10 @@ async def records_page(
         order=order, approved=approved_flag,
     )
     needs_review = await record_service.needs_review_count(session)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
-            request, user, active="records", **counts_ctx,
+            request, user, active="records", tab="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
             # Record states only. The delivery counts that used to sit here
             # (kpi_sent) would answer a question this page is not asked, and
@@ -787,59 +830,21 @@ async def records_bulk_approve(request: Request, session: AsyncSession = Depends
 @panel_app.get("/deliveries", response_class=HTMLResponse)
 async def deliveries_page(
     request: Request, session: AsyncSession = Depends(session_dep),
-    status: str = "", platform: str = "", main_id: str = "", tab: str = "",
 ):
-    """Deliveries and hand-off — an independent page again.
+    """301 to the deliveries tab.
 
-    It was merged into ``/records`` as a tab and the owner asked for it back as
-    its own page: the two have genuinely different filters (a record filters by
-    field and university, a delivery by platform and outcome) and genuinely
-    different KPIs, so neither page has to carry numbers the other owns.
+    Deliveries are a tab of ``/records`` again. The address stays live because
+    it is bookmarked, linked from old audit notes and hard-coded in habit, so
+    it has to land somewhere real rather than 404.
 
-    ``?tab=records`` redirects back to ``/records`` for the same
-    backward-compatibility reason the records route redirects here.
+    ``require_login`` runs BEFORE the redirect on purpose. An anonymous visitor
+    who typed this path must be sent to the login page, not handed a redirect
+    they would follow back into another login bounce -- and more importantly,
+    an unauthenticated request must never be told that a panel address exists
+    at all.
     """
-    user = await require_login(request, session)
-    from urllib.parse import urlencode
-
-    if tab == "records":
-        return RedirectResponse(url="/records", status_code=301)
-    page_size = 20
-    mid = int(main_id.strip()) if main_id.strip().isdigit() else None
-    pairs, total = await delivery_service.fetch_deliveries(
-        session, page=1, page_size=page_size, status=status or None,
-        platform=platform or None, main_id=mid,
-    )
-    items = await delivery_service.delivery_items(session, pairs)
-    newest_failure = await delivery_service.last_failed(session)
-    last_error = (
-        f"خطای آخر: «{newest_failure.error_message}» — {_jalali(newest_failure.updated_at)}"
-        if newest_failure and newest_failure.error_message else None
-    )
-    delivery_counts = await delivery_service.delivery_status_counts(session)
-    dquery = urlencode(
-        {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
-    )
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "deliveries.html",
-        _ctx(
-            request, user, active="deliveries", **counts_ctx,
-            dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
-            total=total, items=items, page=1, page_size=page_size, last_error=last_error,
-            max_attempts=settings.sender_max_attempts,
-            backoff_base=settings.sender_backoff_base_seconds,
-            failed_count=delivery_counts.get("failed", 0),
-            # Delivery KPIs, not record ones: this page answers "did it reach
-            # the channel". "in the queue" is pending + sending, because both
-            # are committed work the operator may be waiting on.
-            kpi_sent=delivery_counts.get("sent", 0)
-            + delivery_counts.get("deleted_from_channel", 0),
-            kpi_pending=delivery_counts.get("pending", 0)
-            + delivery_counts.get("sending", 0),
-            kpi_gated=delivery_counts.get("awaiting_confirmation", 0),
-            kpi_failed=delivery_counts.get("failed", 0),
-        )
-    )
+    await require_login(request, session)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=301)
 
 
 @panel_app.get("/deliveries/table", response_class=HTMLResponse)
@@ -885,7 +890,7 @@ async def delivery_retry(
     except ValueError:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال قابل تلاش مجدد نیست."), status_code=409)
     await audit_service.record_event(session, user.id, "retry", delivery.main_id, f"delivery={delivery.id}")
-    return RedirectResponse(url="/deliveries", status_code=302)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=302)
 
 
 @panel_app.post("/deliveries/{delivery_id}/release")
@@ -906,7 +911,7 @@ async def delivery_release(
     except ValueError:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="این ارسال در انتظار تأیید نیست."), status_code=409)
     await audit_service.record_event(session, user.id, "release", delivery.main_id, f"delivery={delivery.id}")
-    return RedirectResponse(url="/deliveries", status_code=302)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=302)
 
 
 @panel_app.post("/deliveries/{delivery_id}/cancel")
@@ -931,7 +936,7 @@ async def delivery_cancel(
     except ValueError:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="ارسال در حال ارسال یا ارسال‌شده قابل لغو نیست."), status_code=409)
     await audit_service.record_event(session, user.id, "cancel", delivery.main_id, f"delivery={delivery.id}")
-    return RedirectResponse(url="/deliveries", status_code=302)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=302)
 
 
 @panel_app.post("/deliveries/{delivery_id}/delete-from-channel")
@@ -966,7 +971,7 @@ async def delivery_delete_from_channel(
         session, user.id, "delete_from_channel", delivery.main_id,
         f"delivery={delivery.id} message_id={delivery.platform_message_id}",
     )
-    return RedirectResponse(url="/deliveries", status_code=303)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=303)
 
 
 @panel_app.post("/records/{record_id}/delete-everywhere")
@@ -1053,7 +1058,7 @@ async def delivery_mark_deleted(
         session, user.id, "mark_deleted", delivery.main_id,
         f"delivery={delivery.id} message_id={delivery.platform_message_id}",
     )
-    return RedirectResponse(url="/deliveries", status_code=303)
+    return RedirectResponse(url="/records?tab=deliveries", status_code=303)
 
 
 # --------------------------------------------------------------------------
@@ -1120,24 +1125,69 @@ async def categories_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     q: str = "", tab: str = "",
 ):
-    """Categories and keywords — an independent page again.
+    """Categories and keywords, plus the category-to-channel mapping.
 
-    It was merged into ``/fields`` as a tab and the owner asked for it back as
-    its own page: a category is a destination you browse ("what buckets exist
-    and what falls into each"), which is a different job from editing one
-    field's assignment.
+    A category is a destination you browse ("what buckets exist and what falls
+    into each"), which is a different job from editing one field's assignment,
+    so it keeps its own page.
 
-    ``?tab=fields`` redirects to ``/fields`` for symmetry with the old
-    ``/fields?tab=categories`` form.
+    The per-category channel picker is here because a CATEGORY is what gets
+    routed. Routing each of 500+ fields individually is not a configuration
+    screen anyone will ever fill in; routing the bucket is.
+
+    The dispatcher still broadcasts to every active channel. This mapping is
+    recorded and displayed, not yet acted on, which is why the note above the
+    matrix says so plainly -- a matrix an operator fills in and then watches be
+    ignored is worse than no matrix, so the panel never implies it is live.
     """
     user = await require_login(request, session)
     if tab == "fields":
         return RedirectResponse(url="/fields", status_code=301)
     categories, category_total = await field_service.category_cards(session, q)
     counts_ctx = await dashboard_service.sidebar_badges(session)
+    # One row per category with its channel ids, plus every channel so each
+    # picker can list them. Both come from the same tables the routes live in.
+    matrix = await channel_service.category_channel_matrix(session)
+    routes_by_category = {row["id"]: row["channel_ids"] for row in matrix}
+    active_channels = [c for c in await channel_service.list_channels(session) if c.is_active]
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx,
-             categories=categories, category_total=category_total, q=q))
+             categories=categories, category_total=category_total, q=q,
+             routes_by_category=routes_by_category, active_channels=active_channels))
+
+
+@panel_app.post("/categories/{category_id}/channels")
+async def category_channels_set(
+    request: Request, category_id: int, session: AsyncSession = Depends(session_dep),
+):
+    """Replace one category's channel routes (admins).
+
+    The whole checkbox list is the truth about this category, so this REPLACES
+    the set rather than adding to it: a box the operator unticked must stop
+    being routed, and a merge-style append could never undo a mistake.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    form = await request.form()
+    raw = form.getlist("channel_ids")
+    channel_ids: list[int] = []
+    for value in raw:
+        try:
+            channel_ids.append(int(value))
+        except (TypeError, ValueError):
+            # A tampered or hand-edited form must not 500; an id that is not a
+            # number simply is not a channel.
+            continue
+    stored = await channel_service.set_category_channels(session, category_id, channel_ids)
+    names = ", ".join(str(c) for c in stored) or "هیچ کانالی"
+    await audit_service.record_event(
+        session, user.id, "category_channels", None,
+        f"category={category_id}; channels={names}",
+    )
+    return RedirectResponse(url="/categories", status_code=303)
 
 
 @panel_app.post("/fields/{field_id}/confirm")
@@ -1193,9 +1243,17 @@ async def channels_page(
              "category_routes": 0},
         )
         channel.last_error = last_errors.get(channel.id)
+    # Read-only mirror of the category matrix: which categories currently name
+    # this channel. Shown as chips on the settings card so an operator editing a
+    # channel can see what points at it without opening /categories.
+    routed_names: dict[int, list[str]] = {}
+    for row in await channel_service.category_channel_matrix(session):
+        for channel_id in row["channel_ids"]:
+            routed_names.setdefault(channel_id, []).append(row["name"])
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
+             routed_names=routed_names,
              active_count=sum(1 for c in channels if c.is_active),
              total_sent=sum(c.usage.get("sent", 0) for c in channels),
              total_failed=sum(c.usage.get("failed", 0) for c in channels),
@@ -1785,6 +1843,7 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
     "/fields/{field_id}/category": "FIELD_CURATE",
+"/categories/{category_id}/channels": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
     "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",

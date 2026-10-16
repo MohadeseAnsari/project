@@ -298,6 +298,76 @@ async def remove_routes(session, channel_id: int) -> int:
     return len(field_rows) + len(cat_rows)
 
 
+async def category_channel_matrix(session) -> list[dict]:
+    """Every category with the channel ids currently mapped to it.
+
+    Returns ``[{"id": int, "name": str, "channel_ids": list[int]}, ...]`` in
+    category id order, including categories with no routes at all — the panel
+    renders a checkbox list per category, and a category with an empty
+    selection must still appear, or it could never be given routes.
+
+    Read as one query per table rather than per category: the panel asks for
+    the whole matrix on every render, and a deployment has hundreds of
+    categories, so a per-row lookup would be hundreds of round trips.
+    """
+    categories = list(
+        (
+            await session.execute(select(Category.id, Category.name).order_by(Category.id))
+        ).all()
+    )
+    routes = (
+        await session.execute(
+            select(CategoryChannelRoute.category_id, CategoryChannelRoute.channel_id).order_by(
+                CategoryChannelRoute.category_id, CategoryChannelRoute.channel_id
+            )
+        )
+    ).all()
+    mapped: dict[int, list[int]] = {}
+    for category_id, channel_id in routes:
+        mapped.setdefault(category_id, []).append(channel_id)
+    return [
+        {"id": row.id, "name": row.name, "channel_ids": mapped.get(row.id, [])}
+        for row in categories
+    ]
+
+
+async def set_category_channels(session, category_id: int, channel_ids: list[int]) -> list[int]:
+    """Replace one category's channel routes with ``channel_ids``.
+
+    Replace, not merge: the checkbox list is the whole truth about this
+    category, so a box the operator just unticked must actually stop being
+    routed. Delete-then-insert inside the caller's transaction — a partial
+    application would leave the category pointing somewhere the operator
+    explicitly chose not to.
+
+    Duplicates are collapsed and order is preserved, so the stored rows match
+    what was submitted and a double-click cannot raise a PK violation. The
+    returned list is what was actually stored.
+    """
+    unique: list[int] = []
+    for channel_id in channel_ids:
+        if channel_id not in unique:
+            unique.append(channel_id)
+    existing = list(
+        (
+            await session.execute(
+                select(CategoryChannelRoute).where(
+                    CategoryChannelRoute.category_id == category_id
+                )
+            )
+        ).scalars().all()
+    )
+    for route in existing:
+        await session.delete(route)
+    await session.flush()
+    for channel_id in unique:
+        session.add(
+            CategoryChannelRoute(category_id=category_id, channel_id=channel_id)
+        )
+    await session.commit()
+    return unique
+
+
 async def set_channel_token(session, row: Channel, token: str | None) -> Channel:
     """Replace a channel's own bot token, encrypted at rest.
 

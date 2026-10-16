@@ -40,6 +40,16 @@ header.top h1{font-size:16.5px;font-weight:700}
 header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .grow{flex:1}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);background:#fff;white-space:nowrap}
+/* The health pill's expandable reasons. <details> so it opens with no JS, and
+   the panel keeps working if the script never loads. The summary is the pill
+   itself, so a collapsed header looks exactly like the old one. */
+.pill-disclose{position:relative;display:inline-block}
+.pill-disclose>summary{list-style:none;cursor:pointer}
+.pill-disclose>summary::-webkit-details-marker{display:none}
+.pill-disclose>summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.pill-body{position:absolute;top:calc(100% + 6px);left:0;z-index:20;min-width:280px;max-width:380px;background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:0 10px 26px rgba(17,24,39,.13);padding:9px 11px}
+.pill-reason{font-size:12px;color:var(--ink2);padding:4px 0;line-height:1.7;white-space:normal}
+.pill-reason+.pill-reason{border-top:1px solid var(--line2)}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
 .dot.a{background:var(--amber);box-shadow:0 0 0 3px var(--amber-soft)}
 .btn{border:0;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:13px;cursor:pointer;font-weight:600;white-space:nowrap}
@@ -64,6 +74,32 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .danger-zone .hint{margin:5px 0 8px}
 .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
 .wrap{padding:18px 22px;display:flex;flex-direction:column;gap:14px}
+/* ── layout rhythm ───────────────────────────────────────────────────
+   Every panel page stacks the same way: an optional note, a KPI row, the
+   primary card, then secondary cards. These classes name that rhythm so the
+   spacing lives in one place instead of an inline margin-bottom on each page
+   that has to be re-guessed when it changes. */
+.page-section{margin-bottom:14px}
+.page-section.tight{margin-bottom:8px}
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+/* A card header is a flex row of fixed minimum height so a title and a badge
+   line up across every card on the page, whatever their contents. */
+.card-head{padding:10px 14px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:8px;min-height:44px}
+/* One row height for every table, so a table with a 44px header does not jump
+   when a row's content wraps differently from its neighbour. */
+.table-row{height:44px}
+/* A row of action icons: small square targets that sit on the text baseline.
+   The button carries no text, so the label lives in title (tooltip) and
+   aria-label (screen readers) -- both required, not optional. */
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid transparent;border-radius:8px;background:none;padding:0;cursor:pointer;color:var(--mut);font-family:inherit;vertical-align:middle;text-decoration:none}
+.icon-btn:hover{background:#F3F4F6;border-color:var(--line)}
+.icon-btn:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.icon-btn svg{width:16px;height:16px;display:block}
+.icon-btn.danger{color:var(--red)}
+.icon-btn.danger:hover{background:var(--red-soft);border-color:#FECDD3}
+.icon-btn.ok{color:var(--green)}
+.icon-btn.ok:hover{background:var(--green-soft);border-color:var(--green-line)}
+.icon-btn.mut{color:var(--mut)}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .kpi{background:#fff;border:1px solid var(--line);border-radius:13px;padding:13px;display:flex;align-items:center;gap:12px}
 .kpi .n{font-size:21px;font-weight:700;line-height:1}
@@ -75,6 +111,7 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .b-primary{background:var(--primary-soft);color:var(--primary-d)}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .card h3{font-size:13.5px;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:8px}
+.card h3.card-head{padding:10px 14px;min-height:44px}
 .card h3 .grow{flex:1}
 .card .body{padding:14px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
@@ -137,6 +174,23 @@ td .sub{display:block;color:var(--mut);font-size:11.5px;font-weight:400;margin-t
 .tl small{color:var(--mut2);font-size:11.5px}
 .matrix td,.matrix th{text-align:center}
 .matrix td:first-child,.matrix th:first-child{text-align:right}
+/* An expandable panel built from <details>, so it opens and closes with no JS.
+   The marker is replaced with a chevron because the default triangle points
+   the wrong way in RTL. */
+details.disclose{border:1px solid var(--line);border-radius:10px;background:#FCFCFE}
+details.disclose>summary{list-style:none;cursor:pointer;padding:8px 11px;display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--ink2);border-radius:10px}
+details.disclose>summary::-webkit-details-marker{display:none}
+details.disclose>summary:hover{background:#F4F5FA}
+details.disclose>summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+details.disclose>summary .chev{margin-right:auto;color:var(--mut2);transition:transform .15s}
+details.disclose[open]>summary .chev{transform:rotate(-90deg)}
+details.disclose .disclose-body{padding:0 11px 11px;border-top:1px solid var(--line2)}
+details.disclose .disclose-body>.hint:first-child{padding-top:10px}
+/* A checkbox row in the channel picker: the label is the hit target, not the
+   13px box, so the whole line toggles it. */
+.pick{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;cursor:pointer}
+.pick:hover{background:#F4F5FA}
+.pick input{width:15px;height:15px;flex:0 0 auto;margin:0;cursor:pointer}
 .tick{color:var(--green);font-weight:700}
 .cross{color:var(--mut2)}
 .bar{height:8px;border-radius:99px;background:#EEF0F6;overflow:hidden}

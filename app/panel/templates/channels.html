@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon, icon_link, glyph %}
 {% block title %}کانال‌ها{% endblock %}
 {% block h1 %}کانال‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › کانال‌ها{% endblock %}
@@ -13,14 +14,14 @@
    that never actually filtered anything.
 
    Switching a channel OFF is the only way to stop it receiving news. #}
-<div class="note">
+<div class="note page-section">
   هر خبر تولیدشده به <b>همهٔ کانال‌های فعال</b> می‌رود. نیازی به انتخاب کانال یا مسیر نیست —
   برای اینکه خبری به کانالی نرود، همان کانال را خاموش کنید.<br>
   کانال تازه فقط خبرهای <b>بعد از زمان روشن‌شدنش</b> را می‌گیرد؛ آرشیو قبلی برایش ارسال نمی‌شود.
   خاموش و دوباره روشن کردن کانال، زمان شروع را به‌روز می‌کند.
 </div>
 
-<div class="kpis">
+<div class="kpi-row">
   <div class="kpi"><div class="b b-green">⇢</div><div><div class="n">{{ channels|length|fa }}</div><div class="t">کانال</div></div></div>
   <div class="kpi"><div class="b b-amber">◈</div><div><div class="n">{{ active_count|fa }}</div><div class="t">فعال — این‌ها خبر می‌گیرند</div></div></div>
   <div class="kpi"><div class="b b-blue">✓</div><div><div class="n">{{ total_sent|fa }}</div><div class="t">خبر منتشرشده</div></div></div>
@@ -32,7 +33,7 @@
 <div class="two">
   {# ── the channels ─────────────────────────────────────────────── #}
   <div class="card">
-    <h3>کانال‌ها</h3>
+    <h3 class="card-head">کانال‌ها</h3>
     <div class="body" style="display:flex;flex-direction:column;gap:10px">
       {% for c in channels %}
       {% set is_selected = selected and selected.id == c.id %}
@@ -61,7 +62,7 @@
           {% endif %}
         </div>
         <form method="post" action="/channels/{{ c.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button type="submit" title="فعال / غیرفعال" style="border:0;background:none;padding:0;cursor:pointer"><span class="switch{% if not c.is_active %} off{% endif %}"></span></button></form>
-        <a class="btn btn-ghost btn-sm" href="/channels?channel_id={{ c.id }}">ویرایش</a>
+        {{ icon_link('/channels?channel_id=' ~ c.id, 'pencil', 'تنظیمات کانال ' ~ (c.title or c.username or c.platform) ~ ' را ویرایش کن') }}
       </div>
       {% endfor %}
 
@@ -73,10 +74,29 @@
 
   {# ── the selected channel's settings ───────────────────────────── #}
   <div class="card">
-    <h3>تنظیمات کانال{% if selected %} — {{ selected.title or selected.username or selected.platform }}{% endif %}</h3>
+    <h3 class="card-head">تنظیمات کانال{% if selected %} — {{ selected.title or selected.username or selected.platform }}{% endif %}</h3>
     <div class="body">
       {% if selected %}
       <div class="hint" style="margin-bottom:13px">این فرم فقط همین کانال را تغییر می‌دهد؛ بقیهٔ کانال‌ها دست‌نخورده می‌مانند.</div>
+
+      {# Read-only mirror of the category->channel mapping, so whoever edits a
+         channel can see what points at it without opening /categories. It is
+         read-only on purpose: the mapping is edited one category at a time
+         from that page, and a second editable copy here would let the two
+         screens disagree. #}
+      <div class="page-section tight">
+        <b style="font-size:12.5px">دسته‌های مسیریابی‌شده به این کانال</b>
+        {% set routed = routed_names.get(selected.id, []) if routed_names else [] %}
+        {% if routed %}
+        <div class="chips" style="margin-top:8px">
+          {% for name in routed %}<span class="chip">{{ name }}</span>{% endfor %}
+        </div>
+        <div class="hint">فهرست زیر در صفحهٔ <a href="/categories">دسته‌ها و کلیدواژه‌ها</a> ویرایش می‌شود.</div>
+        {% else %}
+        <div class="hint" style="margin-top:5px">هیچ دسته‌ای به این کانال مسیر داده نشده است.</div>
+        {% endif %}
+      </div>
+
       <form method="post" action="/channels/{{ selected.id }}">{{ csrf_field(request) | safe }}
         <div class="field"><label>نام نمایشی</label><input type="text" name="title" value="{{ selected.title or '' }}" placeholder="مثلاً: کانال اصلی خبر"></div>
         <div class="field"><label>شناسهٔ مقصد (chat_id)</label><input type="text" name="chat_id" value="{{ selected.chat_id }}" style="direction:ltr;text-align:left"></div>
@@ -102,7 +122,7 @@
           <form method="post" action="/channels/{{ selected.id }}/delete" onsubmit="return confirm('این کانال {{ selected.usage.deliveries|fa }} ارسال دارد؛ به‌جای حذف، غیرفعال می‌شود. ادامه می‌دهید؟');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes"><button class="btn btn-danger btn-sm" type="submit">غیرفعال کردن کانال</button></form>
           {% else %}
           <div class="hint">این کانال هیچ ارسالی ندارد، پس حذف می‌شود.</div>
-          <form method="post" action="/channels/{{ selected.id }}/delete" onsubmit="return confirm('این کانال برای همیشه حذف می‌شود. مطمئنید؟');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes"><button class="btn btn-danger btn-sm" type="submit">حذف کانال</button></form>
+          <form method="post" action="/channels/{{ selected.id }}/delete" onsubmit="return confirm('کانال «{{ selected.title or selected.username or selected.platform }}» برای همیشه حذف شود؟ مطمئنید؟');">{{ csrf_field(request) | safe }}<input type="hidden" name="confirm" value="yes">{{ icon('trash', 'کانال ' ~ (selected.title or selected.username or selected.platform) ~ ' را برای همیشه حذف کن', 'danger') }}</form>
           {% endif %}
         </div>
       </div>
@@ -116,7 +136,7 @@
 {# ── add a channel ────────────────────────────────────────────────── #}
 {% if show_new %}
 <div class="card">
-  <h3>افزودن کانال تازه</h3>
+  <h3 class="card-head">افزودن کانال تازه</h3>
   <div class="body">
     <div class="hint" style="margin-bottom:13px">کانال تازه <b>کنار</b> کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div>
     <form method="post" action="/channels">{{ csrf_field(request) | safe }}
@@ -134,9 +154,9 @@
 {% else %}
 <div class="card" style="border:1px dashed var(--line)">
   <div class="body" style="display:flex;align-items:center;gap:13px">
-    <div style="width:36px;height:36px;border-radius:10px;background:#F3F4F6;display:grid;place-items:center;color:var(--mut);font-size:17px">+</div>
+    <div style="width:36px;height:36px;border-radius:10px;background:#F3F4F6;display:grid;place-items:center;color:var(--mut)">{{ glyph('plus') }}</div>
     <div class="grow"><b style="font-size:13.5px">افزودن کانال تازه</b><div class="hint">کانال تازه کنار کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div></div>
-    <a class="btn btn-ghost btn-sm" href="/channels?new=1">افزودن کانال</a>
+    <a class="btn btn-ghost btn-sm" href="/channels?new=1">{{ glyph('plus') }}افزودن کانال</a>
   </div>
 </div>
 {% endif %}

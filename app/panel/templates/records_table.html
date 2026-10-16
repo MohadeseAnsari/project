@@ -1,14 +1,15 @@
+{% from "icons.html" import icon, icon_link %}
 <table>
   <thead>
     <tr>
       <th style="width:36px"><input type="checkbox" data-select-all title="انتخاب همهٔ این صفحه"></th><th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
       <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
-      <th style="width:196px">عملیات</th>
+      <th style="width:88px">عملیات</th>
     </tr>
   </thead>
   <tbody>
     {% for r in items %}
-    <tr>
+    <tr class="table-row">
       <td>{% if r.status == 'review' %}<input type="checkbox" name="ids" value="{{ r.id }}">{% endif %}</td>
       <td class="num">{{ r.id|fa }}</td>
       <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
@@ -28,10 +29,10 @@
       <td>
         {# Approving releases the article for sending: confirm, since it publishes. #}
         {% if r.status == 'review' %}
-        <form method="post" action="/records/{{ r.id }}/review" style="display:inline" onsubmit="return confirm('این خبر تأیید و برای ارسال آزاد شود؟')">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve"><button class="rowbtn ok" type="submit">تأیید و انتشار</button></form>
-        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">ویرایش</a>
+        <form method="post" action="/records/{{ r.id }}/review" style="display:inline" onsubmit="return confirm('این خبر تأیید و برای ارسال آزاد شود؟')">{{ csrf_field(request) | safe }}<input type="hidden" name="action" value="approve">{{ icon('check', 'این خبر را تأیید و منتشر کن', 'ok') }}</form>
+        {{ icon_link('/records/' ~ r.id, 'pencil', 'این خبر را ویرایش کن') }}
         {% else %}
-        <a class="rowbtn" href="/records/{{ r.id }}" style="text-decoration:none">مشاهده</a>
+        {{ icon_link('/records/' ~ r.id, 'eye', 'این خبر را مشاهده کن') }}
         {% endif %}
       </td>
     </tr>

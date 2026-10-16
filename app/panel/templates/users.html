@@ -1,16 +1,17 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon %}
 {% block title %}کاربران و نقش‌ها{% endblock %}
 {% block h1 %}کاربران و نقش‌ها{% endblock %}
 {% block crumb %}کنسول › مدیریت › کاربران{% endblock %}
 {% block content %}
 <div class="two">
   <div class="card">
-    <h3>کاربران کنسول<span class="grow"></span><span class="badge s-off">{{ users|length|fa }} کاربر</span></h3>
+    <h3 class="card-head">کاربران کنسول<span class="grow"></span><span class="badge s-off">{{ users|length|fa }} کاربر</span></h3>
     <table>
-      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:150px">عملیات</th></tr></thead>
+      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:88px">عملیات</th></tr></thead>
       <tbody>
         {% for u in users %}
-        <tr><td class="title">{{ u.username }}</td>
+        <tr class="table-row"><td class="title">{{ u.username }}</td>
           <td>
             {% if u.role == 'admin' %}<span class="role r-admin">ادمین</span>
             {% elif u.role == 'editor' %}<span class="role r-review">بازبین</span>
@@ -19,8 +20,13 @@
           <td class="num">{{ u.created_at|jalali }}</td>
           <td>{% if u.is_active %}<span class="badge s-sent">فعال</span>{% else %}<span class="badge s-off">غیرفعال</span>{% endif %}</td>
           <td>
-            <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit">{% if u.is_active %}غیرفعال‌سازی{% else %}فعال‌سازی{% endif %}</button></form>
-            <form method="post" action="/users/{{ u.id }}/delete" style="display:inline" onsubmit="return confirm('حذف کاربر؟ تاریخچه‌دارها غیرفعال می‌مانند.')">{{ csrf_field(request) | safe }}<button class="rowbtn no" type="submit">حذف</button></form>
+            {# The tooltip names the target: "غیرفعال‌سازی" on a row of four
+               identical-looking buttons would not say WHICH user. #}
+            <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline">{{ csrf_field(request) | safe }}
+              {% if u.is_active %}{{ icon('power-off', 'دسترسی کاربر ' ~ u.username ~ ' را ببند') }}
+              {% else %}{{ icon('power', 'دسترسی کاربر ' ~ u.username ~ ' را باز کن', 'ok') }}{% endif %}
+            </form>
+            <form method="post" action="/users/{{ u.id }}/delete" style="display:inline" onsubmit="return confirm('کاربر «{{ u.username }}» حذف شود؟ اگر سابقه‌ای داشته باشد به‌جای حذف غیرفعال می‌ماند.')">{{ csrf_field(request) | safe }}{{ icon('trash', 'کاربر ' ~ u.username ~ ' را حذف کن', 'danger') }}</form>
           </td></tr>
         {% endfor %}
       </tbody>
