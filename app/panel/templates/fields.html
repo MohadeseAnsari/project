@@ -1,15 +1,47 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon %}
 {% block title %}رشته‌ها{% endblock %}
 {% block h1 %}رشته‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › رشته‌ها{% endblock %}
 {% block content %}
-<div class="note">
+<div class="note page-section">
   یک رشته، یک دسته و کلیدواژهٔ تطبیقش یک چیز واحد هستند، پس در یک صفحه و در یک ردیف آمده‌اند.
   دستهٔ هر رشته همین‌جا تعیین می‌شود و یک‌بار ذخیره می‌شود؛ در ثبت‌های بعدی دوباره محاسبه نمی‌شود.
-  فهرست خودِ دسته‌ها در صفحهٔ <a href="/categories">دسته‌ها و کلیدواژه‌ها</a> است.
+  فهرست خودِ دسته‌ها در صفحهٔ <a href="/categories">دسته‌ها و کلیدواژه‌ها</a> است، جایی که
+  کانال‌های هر دسته هم انتخاب می‌شوند.
 </div>
 
-<div class="card">
+{# The result of a bulk assignment, so a batch that did nothing is visibly
+   different from one that worked. Without it "did my click do anything?" is
+   the first question, and the page looks exactly the same either way. #}
+{% if assigned is not none %}
+<div class="ok-note page-section">
+  {{ assigned|fa }} رشته به دستهٔ انتخابی منتقل شد.
+  {%- if skipped %} {{ skipped|fa }} رشته از قبل در همان دسته بود و دست‌نخورده ماند.{% endif %}
+</div>
+{% endif %}
+
+{# ── add a field ────────────────────────────────────────────────────────
+   A discipline missing from the spreadsheet could otherwise only ever reach
+   «other», and with routing live that is a bucket that publishes nowhere.
+   Created as `manual` so the next classification pass cannot move it. #}
+<details class="disclose page-section">
+  <summary>{{ icon('plus', '') }}افزودن رشتهٔ تازه</summary>
+  <div class="disclose-body">
+    <form method="post" action="/fields">{{ csrf_field(request) | safe }}
+      <div class="two" style="gap:11px">
+        <div class="field"><label>نام رشته</label>
+          <input type="text" name="name" required placeholder="مثلاً: مهندسی صنایع"></div>
+        <div class="field"><label>دسته</label>
+          <select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}</select></div>
+      </div>
+      <div class="hint">رشتهٔ تازه با منبع «دستی» ثبت می‌شود، پس دستهٔ آن را دسته‌بندی خودکار بعداً جابه‌جا نمی‌کند.</div>
+      <button class="btn btn-primary btn-sm" type="submit">افزودن رشته</button>
+    </form>
+  </div>
+</details>
+
+<div class="card page-section">
   {# Search and filters are one GET form, so a filtered page is a shareable URL
      and Back works. The page-size selector is inside the same form rather than a
      separate control, so changing it keeps the current search. #}
@@ -45,20 +77,29 @@
 
   {# Every field as a row, with its category editable in place: the assignment
      and its consequence are visible together, which is the whole point of
-     keeping this on the field row rather than on the categories page. #}
+     keeping this on the field row rather than on the categories page.
+
+     The whole table is inside the bulk form, so ticking rows and applying is
+     one action with no JS. Editing ONE field still has its own control in the
+     row: "move 300 rows" and "fix this one" are different jobs and a bulk-only
+     UI answers only the first. #}
+  <form method="post" action="/fields/bulk-category" id="bulk-field-form">{{ csrf_field(request) | safe }}
   <table>
     <thead><tr>
+      <th style="width:34px"><input type="checkbox" data-select-all-fields title="انتخاب همهٔ این صفحه" aria-label="انتخاب همهٔ رشته‌های این صفحه"></th>
       <th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:200px">دسته</th>
-      <th style="width:150px">کلیدواژهٔ تطبیق</th><th style="width:110px">منبع</th><th style="width:110px">تأیید</th>
+      <th style="width:150px">کلیدواژهٔ تطبیق</th><th style="width:110px">منبع</th>
+      <th style="width:80px">تأیید</th><th style="width:44px"><span class="hint">حذف</span></th>
     </tr></thead>
     <tbody>
       {% for f in fields %}
-      <tr>
+      <tr class="table-row">
+        <td><input type="checkbox" name="field_ids" value="{{ f.id }}"></td>
         <td class="num">{{ f.id|fa }}</td>
         <td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
         <td>
           <form method="post" action="/fields/{{ f.id }}/category" class="inline-edit">{{ csrf_field(request) | safe }}
-            <select name="category_id">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
+            <select name="category_id" aria-label="دستهٔ {{ f.name }}">{% for cat in categories %}<option value="{{ cat.id }}" {% if f.category_id == cat.id %}selected{% endif %}>{{ cat.name }}</option>{% endfor %}</select>
             <button class="btn btn-ghost btn-sm" type="submit">ثبت</button>
           </form>
         </td>
@@ -66,9 +107,14 @@
         <td><span class="badge {% if f.category_source == 'manual' %}s-sent{% elif f.category_source == 'curated' %}s-ready{% else %}s-off{% endif %}">{{ {'manual': 'دستی', 'curated': 'تأییدشده', 'llm': 'مدل', 'rules': 'قواعد'}.get(f.category_source, f.category_source) }}</span></td>
         <td>{% if f.category_source == 'curated' or f.category_source == 'manual' %}<span class="badge s-sent">تأیید</span>
             {% else %}<form method="post" action="/fields/{{ f.id }}/confirm" style="display:inline">{{ csrf_field(request) | safe }}<button class="rowbtn" type="submit" title="فریز کردن دسته">تأیید</button></form>{% endif %}</td>
+        <td>
+          {# Confirms, and says the one thing the operator cannot see: a field
+             that a record uses will be refused. #}
+          <form method="post" action="/fields/{{ f.id }}/delete" style="display:inline" onsubmit="return confirm('رشتهٔ «{{ f.name }}» حذف شود؟ اگر رکوردی به آن ارجاع داده باشد، حذف انجام نمی‌شود.')">{{ csrf_field(request) | safe }}{{ icon('trash', 'رشتهٔ ' ~ f.name ~ ' را حذف کن', 'danger') }}</form>
+        </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="hint" style="text-align:center;padding:22px">
+      <tr><td colspan="8" class="hint" style="text-align:center;padding:22px">
         {% if q or category_id or source or unconfirmed %}
           رشته‌ای با این فیلترها پیدا نشد.
           <a href="/fields" style="color:var(--primary-d);font-weight:600">پاک‌کردن فیلترها</a>
@@ -95,10 +141,23 @@
       {% if shown_to < total %}<a href="/fields?{{ query }}&page={{ page + 1 }}">بعدی</a>{% endif %}
     </div>
   </div>
+
+  {# The bulk bar. It is at the FOOT of the table, not the top, because the
+     decision it acts on is made by looking at the rows -- and it counts what
+     is selected, so the operator can see the batch before committing it. #}
+  <div class="foot" style="border-top:1px solid var(--line2)">
+    <button class="btn btn-primary btn-sm" type="submit" id="bulk-field-submit" disabled>انتقال انتخاب‌شده‌ها به دستهٔ</button>
+    <select name="category_id" aria-label="دستهٔ مقصد">
+      {% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}
+    </select>
+    <span class="hint" id="bulk-field-count"><span class="num">۰</span> رشته انتخاب شده</span>
+    <span class="hint">فیلترها و صفحهٔ فعلی می‌مانند؛ فقط انتخاب‌شده‌ها منتقل می‌شوند.</span>
+  </div>
+  </form>
 </div>
 
 <div class="two">
-  <div class="card"><h3>پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
+  <div class="card"><h3 class="card-head">پرکاربردترین رشته‌ها در رکوردها</h3><div class="body" style="display:flex;flex-direction:column;gap:11px">
     {% for t in top %}
     <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>{{ t.name }}</span><span class="num">{{ t.pct|fa }}٪</span></div><div class="bar"><i style="width:{{ t.pct }}%"></i></div></div>
     {% else %}
@@ -106,4 +165,44 @@
     {% endfor %}
   </div></div>
 </div>
+<script>
+/* Selection count for the bulk category bar.
+   Plain JS, no framework: the page has no build step and none is getting one.
+   The selection is NOT held in a Set here, unlike the records table, because
+   this table is not swapped by htmx -- a plain checkbox survives on its own
+   and a Set would only add a way for the two to disagree. */
+(function () {
+  var form = document.getElementById('bulk-field-form');
+  if (!form) return;
+  var all = form.querySelector('[data-select-all-fields]');
+  var count = document.getElementById('bulk-field-count');
+  var submit = document.getElementById('bulk-field-submit');
+
+  function fa(n) {
+    return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; });
+  }
+
+  function render() {
+    var boxes = form.querySelectorAll('input[name="field_ids"]');
+    var n = 0;
+    boxes.forEach(function (b) { if (b.checked) n++; });
+    count.innerHTML = '<span class="num">' + fa(n) + '</span> رشته انتخاب شده';
+    submit.disabled = n === 0;
+    if (all) {
+      all.checked = n > 0 && n === boxes.length;
+    }
+  }
+
+  form.addEventListener('change', function (event) {
+    if (event.target === all) {
+      form.querySelectorAll('input[name="field_ids"]').forEach(function (b) {
+        b.checked = all.checked;
+      });
+    }
+    if (event.target.name === 'field_ids' || event.target === all) render();
+  });
+
+  render();
+})();
+</script>
 {% endblock %}

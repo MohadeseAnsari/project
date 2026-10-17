@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "icons.html" import glyph %}
+{% from "icons.html" import icon, glyph %}
 {% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
@@ -34,6 +34,25 @@
   {%- if unrouted_categories %} دسته‌های بدون مسیر: {% for c in unrouted_categories %}<a href="#cat-{{ c.id }}">{{ c.name }}</a>{% if not loop.last %}، {% endif %}{% endfor %}.{% endif %}
 </div>
 {% endif %}
+
+{# Creating a category used to be impossible: buckets could only be deleted or
+   reused. With routing decided per category, a missing bucket is unfixable --
+   its fields had nowhere to go. #}
+<details class="disclose page-section">
+  <summary>{{ icon('plus', '') }}افزودن دستهٔ تازه</summary>
+  <div class="disclose-body">
+    <form method="post" action="/categories">{{ csrf_field(request) | safe }}
+      <div class="two" style="gap:11px">
+        <div class="field"><label>نام دسته</label>
+          <input type="text" name="name" required placeholder="مثلاً: علوم کامپیوتر"></div>
+        <div class="field"><label>توضیح (اختیاری)</label>
+          <input type="text" name="description" placeholder="یک خط که این دسته را توضیح دهد"></div>
+      </div>
+      <div class="hint">دستهٔ تازه کانالی ندارد، پس تا انتخاب کانال، خبرهایش منتشر نمی‌شود.</div>
+      <button class="btn btn-primary btn-sm" type="submit">افزودن دسته</button>
+    </form>
+  </div>
+</details>
 
 <div class="card page-section">
   <div class="filters">

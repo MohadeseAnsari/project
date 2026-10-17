@@ -436,6 +436,8 @@ _ACTION_FA = {
     "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "category_channels": "تنظیم کانال‌های دسته",
+    "field_create": "افزودن رشته", "field_delete": "حذف رشته",
+    "category_create": "افزودن دسته",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
@@ -1071,6 +1073,7 @@ async def fields_page(
     request: Request, session: AsyncSession = Depends(session_dep),
     q: str = "", tab: str = "", page: int = 1, page_size: int = 50,
     category_id: int | None = None, source: str = "", unconfirmed: str = "",
+    assigned: str = "", skipped: str = "",
 ):
     """Fields — one row each, with the category editable on that row.
 
@@ -1117,7 +1120,11 @@ async def fields_page(
         _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
              top=top, q=q, categories=categories, category_id=category_id,
              source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
-             query=query, shown_from=shown_from, shown_to=shown_to))
+             query=query, shown_from=shown_from, shown_to=shown_to,
+             # The bulk-assign outcome, so a batch that did nothing is visibly
+             # different from one that worked.
+             assigned=int(assigned) if assigned.isdigit() else None,
+             skipped=int(skipped) if skipped.isdigit() else None))
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
@@ -1336,6 +1343,132 @@ async def field_set_category(
     await audit_service.record_event(session, user.id, "route", None,
                                      f"field={field_id} category={row.category_id} source=manual")
     return RedirectResponse(url="/fields", status_code=303)
+
+
+@panel_app.post("/fields/bulk-category")
+async def fields_bulk_category(
+    request: Request, category_id: int = Form(...),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Move every ticked field into one category (reviewers and admins).
+
+    The operation that makes curation possible at the scale the data is at:
+    hundreds of fields, and the classifier drops most of them into one
+    catch-all, so fixing them one dropdown at a time is a task nobody
+    finishes.
+
+    Fields already in the target are skipped rather than rewritten, so the
+    «دستی» badge keeps meaning "a person chose this" instead of appearing on
+    rows nobody looked at.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.FIELD_CURATE)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    form = await request.form()
+    try:
+        moved, skipped = await field_service.bulk_assign_category(
+            session, form.getlist("field_ids"), category_id
+        )
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "انتقال دسته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(
+        session, user.id, "route", None,
+        f"bulk fields={moved + skipped} category={category_id} moved={moved} skipped={skipped}",
+    )
+    # The outcome rides back in the query string so the field list can say how
+    # many actually moved. A batch that silently did nothing -- because every
+    # ticked field was already in the target -- is indistinguishable from one
+    # that worked, and "did my click do anything?" is the first question.
+    return RedirectResponse(
+        url=f"/fields?assigned={moved}&skipped={skipped}", status_code=303
+    )
+
+
+@panel_app.post("/fields")
+async def fields_create(
+    request: Request, name: str = Form(...), category_id: int = Form(...),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Add a field by hand, already placed in a category.
+
+    A discipline that is missing from the spreadsheet can otherwise only ever
+    reach ``other``, and with routing live that is a bucket that publishes
+    nowhere. Creating it marked ``manual`` means the next classification pass
+    cannot quietly move it either.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.FIELD_CURATE)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    try:
+        field = await field_service.create_field(session, name, category_id)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "افزودن رشته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(session, user.id, "field_create", None,
+                                     f"field={field.id} category={field.category_id}")
+    return RedirectResponse(url="/fields", status_code=303)
+
+
+@panel_app.post("/fields/{field_id}/delete")
+async def field_delete(request: Request, field_id: int, session: AsyncSession = Depends(session_dep)):
+    """Delete a field, refusing while records still point at it.
+
+    Deleting is refused rather than detaching the link: ``main.field_id`` is
+    nullable, so nulling it would be easy, but it would silently detach real
+    history from the discipline it was filed under while the record still
+    displays that discipline. Being told the field cannot go yet is the honest
+    answer.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.FIELD_CURATE)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    row = await field_service.get_field(session, field_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
+    try:
+        await field_service.delete_field(session, row)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "حذف رشته ممکن نشد.")),
+            status_code=409)
+    await audit_service.record_event(session, user.id, "field_delete", None, f"field={field_id}")
+    return RedirectResponse(url="/fields", status_code=303)
+
+
+@panel_app.post("/categories")
+async def categories_create(
+    request: Request, name: str = Form(...), description: str = Form(""),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Create a category (admins).
+
+    There was no way to do this at all: buckets could only be deleted or
+    reused. With routing decided per category, that made a missing bucket
+    unfixable -- its fields had nowhere to go.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    try:
+        category = await field_service.create_category(session, name, description)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "افزودن دسته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(session, user.id, "category_create", None,
+                                     f"category={category.id}")
+    return RedirectResponse(url="/categories", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
@@ -1871,6 +2004,10 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}": "MANAGE_CONFIG",
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
+    "/fields": "FIELD_CURATE",
+    "/fields/bulk-category": "FIELD_CURATE",
+    "/fields/{field_id}/delete": "FIELD_CURATE",
+    "/categories": "MANAGE_CONFIG",
     "/fields/{field_id}/category": "FIELD_CURATE",
 "/categories/{category_id}/channels": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",

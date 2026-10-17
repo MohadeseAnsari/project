@@ -79,6 +79,9 @@ ERROR_MESSAGES: dict[str, tuple[int, str]] = {
     "duplicate-version": (422, "نسخه تکراری است."),
     "bad-action": (422, "عملیات نامعتبر است."),
     "unknown-category": (422, "دستهٔ انتخاب‌شده وجود ندارد."),
+    "empty-name": (422, "نام را وارد کنید."),
+    "duplicate-field": (422, "رشته‌ای با این نام از قبل وجود دارد."),
+    "field-in-use": (409, "این رشته در رکوردها به کار رفته و تا وقتی آن رکوردها وجود دارند قابل حذف نیست."),
     "bad-platform": (422, "سکوی نامعتبر است."),
     "no-platform-token": (422, "توکن ربات این سکو پیکربندی نشده است."),
     "duplicate-channel": (422, "این کانال قبلاً ثبت شده است."),
@@ -99,7 +102,14 @@ def message_for(code: str, default: str | None = None) -> str:
     """Persian message for a domain error code (one place, never a traceback)."""
     if default is not None and code not in ERROR_MESSAGES:
         return default
-    return ERROR_MESSAGES.get(code, ERROR_MESSAGES["domain-error"][1])
+    # [1], not the whole entry. This used to return the (status, message) tuple
+    # for every KNOWN code, so every panel error rendered as
+    # "(422, 'دستهٔ انتخاب‌شده وجود ندارد.')" instead of the sentence -- and
+    # because only known codes hit that branch, the unknown-code fallback still
+    # looked right, which is why it went unnoticed. The default is the full
+    # tuple too, for the same reason: indexing a bare string would yield a
+    # character.
+    return ERROR_MESSAGES.get(code, ERROR_MESSAGES["domain-error"])[1]
 
 
 def from_value_error(exc: ValueError, default_message: str | None = None) -> tuple[int, str]:

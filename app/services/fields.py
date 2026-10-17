@@ -168,6 +168,172 @@ async def get_field(session, field_id: int) -> Field | None:
     return await session.get(Field, field_id)
 
 
+async def create_category(session, name: str, description: str | None = None) -> Category:
+    """Create a category, or return the existing one with that name.
+
+    Idempotent by name rather than raising on a duplicate, because the panel's
+    form is a single text box and "you already have that one" is a far more
+    useful answer than a uniqueness error the operator cannot act on. Routing
+    is decided per category, so being unable to create one means a bucket of
+    fields that cannot be routed anywhere.
+
+    The name is trimmed but NOT otherwise normalized: two categories differing
+    only in internal whitespace would be a confusing near-duplicate, and the
+    collapse is cheap enough to be safe.
+    """
+    trimmed = (name or "").strip()
+    if not trimmed:
+        raise ValueError("empty-name")
+    existing = (
+        await session.execute(select(Category).where(Category.name == trimmed))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    category = Category(name=trimmed, description=(description or "").strip() or None)
+    session.add(category)
+    await session.commit()
+    await session.refresh(category)
+    return category
+
+
+async def create_field(session, name: str, category_id: int) -> Field:
+    """Add a field by name and place it in a category.
+
+    ``normalized_name`` is the stable identity used for exact matching and
+    duplicate prevention, so it is computed the same way the classifier
+    computes it. Skipping that would let a field be added under a name that
+    looks new but normalizes onto an existing one, and the second insert would
+    blow up on the unique index with an error the operator cannot read.
+
+    ``source='manual'`` marks it as an operator addition rather than something
+    the spreadsheet supplied, so the field list can tell the two apart and a
+    later spreadsheet import does not mistake it for its own.
+
+    Raises:
+        ValueError: ``empty-name`` / ``duplicate-field`` / ``unknown-category``
+    """
+    from app.fields.normalization import normalize_field
+
+    trimmed = (name or "").strip()
+    if not trimmed:
+        raise ValueError("empty-name")
+    normalized = normalize_field(trimmed)
+    if not normalized:
+        raise ValueError("empty-name")
+    if await session.get(Category, category_id) is None:
+        raise ValueError("unknown-category")
+    clash = (
+        await session.execute(
+            select(Field).where(
+                or_(Field.name == trimmed, Field.normalized_name == normalized)
+            )
+        )
+    ).scalars().first()
+    if clash is not None:
+        raise ValueError("duplicate-field")
+    field = Field(
+        name=trimmed,
+        normalized_name=normalized,
+        category_id=category_id,
+        source="manual",
+        # A hand-added field is already a decision, so it must not be moved by
+        # the next automatic classification pass the way a ruleset guess would.
+        category_source="manual",
+    )
+    session.add(field)
+    await session.commit()
+    await session.refresh(field)
+    return field
+
+
+async def bulk_assign_category(
+    session, field_ids, category_id: int
+) -> tuple[int, int]:
+    """Move every field in ``field_ids`` into one category. Returns (moved, skipped).
+
+    This is the operation that makes curation possible at the scale the data is
+    actually at: a deployment has hundreds of fields and the classifier drops
+    most of them into one catch-all, so fixing them one dropdown at a time is
+    not a task anyone finishes.
+
+    Fields already in the target are counted as ``skipped`` rather than
+    rewritten. Rewriting them would set ``category_source='manual'`` on rows
+    the operator never looked at, quietly converting a machine guess into an
+    apparent human decision -- and the field list shows that badge, so the
+    difference is meant to mean something.
+
+    Unknown ids are ignored rather than fatal: the form posts whatever was
+    ticked, and a stale checkbox must not block the rest of the batch.
+
+    Raises:
+        ValueError: ``unknown-category`` when the target does not exist.
+    """
+    if await session.get(Category, category_id) is None:
+        raise ValueError("unknown-category")
+    ids = []
+    for raw in field_ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value not in ids:
+            ids.append(value)
+    if not ids:
+        return (0, 0)
+    rows = list(
+        (
+            await session.execute(select(Field).where(Field.id.in_(ids)))
+        )
+        .scalars()
+        .all()
+    )
+    moved = 0
+    skipped = 0
+    for row in rows:
+        if row.category_id == category_id:
+            skipped += 1
+            continue
+        row.category_id = category_id
+        row.category_source = "manual"
+        moved += 1
+    if moved:
+        await session.commit()
+    return (moved, skipped)
+
+
+async def field_record_count(session, field_id: int) -> int:
+    """How many records point at this field.
+
+    ``main.field_id`` is a plain FK, so deleting a referenced field would raise
+    a database error the operator cannot read. The panel counts first and
+    refuses in Persian instead.
+    """
+    return (
+        await session.execute(
+            select(func.count(Main.id)).where(Main.field_id == field_id)
+        )
+    ).scalar_one()
+
+
+async def delete_field(session, row: Field) -> str:
+    """Delete a field, refusing while any record still points at it.
+
+    Refuses rather than detaching. ``main.field_id`` is nullable, so setting
+    it to NULL would be easy -- but that silently detaches real history from
+    the discipline it was filed under, and the record's own ``field`` text
+    still says otherwise. Losing that link quietly is worse than being told
+    the field cannot go yet.
+
+    Raises:
+        ValueError: ``field-in-use`` when records still reference it.
+    """
+    if await field_record_count(session, row.id):
+        raise ValueError("field-in-use")
+    await session.delete(row)
+    await session.commit()
+    return "deleted"
+
+
 async def confirm_category(session, field: Field) -> Field:
     """Freeze a field's category as human-curated (reclassification skips it).
 
