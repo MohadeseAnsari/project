@@ -220,10 +220,14 @@ deliveries are `sent`.
 `awaiting_confirmation` is the gated initial status while
 `REQUIRE_HUMAN_CONFIRMATION` is on; approving the record flips it to `pending`.
 
-An article reaches **every active channel**; there is no route table in the
-decision any more. The only exclusions are `is_active = false` and
-`channels.activated_at > main.created_at` — a channel never receives news that
-predates the moment it was switched on. Each delivery snapshots `category_id` +
-`route_source` (`all`) at queue time, so a send stays explainable after later
-edits. `fields.matched_keyword` records which keyword produced the field's
+An article reaches **the channels its category names**
+(`category_channel_routes`), and nothing else. A record with no category, or one
+whose category has no selected channels, reaches **no channel at all** — the
+chain has no fallback to "every active channel", because a fallback would make
+the matrix a control that looks live and is not. The other exclusions are
+`is_active = false` and `channels.activated_at > main.created_at` — a channel
+never receives news that predates the moment it was switched on, which is what
+stops a newly routed channel from being flooded with the archive. Each
+delivery snapshots `category_id` + `route_source` (`category`) at queue time, so
+a send stays explainable after later edits. `fields.matched_keyword` records which keyword produced the field's
 category, for the same reason.

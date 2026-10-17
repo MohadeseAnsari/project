@@ -24,7 +24,7 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import Channel, Delivery, Main
+from app.db.models import CategoryChannelRoute, Channel, Delivery, Main
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
 from app.services.transitions import assert_delivery_transition, assert_record_transition
@@ -86,7 +86,7 @@ async def preview_routing(
                 keyword = field_row.matched_keyword
         if keyword is None:
             _, keyword, _ = classify_with_reason(normalize_field(record.field))
-        pairs = await resolve_channels(session, record.created_at)
+        pairs = await resolve_channels(session, record.created_at, record.category_id)
         return {
             "input": record.field,
             "record_id": record.id,
@@ -114,7 +114,7 @@ async def preview_routing(
         )
         category = result.scalar_one_or_none()
         category_id = category.id if category else None
-    pairs = await resolve_channels(session, None)
+    pairs = await resolve_channels(session, None, category_id)
     return {
         "input": field,
         "record_id": None,
@@ -134,53 +134,67 @@ async def preview_routing(
 async def channels_for_article(session, article: Main) -> list[Channel]:
     """Return the active channels this article must be published to.
 
-    The owner's core rule (item 6): **every active channel** receives the
-    news. The previous chain (category route, else field route, else all
-    active) meant that adding one category->channel mapping silently stopped
-    delivery to every other channel, which is the opposite of what was asked
-    for.
+    **Routing is live.** The chain is one link: a record's category names the
+    channels it goes to. A thesis is submitted, classified into a category, and
+    that category's selected channels are the only ones it publishes to.
 
-    ``category_channel_routes`` no longer FILTERS. It records which channel is
-    each category's designated news channel, and that is reported as the
-    delivery's provenance so the panel can show where a channel came from.
+    An article whose category has NO routes goes NOWHERE. That is deliberate,
+    and it is the strict reading of "choose which channels this category's news
+    goes to": falling back to every active channel would mean the panel shows
+    a mapping that silently does not apply, which is worse than showing
+    nothing. The panel therefore flags every category with zero routes and
+    says how many fields are stranded behind it.
 
-    A channel switched off is the only way to stop delivery to it.
+    ``category_channel_routes`` replaces the ``field_channel_routes`` link:
+    routing each of 500+ fields individually is a configuration screen nobody
+    ever fills in, so the category is the unit the owner manages. A record
+    with no category at all has no route either, and goes nowhere.
     """
     return [channel for channel, _ in await channels_for_article_with_source(session, article)]
 
 
 async def resolve_channels(
-    session, since: datetime | None
+    session, since: datetime | None, category_id: int | None
 ) -> list[tuple[Channel, str]]:
     """Resolve ``(channel, route_source)`` for one article.
 
     The neutral core shared by the sender (via articles), the routing preview
     endpoint and the panel, so every surface agrees on where an article goes.
 
-    Every active channel is a target. There is no routing to configure: the
-    owner asked for exactly this, and the two configuration screens that used
-    to sit on the channels page had accumulated for a behaviour that never
-    actually filtered anything. Switching a channel OFF is the only thing
-    that decides where news does not go.
+    The rule: the article's category's channels, and nothing else. No category,
+    or a category with no channels selected, means no destinations.
 
     **A channel only receives news from the moment it was switched on.**
     ``since`` is the article's ``created_at``, and a channel qualifies when
-    ``activated_at <= since``. Without that floor the owner got the opposite of
-    what they asked for: adding a channel made the sender enqueue the entire
-    archive to it, because a brand new channel has no delivery rows for
-    anything, ever. Passing ``None`` means "no article yet" and applies no
-    floor, which is what the preview endpoint wants — it answers "where would
-    news generated right now go?".
+    ``activated_at <= since``. Without that floor, turning routing on would
+    make the sender enqueue the whole archive to whichever channel was ticked,
+    because every historical article predates the mapping and would match.
+    Passing ``None`` means "no article yet" and applies no floor, which is what
+    the preview endpoint wants: it answers "where would news generated right
+    now go?".
 
-    ``route_source`` is therefore always ``"all"``. The column is kept because
-    it is part of the delivery's history, and older rows still carry
-    ``"category"``/``"field"`` from before.
+    ``route_source`` is ``"category"`` whenever a destination exists. The
+    ``"all"`` value is never produced any more, but the column keeps the value
+    because it is part of the delivery's history and older rows still carry it.
     """
-    query = select(Channel).where(Channel.is_active.is_(True))
+    if category_id is None:
+        return []
+    routes = list(
+        (
+            await session.execute(
+                select(CategoryChannelRoute.channel_id).where(
+                    CategoryChannelRoute.category_id == category_id
+                )
+            )
+        ).scalars().all()
+    )
+    if not routes:
+        return []
+    query = select(Channel).where(Channel.id.in_(routes), Channel.is_active.is_(True))
     if since is not None:
         query = query.where(Channel.activated_at <= since)
-    active = list((await session.execute(query.order_by(Channel.id))).scalars().all())
-    return [(channel, "all") for channel in active]
+    channels = list((await session.execute(query.order_by(Channel.id))).scalars().all())
+    return [(channel, "category") for channel in channels]
 
 
 async def channels_for_article_with_source(
@@ -188,36 +202,36 @@ async def channels_for_article_with_source(
 ) -> list[tuple[Channel, str]]:
     """Resolve ``(channel, route_source)`` pairs for an article.
 
-    Same rule as :func:`channels_for_article`, additionally reporting whether
-    the channel is this category's designated one (``category``) or was simply
-    reached by the broadcast (``all``), so the delivery row can snapshot its
-    provenance at queue time.
+    Same rule as :func:`channels_for_article`, additionally reporting that the
+    channel was reached through the category mapping, so the delivery row can
+    snapshot its provenance at queue time.
     """
-    return await resolve_channels(session, article.created_at)
+    return await resolve_channels(session, article.created_at, article.category_id)
 
 
 def _has_undelivered_channel():
-    """SQL predicate: the article has an active channel with no delivery yet.
+    """SQL predicate: the article's category routes to an active channel that
+    has no delivery row yet.
 
-    Mirrors :func:`channels_for_article` exactly -- every active channel is
-    a target, but only from the moment it was switched ON
-    (``channels.activated_at <= main.created_at``) -- because the two must
-    agree or the batch query would either skip articles the resolver would
-    route (silent non-delivery) or keep returning articles the resolver has
-    nothing to do for.
+    Mirrors :func:`resolve_channels` exactly, which is the whole reason it is a
+    correlated EXISTS rather than a Python pass over the batch. If the two
+    disagree the sender fails silently in both directions: a predicate that is
+    too wide selects articles the resolver will route nowhere, and they sit in
+    the batch window forever crowding out articles that do need sending; a
+    predicate that is too narrow never selects an article whose channel is
+    still missing, so it is never delivered at all.
 
-    The activation floor is what stops a newly added channel from inheriting
-    the whole archive: without it every historical article matches this
-    predicate, because a new channel has no delivery rows for anything, so the
-    sender would build deliveries for the entire backlog on every pass.
-
-    That agreement is now simple enough to state in one sentence, which is the
-    point: the old version had to re-express the three-level chain in SQL
-    and carried a comment explaining how easy it was to get subtly wrong.
+    The category join is an INNER join on purpose. A record with no category,
+    or one whose category has no routes, has no destination, so the predicate
+    must match nothing for it, which is exactly what the inner join does. The
+    activation floor (``channels.activated_at <= main.created_at``) is the
+    other half of the agreement: it stops a channel that was just switched on
+    from inheriting the whole archive.
     """
     return exists(
         select(1)
-        .select_from(Channel)
+        .select_from(CategoryChannelRoute)
+        .join(Channel, Channel.id == CategoryChannelRoute.channel_id)
         .outerjoin(
             Delivery,
             and_(
@@ -227,6 +241,7 @@ def _has_undelivered_channel():
         )
         .where(
             and_(
+                CategoryChannelRoute.category_id == Main.category_id,
                 Channel.is_active.is_(True),
                 Channel.activated_at <= Main.created_at,
                 Delivery.id.is_(None),

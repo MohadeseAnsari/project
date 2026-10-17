@@ -8,15 +8,32 @@
 {# A category is a destination, not a field: this page answers "what buckets
    exist and what falls into each", while /fields answers "what is each row and
    which bucket is it in". The category of a FIELD is edited on /fields, because
-   that is a property of the row and editing it here would mean hunting for it. #}
+   that is a property of the row and editing it here would mean hunting for it.
+
+   This page is also where routing is configured, because a CATEGORY is what
+   gets routed: the checkbox list is the complete truth about where this
+   bucket's news goes, and nothing anywhere else decides it. #}
 <div class="note page-section">
   دسته‌ها مقصد دسته‌بندی‌اند. هر رشته دقیقاً یک دسته دارد و آن انتخاب در صفحهٔ
   <a href="/fields">رشته‌ها</a> انجام می‌شود؛ اینجا می‌بینید هر دسته چه رشته‌هایی دارد.
   <br>
-  مسیریابی دسته به کانال در همین صفحه ثبت می‌شود، اما <b>فعلاً اعمال نمی‌شود</b>:
-  هر خبر به همهٔ کانال‌های فعال می‌رود و برای توقف، کانال را در صفحهٔ
-  <a href="/channels">کانال‌ها</a> خاموش کنید.
+  خبرهای هر دسته <b>فقط</b> به کانال‌هایی می‌روند که اینجا انتخاب می‌کنید.
+  دسته‌ای که هیچ کانالی ندارد <b>هیچ خبری منتشر نمی‌کند</b>: خبرش تولید می‌شود ولی
+  به هیچ کانالی نمی‌رسد.
 </div>
+
+{# The trap this box exists to close: the owner ticks channels for ten
+   categories, everything looks configured, and the eleventh -- usually the
+   catch-all -- silently sends nothing. That stays invisible until you notice
+   no news arriving, so it is counted here, in FIELDS, because the field is the
+   unit that actually strands work. #}
+{% if unrouted_fields %}
+<div class="note page-section" style="border-right-color:var(--red);background:var(--red-soft);color:#9F1239">
+  <b>{{ unrouted_fields|fa }} رشته</b> در دسته‌هایی هستند که هیچ کانالی ندارند؛ خبرِ این
+  رشته‌ها تولید می‌شود ولی به هیچ کانالی نمی‌رسد.
+  {%- if unrouted_categories %} دسته‌های بدون مسیر: {% for c in unrouted_categories %}<a href="#cat-{{ c.id }}">{{ c.name }}</a>{% if not loop.last %}، {% endif %}{% endfor %}.{% endif %}
+</div>
+{% endif %}
 
 <div class="card page-section">
   <div class="filters">
@@ -30,7 +47,7 @@
 
   <div class="two" style="padding:14px 22px">
     {% for c in categories %}
-    <div class="card" style="margin:0"><h3 class="card-head">{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+    <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
       <div class="body">
         {% if c.field_names %}
         <div class="chips">
@@ -56,14 +73,15 @@
           <summary>
             {{ glyph('chevron') }}
             کانال‌ها
-            {% if routed %}<span class="badge s-off">{{ routed|length|fa }} مسیر</span>{% else %}<span class="badge s-off">بدون مسیر</span>{% endif %}
+            {% if routed %}<span class="badge s-off">{{ routed|length|fa }} مسیر</span>
+            {% else %}<span class="badge s-failed" title="این دسته به هیچ کانالی مسیر ندارد؛ خبرهایش منتشر نمی‌شوند">بدون مسیر — منتشر نمی‌شود</span>{% endif %}
           </summary>
           <div class="disclose-body">
             {% if not active_channels %}
             <div class="hint" style="padding-top:10px">هیچ کانال فعالی وجود ندارد. ابتدا در صفحهٔ <a href="/channels">کانال‌ها</a> یک کانال فعال بسازید.</div>
             {% else %}
             <form method="post" action="/categories/{{ c.id }}/channels">{{ csrf_field(request) | safe }}
-              <div class="hint" style="padding-top:10px">کانال‌هایی که برای این دسته انتخاب می‌شوند. انتخاب خالی یعنی این دسته مسیری ندارد.</div>
+              <div class="hint" style="padding-top:10px">کانال‌هایی که برای این دسته انتخاب می‌شوند. تا وقتی دست‌کم یک کانال انتخاب نشود، خبرهای این دسته به هیچ کانالی نمی‌رود.</div>
               {% for ch in active_channels %}
               <label class="pick">
                 <input type="checkbox" name="channel_ids" value="{{ ch.id }}" {% if ch.id in routed %}checked{% endif %}>

@@ -191,6 +191,32 @@ async def top_fields(session, limit: int = 3) -> list[dict]:
     return [{"name": name, "pct": int(round(n / top_total * 100))} for name, n in top_rows]
 
 
+async def category_field_counts(session, category_ids) -> dict[int, int]:
+    """How many fields sit in each of ``category_ids``.
+
+    Used to say how much work a category with no channel route is stranding.
+    Counting is in the unit the owner thinks in -- a field is a discipline that
+    can generate news -- rather than "categories with no routes", which is
+    always the same list and therefore never actionable.
+
+    One grouped query for the whole set: the panel asks about every category on
+    every render, and a deployment has hundreds, so a per-category lookup would
+    be hundreds of round trips to produce a number that fits on one line.
+    Categories with no fields are simply absent from the result.
+    """
+    ids = [int(c) for c in category_ids]
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Field.category_id, func.count(Field.id))
+            .where(Field.category_id.in_(ids))
+            .group_by(Field.category_id)
+        )
+    ).all()
+    return {category_id: count for category_id, count in rows}
+
+
 async def category_cards(session, q: str = "") -> tuple[list[dict], int]:
     """Category cards with real field-name chips, plus the total count."""
     query = select(Category).order_by(Category.id)

@@ -1,15 +1,18 @@
-"""Every active channel receives the news; there is no routing to configure (item 6).
+"""The category->channel matrix is LIVE, and it is the only thing that routes.
 
-The owner's final rule, after a round of back and forth: **"I want to send the
-generated messages to all channels without choosing which channel to go or
-which field to go to which channel."**
+This file used to be called ``test_broadcast`` and pinned the opposite rule:
+every active channel receives the news. That rule is gone. What replaced it is
+narrower and easier to get wrong, so these tests pin it from both sides:
 
-So this file pins a single rule plus the one control that actually decides
-where news does not go (switching a channel off), and asserts that the routing
-configuration screens are genuinely gone rather than merely hidden.
+* the matrix DOES filter (a category reaches only its selected channels);
+* ``main.field_channel_routes`` stays inert -- the per-field exception table
+  still exists in the schema but must not resurrect as a second routing path,
+  because then two tables would each be able to decide where news goes and
+  they would disagree.
 
-``fields.category_id`` survives: that is the CLASSIFICATION the generator and
-the records use, it is not routing, and it lives on the fields page.
+``fields.category_id`` is not routing: it is the CLASSIFICATION the generator
+and the records use, and it lives on the fields page. That is what decides
+which row of the matrix a record reads.
 """
 
 import pytest
@@ -17,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    AuditLog,
     Category,
     CategoryChannelRoute,
     Channel,
@@ -31,6 +35,7 @@ from app.panel.auth import hash_password
 from app.services import channels as channel_service
 from app.services import fields as field_service
 from tests.panel_test_client import panel_client
+from tests.routing_setup import route_category
 
 
 async def _admin(session: AsyncSession, username: str = "route-admin") -> None:
@@ -71,44 +76,35 @@ async def _article(session: AsyncSession, category: Category, field: Field) -> M
 
 
 # --------------------------------------------------------------------------
-# the rule
+# the rule: the matrix filters
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_every_active_channel_is_a_target(session: AsyncSession):
+async def test_only_the_channels_the_matrix_names_are_targets(session: AsyncSession):
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
     article = await _article(session, category, field)
-    assert [c.id for c in await channels_for_article(session, article)] == [c.id for c in channels]
+    await route_category(session, category, [channels[0]])
+    assert [c.id for c in await channels_for_article(session, article)] == [channels[0].id]
 
 
 @pytest.mark.asyncio
-async def test_a_legacy_category_mapping_changes_nothing(session: AsyncSession):
-    """Rows from before the change still exist and are simply ignored."""
+async def test_an_empty_matrix_sends_nothing(session: AsyncSession):
+    """Not "everything", which is what a fallback would do."""
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
     article = await _article(session, category, field)
-    session.add(CategoryChannelRoute(category_id=category.id, channel_id=channels[0].id))
-    await session.commit()
-    assert len(await channels_for_article(session, article)) == 3
+    assert await channels_for_article(session, article) == []
 
 
 @pytest.mark.asyncio
-async def test_a_legacy_field_route_changes_nothing(session: AsyncSession):
+async def test_switching_a_channel_off_removes_it_from_every_category(session: AsyncSession):
+    """A channel is a destination, not a rule: off means off everywhere."""
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
     article = await _article(session, category, field)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channels[0].id))
-    await session.commit()
-    assert len(await channels_for_article(session, article)) == 3
-
-
-@pytest.mark.asyncio
-async def test_switching_a_channel_off_is_the_only_way_to_exclude_one(session: AsyncSession):
-    category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    await route_category(session, category, channels)
     channels[1].is_active = False
     await session.commit()
     assert [c.id for c in await channels_for_article(session, article)] == [
@@ -117,27 +113,47 @@ async def test_switching_a_channel_off_is_the_only_way_to_exclude_one(session: A
 
 
 @pytest.mark.asyncio
-async def test_provenance_is_always_broadcast(session: AsyncSession):
-    """There is one rule, so there is one reason."""
+async def test_provenance_names_the_category_that_decided(session: AsyncSession):
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
     article = await _article(session, category, field)
-    session.add(CategoryChannelRoute(category_id=category.id, channel_id=channels[0].id))
-    await session.commit()
+    await route_category(session, category, [channels[0]])
     pairs = await channels_for_article_with_source(session, article)
-    assert {source for _channel, source in pairs} == {"all"}
+    assert {(c.id, source) for c, source in pairs} == {(channels[0].id, "category")}
+
+
+# --------------------------------------------------------------------------
+# the per-field table must stay inert
+# --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_article_without_a_category_still_reaches_every_channel(session: AsyncSession):
-    _, channels = await _world(session)
+async def test_a_field_route_alone_routes_nothing(session: AsyncSession):
+    """A field->channel row is not a destination.
+
+    The schema still carries this table. If it ever became a second routing
+    path, two tables could each decide where news goes and they would disagree
+    the moment an operator set them differently -- which the panel gives no way
+    to even see, since the matrix is the only surface it renders.
+    """
+    category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
-    article = Main(username="u", title="T", abstract="A", field="ناشناخته", university="U",
-                   author="A", supervisor="S", status="approved", field_id=field.id,
-                   output_json={"title": "T", "lead": "L", "body": "B"})
-    session.add(article)
+    article = await _article(session, category, field)
+    session.add(FieldChannelRoute(field_id=field.id, channel_id=channels[0].id))
     await session.commit()
-    assert len(await channels_for_article(session, article)) == 3
+    assert await channels_for_article(session, article) == []
+
+
+@pytest.mark.asyncio
+async def test_a_field_route_does_not_add_to_the_matrix(session: AsyncSession):
+    """It must not widen the matrix either."""
+    category, channels = await _world(session)
+    field = (await session.execute(select(Field))).scalars().one()
+    article = await _article(session, category, field)
+    await route_category(session, category, [channels[0]])
+    session.add(FieldChannelRoute(field_id=field.id, channel_id=channels[2].id))
+    await session.commit()
+    assert [c.id for c in await channels_for_article(session, article)] == [channels[0].id]
 
 
 # --------------------------------------------------------------------------
@@ -176,7 +192,7 @@ async def test_assigning_an_unknown_category_is_refused(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_field_category_is_editable_on_the_fields_page(session: AsyncSession):
-    """Classification kept its home; only routing left the panel."""
+    """Classification kept its home; routing lives on /categories."""
     await _admin(session)
     category, _channels = await _world(session)
     other = Category(name="فنی و مهندسی", description="Engineering")
@@ -199,54 +215,12 @@ async def test_field_category_is_editable_on_the_fields_page(session: AsyncSessi
 
 
 # --------------------------------------------------------------------------
-# the routing screens are gone, not just hidden
+# editing the matrix
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_the_channels_page_has_no_routing_controls(session: AsyncSession):
-    await _admin(session)
-    await _world(session)
-    async with panel_client() as client:
-        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
-                          follow_redirects=False)
-        page = await client.get("/channels")
-    assert page.status_code == 200
-    # Neither assignment survives anywhere on the page.
-    assert "رشته ← دسته" not in page.text
-    assert "دسته ← کانال متناظر" not in page.text
-    assert "/channels/category-channel" not in page.text
-    assert "/category" not in page.text, "the field->category editor left too"
-    # What IS there: managing destinations.
-    assert "کانال‌ها" in page.text
-    assert "افزودن کانال" in page.text
-
-
-def test_the_routing_endpoints_no_longer_exist():
-    from app.panel.app import panel_app
-
-    paths = {getattr(r, "path", None) for r in panel_app.routes}
-    assert "/channels/category-channel" not in paths
-    assert "/channels/table" not in paths
-
-
-def test_the_channels_service_no_longer_manages_routing():
-    """Routing is configuration-only again: writable, never read by the sender.
-
-    The per-row add helpers stay gone. ``set_category_channels`` REPLACES a
-    category's whole set instead, because the panel's checkbox list is the
-    complete truth about that category and an "add one row" helper could not
-    express "untick this".
-
-    What matters more is what this file exists to pin: filling the matrix in
-    must not change where news goes. That is asserted behaviourally in
-    ``test_a_filled_category_matrix_still_broadcasts`` below, which is a
-    stronger guarantee than checking that a function is absent -- a missing
-    function can always be re-added by accident, whereas a full matrix that
-    still broadcasts cannot.
-    """
-    from app.services import channels as channel_service
-
+def test_the_channels_service_offers_a_replace_not_an_add():
+    """``add_*_route`` helpers stay gone: the checkbox list is the whole truth."""
     for gone in ("set_category_channel", "add_field_route", "add_category_route"):
         assert not hasattr(channel_service, gone), f"{gone} is dead code now"
     assert hasattr(channel_service, "category_channel_matrix")
@@ -254,37 +228,7 @@ def test_the_channels_service_no_longer_manages_routing():
 
 
 @pytest.mark.asyncio
-async def test_a_filled_category_matrix_still_broadcasts(session: AsyncSession):
-    """The owner's rule, checked against a matrix the operator has filled in.
-
-    The panel now lets a category name its channels. If that ever started
-    filtering delivery, this fails -- which is the whole point of writing it
-    against real rows rather than asserting a function is absent.
-    """
-    from app.services import channels as channel_service
-
-    category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
-
-    # Map the category to exactly one channel, the most selective thing the
-    # matrix can express.
-    await channel_service.set_category_channels(session, category.id, [channels[0].id])
-    matrix = await channel_service.category_channel_matrix(session)
-    assert [row["channel_ids"] for row in matrix if row["id"] == category.id] == [
-        [channels[0].id]
-    ]
-    # ...and the article still goes everywhere.
-    assert [c.id for c in await channels_for_article(session, article)] == [
-        c.id for c in channels
-    ]
-
-
-@pytest.mark.asyncio
 async def test_replacing_a_category_matrix_removes_the_old_rows(session: AsyncSession):
-    """Set, not merge: an unticked channel must actually stop being routed."""
-    from app.services import channels as channel_service
-
     category, channels = await _world(session)
     await channel_service.set_category_channels(session, category.id, [c.id for c in channels])
     await channel_service.set_category_channels(session, category.id, [channels[1].id])
@@ -304,10 +248,24 @@ async def test_an_empty_selection_clears_a_category(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_the_categories_page_offers_the_mapping_and_says_it_is_not_live(
-    session: AsyncSession,
-):
-    """The matrix must never be mistaken for something the sender obeys."""
+async def test_a_saved_matrix_actually_changes_where_news_goes(session: AsyncSession):
+    """The end-to-end claim: edit the picker, and delivery follows."""
+    category, channels = await _world(session)
+    field = (await session.execute(select(Field))).scalars().one()
+    article = await _article(session, category, field)
+    assert await channels_for_article(session, article) == []
+
+    await channel_service.set_category_channels(session, category.id, [channels[2].id])
+    assert [c.id for c in await channels_for_article(session, article)] == [channels[2].id]
+
+
+# --------------------------------------------------------------------------
+# the panel must not mislead about it
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_categories_page_says_routing_applies_now(session: AsyncSession):
     await _admin(session)
     category, _channels = await _world(session)
     async with panel_client() as client:
@@ -316,27 +274,77 @@ async def test_the_categories_page_offers_the_mapping_and_says_it_is_not_live(
         page = await client.get("/categories")
     assert page.status_code == 200
     assert f"/categories/{category.id}/channels" in page.text
-    assert "فعلاً اعمال نمی‌شود" in page.text, (
-        "the page must say the mapping is recorded, not enforced"
+    assert "فعلاً اعمال نمی‌شود" not in page.text, (
+        "the page must not still claim the mapping is recorded but not applied"
+    )
+    assert "هیچ خبری منتشر نمی‌کند" in page.text, (
+        "and must say plainly that an unrouted category publishes nothing"
     )
 
 
 @pytest.mark.asyncio
+async def test_the_page_warns_how_much_work_has_no_destination(session: AsyncSession):
+    """Otherwise "no news arrived" is the only symptom."""
+    await _admin(session)
+    category, _channels = await _world(session)
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
+                          follow_redirects=False)
+        before = await client.get("/categories")
+        await channel_service.set_category_channels(session, category.id, [1])
+        after = await client.get("/categories")
+    assert "در دسته‌هایی هستند که هیچ کانالی ندارند" in before.text
+    assert "بدون مسیر" in before.text
+    # Once the route exists the warning is gone, not merely reworded.
+    assert "در دسته‌هایی هستند که هیچ کانالی ندارند" not in after.text
+
+
+@pytest.mark.asyncio
+async def test_the_warning_respects_the_search_filter(session: AsyncSession):
+    """Naming a filtered-out category would defeat the search it sits above."""
+    await _admin(session)
+    await _world(session)
+    other = Category(name="فنی و مهندسی", description="Engineering")
+    session.add(other)
+    await session.commit()
+    session.add(Field(name="another-field", normalized_name="another-field",
+                      category_id=other.id))
+    await session.commit()
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
+                          follow_redirects=False)
+        page = await client.get("/categories", params={"q": "فنی"})
+    assert "فنی و مهندسی" in page.text
+    assert "پزشکی و علوم سلامت" not in page.text
+
+
+@pytest.mark.asyncio
+async def test_the_channels_page_shows_which_categories_name_it(session: AsyncSession):
+    """Read-only mirror, so editing a channel shows what points at it."""
+    await _admin(session)
+    category, channels = await _world(session)
+    await channel_service.set_category_channels(session, category.id, [channels[0].id])
+    async with panel_client() as client:
+        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
+                          follow_redirects=False)
+        page = await client.get("/channels", params={"channel_id": channels[0].id})
+    assert "دسته‌های مسیریابی‌شده به این کانال" in page.text
+    assert "پزشکی و علوم سلامت" in page.text
+    assert "/categories/" not in page.text, "the mirror is read-only; no second editor"
+
+
+@pytest.mark.asyncio
 async def test_saving_the_matrix_is_admin_only_and_audited(session: AsyncSession):
-    from sqlalchemy import select as _select
-
-    from app.db.models import AuditLog, PanelUser as _PanelUser
-
     category, channels = await _world(session)
     await _admin(session, username="matrix-admin")
     viewer_role = (await session.execute(
-        _select(Role).where(Role.name == "viewer"))).scalar_one_or_none()
+        select(Role).where(Role.name == "viewer"))).scalar_one_or_none()
     if viewer_role is None:
         viewer_role = Role(name="viewer", description="viewer")
         session.add(viewer_role)
         await session.flush()
-    session.add(_PanelUser(username="matrix-viewer", password_hash=hash_password("secret123"),
-                           role_id=viewer_role.id, is_active=True))
+    session.add(PanelUser(username="matrix-viewer", password_hash=hash_password("secret123"),
+                          role_id=viewer_role.id, is_active=True))
     await session.commit()
 
     async with panel_client() as client:
@@ -364,31 +372,9 @@ async def test_saving_the_matrix_is_admin_only_and_audited(session: AsyncSession
         [c.id for c in channels]
     ], "the viewer's attempt must not have changed anything"
     actions = (await session.execute(
-        _select(AuditLog.action).where(AuditLog.action == "category_channels")
+        select(AuditLog.action).where(AuditLog.action == "category_channels")
     )).scalars().all()
     assert len(actions) == 1, "exactly the admin attempt is audited"
 
 
-@pytest.mark.asyncio
-async def test_the_fields_page_has_no_channel_mapping_either(session: AsyncSession):
-    """'Which channel for this category' must not survive on another page."""
-    await _admin(session)
-    await _world(session)
-    async with panel_client() as client:
-        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
-                          follow_redirects=False)
-        page = await client.get("/fields")
-    assert "دسته‌ها و کانال متناظر" not in page.text
-    assert "/channels/category-channel" not in page.text
-
-
-@pytest.mark.asyncio
-async def test_the_page_still_says_where_news_goes(session: AsyncSession):
-    await _admin(session)
-    await _world(session)
-    async with panel_client() as client:
-        await client.post("/login", data={"username": "route-admin", "password": "secret123"},
-                          follow_redirects=False)
-        page = await client.get("/channels")
-    assert "همهٔ کانال‌های فعال" in page.text
-    assert "خاموش کنید" in page.text
+from app.db.models import AuditLog  # noqa: E402  (used only by the audit test)

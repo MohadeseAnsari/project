@@ -162,13 +162,16 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   switched ON. Without it, adding a channel made the sender enqueue the whole
   archive to it — a new channel has no delivery rows for anything, so every
   historical record looked like pending work.
-- **category_channel_routes** — retired. No longer written, no longer read, and
-  the panel has no screen for it: the owner removed the category → channel
-  configuration because news goes to every active channel regardless. Kept so
-  existing rows are not lost.
-- **field_channel_routes** — retired from the delivery decision (item 6) and no
-  longer written by the panel. The table is kept so existing rows and the
-  history they explain are not lost.
+- **category_channel_routes** — **the delivery decision.** A record publishes
+  only to the channels its category names. Written from the per-category
+  checkbox picker on `/categories`, which replaces the whole set rather than
+  appending, and read by the sender, the preview endpoint and the panel so
+  every surface agrees.
+- **field_channel_routes** — retired from the delivery decision and no longer
+  written by the panel. The table is kept so existing rows and the history they
+  explain are not lost. It must stay inert: a second table able to decide where
+  news goes would disagree with the matrix the moment an operator set them
+  differently, and the panel renders no way to see that.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,

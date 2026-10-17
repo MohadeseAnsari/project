@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.messaging.dispatcher import confirm_deliveries_for_article, ensure_pending_deliveries
+from tests.routing_setup import route_all_active
 
 
 async def _article(session: AsyncSession, status: str) -> int:
@@ -30,6 +31,10 @@ async def _article(session: AsyncSession, status: str) -> int:
     )
     session.add(row)
     await session.commit()
+    # Routing is by category; this file tests the gate, not the routing, so the
+    # category is pointed at every active channel to give the gate something to
+    # act on.
+    await route_all_active(session, category)
     return row.id
 
 

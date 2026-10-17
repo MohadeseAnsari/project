@@ -21,6 +21,7 @@ from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from app.worker.worker import claim_next_job, process_job
 from tests.panel_test_client import panel_client
+from tests.routing_setup import route_all_active
 
 
 class StubClient:
@@ -97,6 +98,12 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
         await session.refresh(row)
         assert row.status == "review"
         assert row.output_json == {"title": "T", "lead": "L", "body": "B"}
+
+        # Delivery is routed by category, and the category is only chosen by the
+        # generation step above, so the route has to be seeded here rather than
+        # in setup. This file verifies every HANDOFF, not routing.
+        await session.refresh(row)
+        await route_all_active(session, await session.get(Category, row.category_id))
 
         # Sender queues it, but the human gate holds it back.
         assert await ensure_pending_deliveries(session) == 1

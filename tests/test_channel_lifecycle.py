@@ -296,7 +296,7 @@ async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub
     session.add(CategoryChannelRoute(category_id=category.id, channel_id=on.id))
     article = Main(
         username="t", title="T", abstract="A", field="پزشکی", university="U", author="A",
-        supervisor="S", status="approved", field_id=field.id,
+        supervisor="S", status="approved", field_id=field.id, category_id=category.id,
         output_json={"title": "T", "lead": "L", "body": "B"},
     )
     session.add(article)

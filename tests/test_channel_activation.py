@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Category, Channel, Delivery, Field, Main
+from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
     channels_for_article,
     channels_for_article_with_source,
@@ -60,6 +61,7 @@ async def _channel(session: AsyncSession, activated_at: datetime, active: bool =
     )
     session.add(channel)
     await session.commit()
+    await _route_to_all(session)
     return channel
 
 
@@ -68,11 +70,24 @@ async def _article(session: AsyncSession, field: Field, created_at: datetime,
     article = Main(
         username="u", title="T", abstract="A", field="پزشکی", university="U",
         author="A", supervisor="S", status=status, field_id=field.id,
+        category_id=field.category_id,
         output_json=OUTPUT, created_at=created_at,
     )
     session.add(article)
     await session.commit()
     return article
+
+
+async def _route_to_all(session: AsyncSession) -> None:
+    """Every category reaches every active channel.
+
+    Re-seeded after each channel is created so call order does not matter. The
+    activation floor is untouched: a channel switched on AFTER an article
+    still must not receive it, and these tests assert exactly that.
+    """
+    categories = (await session.execute(select(Category))).scalars().all()
+    for category in categories:
+        await route_all_active(session, category)
 
 
 NOW = datetime(2026, 3, 1, 12, 0, 0)
@@ -154,6 +169,7 @@ async def test_switching_a_channel_off_and_on_moves_its_start_forward(session: A
         "the boundary must move, or a dormant channel wakes up to the backlog"
     )
 
+    await _route_to_all(session)
     stale = await _article(session, field, NOW + timedelta(days=1))
     fresh = await _article(session, field, datetime.utcnow() + timedelta(seconds=5))
     assert [c.id for c in await channels_for_article(session, stale)] == []
@@ -177,14 +193,17 @@ async def test_provenance_is_still_broadcast_for_new_news(session: AsyncSession)
     field = await _field(session)
     await _channel(session, NOW - timedelta(days=1))
     article = await _article(session, field, NOW)
-    assert {s for _c, s in await channels_for_article_with_source(session, article)} == {"all"}
+    assert {s for _c, s in await channels_for_article_with_source(session, article)} == {"category"}
 
 
 @pytest.mark.asyncio
 async def test_no_article_means_no_floor(session: AsyncSession):
     """The preview endpoint asks 'where would news generated NOW go?'."""
+    field = await _field(session)
+    category = await session.get(Category, field.category_id)
+    await _route_to_all(session)
     channel = await _channel(session, datetime(2099, 1, 1))
-    assert [c.id for c, _s in await resolve_channels(session, None)] == [channel.id]
+    assert [c.id for c, _s in await resolve_channels(session, None, category.id)] == [channel.id]
 
 
 # --------------------------------------------------------------------------

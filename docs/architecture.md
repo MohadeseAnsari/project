@@ -33,11 +33,15 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 ### Sender Worker (Channel Delivery)
 - Polls for processed articles (`main.status = 'review'`) that have no delivery for an active channel
 - Creates one `deliveries` row per (article, channel) — the unit of work
-- Resolves channels for an article: **every active channel** is a target. There is
-  no routing table in the decision any more — the two configuration screens were
-  removed at the owner's request, and switching a channel OFF is the only thing
-  that decides where news does not go. Each delivery snapshots its `category_id`
-  and records `route_source='all'` so a send stays explainable.
+- Resolves channels for an article: **the channels its CATEGORY names**, via
+  `category_channel_routes`. A record with no category, or one whose category
+  has no channels selected, goes **nowhere** — there is no fallback to "every
+  active channel", because a fallback would make the panel's matrix a
+  decoration the owner watches change while nothing happens. The matrix is
+  edited on `/categories`, one category at a time; routing each of 500+ fields
+  individually is a screen nobody fills in. Each delivery snapshots its
+  `category_id` and records `route_source='category'` so a send stays
+  explainable.
 - **A channel only receives news from the moment it was switched on.** The
   filter is `channels.activated_at <= main.created_at`, and `activated_at` moves
   forward every time a channel is switched ON. Without it, adding a channel made

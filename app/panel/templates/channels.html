@@ -5,20 +5,23 @@
 {% block crumb %}کنسول › تنظیمات › کانال‌ها{% endblock %}
 {% block content %}
 
-{# This page manages DESTINATIONS and nothing else.
+{# This page manages DESTINATIONS: where news can go.
 
-   Every generated article is published to every ACTIVE channel. There is no
-   routing to configure: no "which field goes where", no "which category maps
-   to which channel". The owner asked for exactly this, because the routing
-   tables had accumulated two configuration screens to fill in for a behaviour
-   that never actually filtered anything.
+   Delivery is decided by the record's CATEGORY, not by this page. A thesis is
+   classified into a category, and that category's selected channels are the
+   only ones that receive it -- configured in the picker on
+   <a href="/categories">دسته‌ها و کلیدواژه‌ها</a>. Switching a channel OFF
+   therefore does not decide where news goes; it removes a destination that
+   any category might have chosen.
 
-   Switching a channel OFF is the only way to stop it receiving news. #}
+   A channel switched on only receives news generated AFTER it was switched
+   on, so re-enabling one does not flood it with the archive. #}
 <div class="note page-section">
-  هر خبر تولیدشده به <b>همهٔ کانال‌های فعال</b> می‌رود. نیازی به انتخاب کانال یا مسیر نیست —
-  برای اینکه خبری به کانالی نرود، همان کانال را خاموش کنید.<br>
+  هر خبر بر اساس <b>دستهٔ</b> خودش به کانال‌ها می‌رود: دسته‌هایی که این کانال برایشان انتخاب شده
+  اینجا خبر می‌گیرند و بقیه نه. انتخاب کانال‌ها در صفحهٔ
+  <a href="/categories">دسته‌ها و کلیدواژه‌ها</a> انجام می‌شود.<br>
   کانال تازه فقط خبرهای <b>بعد از زمان روشن‌شدنش</b> را می‌گیرد؛ آرشیو قبلی برایش ارسال نمی‌شود.
-  خاموش و دوباره روشن کردن کانال، زمان شروع را به‌روز می‌کند.
+  خاموش کردن کانال، آن را از همهٔ دسته‌ها حذف می‌کند.
 </div>
 
 <div class="kpi-row">

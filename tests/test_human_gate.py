@@ -12,7 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main
+from app.db.models import Category, Channel, Delivery, Field, Main
+from tests.routing_setup import route_category
+from tests.routing_setup import route_category
 from app.messaging.dispatcher import (
     claim_next_delivery,
     confirm_deliveries_for_article,
@@ -49,6 +51,7 @@ async def _article(session: AsyncSession, field: Field) -> Main:
         supervisor="Supervisor",
         status="review",
         field_id=field.id,
+        category_id=field.category_id,
         output_json=dict(OUTPUT),
     )
     session.add(article)
@@ -66,8 +69,10 @@ async def test_gate_on_queues_awaiting_confirmation(
     channel = Channel(platform="bale", chat_id=9001, username="@c")
     session.add(channel)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    # Routing is by CATEGORY now, so a field->channel row would be inert and
+    # the gate would have nothing to act on. Point the field's category at the
+    # channel instead -- which is what the panel's per-category picker writes.
+    await route_category(session, await session.get(Category, field.category_id), [channel])
     article = await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -88,8 +93,10 @@ async def test_gate_off_queues_pending_directly(
     channel = Channel(platform="bale", chat_id=9002, username="@c")
     session.add(channel)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    # Routing is by CATEGORY now, so a field->channel row would be inert and
+    # the gate would have nothing to act on. Point the field's category at the
+    # channel instead -- which is what the panel's per-category picker writes.
+    await route_category(session, await session.get(Category, field.category_id), [channel])
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -109,13 +116,11 @@ async def test_confirm_flips_only_gated_rows(
     second = Channel(platform="telegram", chat_id=9004, username="@c")
     session.add_all([first, second])
     await session.commit()
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
+    # Category routing (see the note in the sibling test): the field's category
+    # names both channels, which is what makes two deliveries to appear.
+    await route_category(
+        session, await session.get(Category, field.category_id), [first, second]
     )
-    await session.commit()
     article = await _article(session, field)
     assert await ensure_pending_deliveries(session) == 2
 

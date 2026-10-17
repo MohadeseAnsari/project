@@ -1150,10 +1150,39 @@ async def categories_page(
     matrix = await channel_service.category_channel_matrix(session)
     routes_by_category = {row["id"]: row["channel_ids"] for row in matrix}
     active_channels = [c for c in await channel_service.list_channels(session) if c.is_active]
+
+    # Routing is strict, so a category with no channels publishes NOTHING. That
+    # is invisible from the list itself -- every card looks the same -- so the
+    # page is told how much work is stranded, in fields, which is the unit the
+    # owner actually thinks in. Counting per category costs one grouped query
+    # rather than a lookup per card.
+    #
+    # Scoped to the categories actually being DISPLAYED, not to every category
+    # in the database. The warning names categories, so naming one the search
+    # filtered out would put a name on screen that the filter is meant to have
+    # removed -- and would make a search for one category appear to return all
+    # of them.
+    displayed = {row["id"] for row in categories}
+    unrouted = {
+        row["id"]
+        for row in matrix
+        if not row["channel_ids"] and row["id"] in displayed
+    }
+    stranded_fields = await field_service.category_field_counts(session, unrouted)
+    total_stranded = sum(stranded_fields.values())
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx,
              categories=categories, category_total=category_total, q=q,
-             routes_by_category=routes_by_category, active_channels=active_channels))
+             routes_by_category=routes_by_category, active_channels=active_channels,
+             # Only categories that actually hold fields are named in the
+             # warning: pointing at an empty category would send the operator
+             # to fix something that cannot affect any news.
+             unrouted_fields=total_stranded,
+             unrouted_categories=[
+                 {"id": row["id"], "name": row["name"]}
+                 for row in matrix
+                 if row["id"] in unrouted and stranded_fields.get(row["id"], 0) > 0
+             ]))
 
 
 @panel_app.post("/categories/{category_id}/channels")

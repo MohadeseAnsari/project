@@ -1,13 +1,19 @@
-"""Delivery targets: EVERY active channel (item 6).
+"""Delivery targets: the record's CATEGORY, and only that.
 
-This file used to pin a three-level chain — category routes, then field
-routes, then a fallback to all active channels. The owner replaced that with
-one rule: the generated news goes to all channels. The two assignment tables
-survive as configuration (which category a field belongs to, which channel a
-category is designated for), but neither narrows delivery any more.
+The rule, in one sentence: **a record publishes to exactly the channels its
+category names, and to nothing else.**
 
-The old tests asserted exactly the behaviour that was removed (a category
-route excluding other channels), so they are replaced rather than deleted.
+Two consequences that are easy to get wrong, so they are pinned here explicitly:
+
+* a category with NO selected channels publishes nothing. There is no fallback
+  to "every active channel", because a fallback would make the panel's mapping
+  a decoration: the owner would tick channels, watch the UI change, and see no
+  difference in where news goes.
+* a record with no category at all goes nowhere, for the same reason.
+
+What this file deliberately does NOT assert is that routing is the *only*
+thing that decides delivery. ``main.field_channel_routes`` still exists and is
+still ignored; that is pinned in ``test_broadcast_routing.py``.
 """
 
 import itertools
@@ -22,7 +28,6 @@ from app.db.models import (
     Channel,
     Delivery,
     Field,
-    FieldChannelRoute,
     Main,
 )
 from app.messaging.dispatcher import (
@@ -64,6 +69,18 @@ async def _channel(session: AsyncSession, platform: str = "bale", active: bool =
     return channel
 
 
+async def _route(session: AsyncSession, cat: Category, *channels: Channel) -> None:
+    """Point ``cat`` at exactly these channels, replacing anything else."""
+    await session.execute(
+        CategoryChannelRoute.__table__.delete().where(
+            CategoryChannelRoute.category_id == cat.id
+        )
+    )
+    for channel in channels:
+        session.add(CategoryChannelRoute(category_id=cat.id, channel_id=channel.id))
+    await session.commit()
+
+
 async def _article(session: AsyncSession, field: Field, cat: Category) -> Main:
     article = Main(
         username="tester",
@@ -83,129 +100,180 @@ async def _article(session: AsyncSession, field: Field, cat: Category) -> Main:
     return article
 
 
-@pytest.mark.asyncio
-async def test_every_active_channel_receives_the_news(session: AsyncSession):
-    cat = await _category(session)
-    field = await _field(session, cat)
-    first = await _channel(session)
-    second = await _channel(session, "telegram")
-    article = await _article(session, field, cat)
-
-    assert [c.id for c in await channels_for_article(session, article)] == [first.id, second.id]
-    assert await channels_for_article_with_source(session, article) == [
-        (first, "all"),
-        (second, "all"),
-    ]
+# --------------------------------------------------------------------------
+# the rule itself
+# --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_category_mapping_no_longer_excludes_other_channels(session: AsyncSession):
-    """Legacy rows must not narrow delivery, and provenance is now one value."""
+async def test_only_the_category_channels_are_targets(session: AsyncSession):
     cat = await _category(session)
     field = await _field(session, cat)
-    designated = await _channel(session)
-    other = await _channel(session, "telegram")
-    session.add(CategoryChannelRoute(category_id=cat.id, channel_id=designated.id))
-    await session.commit()
+    routed = await _channel(session)
+    unrouted = await _channel(session)
+    await _route(session, cat, routed)
     article = await _article(session, field, cat)
-
-    assert [c.id for c in await channels_for_article(session, article)] == [designated.id, other.id]
-    assert await channels_for_article_with_source(session, article) == [
-        (designated, "all"),
-        (other, "all"),
-    ], "there is one rule, so there is one reason"
+    assert [c.id for c in await channels_for_article(session, article)] == [routed.id]
 
 
 @pytest.mark.asyncio
-async def test_legacy_field_routes_are_inert(session: AsyncSession):
-    """Rows from before the change still exist and must no longer narrow delivery."""
+async def test_the_selection_replaces_rather_than_adds(session: AsyncSession):
+    """Ticking three and then unticking one must actually stop that one."""
     cat = await _category(session)
     field = await _field(session, cat)
-    mapped = await _channel(session)
-    await _channel(session, "telegram")
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=mapped.id))
-    await session.commit()
+    first, second, third = await _channel(session), await _channel(session), await _channel(session)
+    await _route(session, cat, first, second, third)
     article = await _article(session, field, cat)
+    assert len(await channels_for_article(session, article)) == 3
 
-    assert len(await channels_for_article(session, article)) == 2
+    await _route(session, cat, first)
+    assert [c.id for c in await channels_for_article(session, article)] == [first.id]
 
 
 @pytest.mark.asyncio
-async def test_an_inactive_channel_is_the_only_way_to_exclude_one(session: AsyncSession):
+async def test_a_category_with_no_channels_goes_nowhere(session: AsyncSession):
+    """The strict half. No fallback to every active channel."""
     cat = await _category(session)
     field = await _field(session, cat)
-    on = await _channel(session)
-    off = await _channel(session, "telegram", active=False)
+    await _channel(session)
+    await _channel(session)
     article = await _article(session, field, cat)
-
-    assert [c.id for c in await channels_for_article(session, article)] == [on.id]
-    assert off.id not in [c.id for c in await channels_for_article(session, article)]
-
-
-@pytest.mark.asyncio
-async def test_no_active_channels_resolves_to_nothing(session: AsyncSession):
-    cat = await _category(session)
-    field = await _field(session, cat)
-    await _channel(session, active=False)
-    article = await _article(session, field, cat)
-
     assert await channels_for_article(session, article) == []
 
 
 @pytest.mark.asyncio
-async def test_ensure_queues_a_delivery_per_active_channel(session: AsyncSession, monkeypatch):
-    """One article, one delivery row per channel — the fan-out, not a route."""
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "require_human_confirmation", False)
+async def test_clearing_the_last_channel_stops_delivery(session: AsyncSession):
     cat = await _category(session)
     field = await _field(session, cat)
-    await _channel(session)
-    await _channel(session, "telegram")
-    await _channel(session, "bale", active=False)
+    only = await _channel(session)
+    await _route(session, cat, only)
     article = await _article(session, field, cat)
+    assert len(await channels_for_article(session, article)) == 1
 
-    assert await ensure_pending_deliveries(session) == 2
-    rows = (await session.execute(select(Delivery))).scalars().all()
-    assert {row.route_source for row in rows} == {"all"}
-    assert {row.category_id for row in rows} == {cat.id}
+    await _route(session, cat)  # untick everything
+    assert await channels_for_article(session, article) == []
 
 
 @pytest.mark.asyncio
-async def test_ensure_records_broadcast_provenance(session: AsyncSession, monkeypatch):
-    from app.config import settings
+async def test_a_record_with_no_category_goes_nowhere(session: AsyncSession):
+    """No category means no route was ever chosen for it."""
+    field_row = await _field(session, await _category(session))
+    await _channel(session)
+    article = Main(
+        username="tester", title="T", abstract="A", field="پزشکی", university="U",
+        author="A", supervisor="S", status="review", field_id=field_row.id,
+        category_id=None, output_json=dict(OUTPUT),
+    )
+    session.add(article)
+    await session.commit()
+    assert await channels_for_article(session, article) == []
 
-    monkeypatch.setattr(settings, "require_human_confirmation", False)
+
+@pytest.mark.asyncio
+async def test_two_categories_reach_different_channels(session: AsyncSession):
+    """Routing is per category, which is the whole point of selecting by it."""
+    medical = await _category(session, "پزشکی و علوم سلامت")
+    art = await _category(session, "هنر و معماری")
+    shared = await _channel(session)
+    med_only = await _channel(session)
+    art_only = await _channel(session)
+    await _route(session, medical, shared, med_only)
+    await _route(session, art, shared, art_only)
+
+    med_field = await _field(session, medical)
+    art_field = await _field(session, art)
+    med_article = await _article(session, med_field, medical)
+    art_article = await _article(session, art_field, art)
+
+    assert [c.id for c in await channels_for_article(session, med_article)] == [
+        shared.id, med_only.id,
+    ]
+    assert [c.id for c in await channels_for_article(session, art_article)] == [
+        shared.id, art_only.id,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_inactive_channel_is_not_a_target_even_when_routed(session: AsyncSession):
+    """Switching a channel off removes it from every category at once."""
     cat = await _category(session)
     field = await _field(session, cat)
-    designated = await _channel(session)
-    other = await _channel(session, "telegram")
-    session.add(CategoryChannelRoute(category_id=cat.id, channel_id=designated.id))
-    await session.commit()
+    on = await _channel(session)
+    off = await _channel(session, active=False)
+    await _route(session, cat, on, off)
     article = await _article(session, field, cat)
+    assert [c.id for c in await channels_for_article(session, article)] == [on.id]
+
+
+@pytest.mark.asyncio
+async def test_provenance_records_the_category_that_decided(session: AsyncSession):
+    """So the panel can say WHY a channel received this, not just which."""
+    cat = await _category(session)
+    field = await _field(session, cat)
+    channel = await _channel(session)
+    await _route(session, cat, channel)
+    article = await _article(session, field, cat)
+    pairs = await channels_for_article_with_source(session, article)
+    assert [(c.id, source) for c, source in pairs] == [(channel.id, "category")]
+
+
+@pytest.mark.asyncio
+async def test_an_unrouted_article_is_not_sent_at_all(session: AsyncSession):
+    """No destination means no delivery row, not a delivery row with no channel."""
+    cat = await _category(session)
+    field = await _field(session, cat)
+    await _channel(session)  # active, but nothing routes to it
+    article = await _article(session, field, cat)
+    assert await ensure_pending_deliveries(session) == 0
+    assert (await session.execute(select(Delivery))).scalars().all() == []
+
+
+# --------------------------------------------------------------------------
+# the batch window
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_queues_one_delivery_per_routed_channel(session: AsyncSession):
+    cat = await _category(session)
+    field = await _field(session, cat)
+    first, second = await _channel(session), await _channel(session)
+    unrouted = await _channel(session)
+    await _route(session, cat, first, second)
+    await _article(session, field, cat)
 
     assert await ensure_pending_deliveries(session) == 2
     rows = (await session.execute(select(Delivery).order_by(Delivery.channel_id))).scalars().all()
-    assert {row.route_source for row in rows} == {"all"}
-    assert all(row.category_id == cat.id for row in rows)
+    assert [r.channel_id for r in rows] == [first.id, second.id]
+    assert all(r.route_source == "category" for r in rows)
+    assert unrouted.id not in [r.channel_id for r in rows]
 
 
 @pytest.mark.asyncio
-async def test_a_channel_enabled_later_gets_its_own_delivery(session: AsyncSession, monkeypatch):
-    """A newly switched-on channel is picked up for an already-approved article."""
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "require_human_confirmation", False)
+async def test_ensure_is_idempotent(session: AsyncSession):
     cat = await _category(session)
     field = await _field(session, cat)
-    first = await _channel(session)
-    late = await _channel(session, "telegram", active=False)
-    article = await _article(session, field, cat)
-
+    await _route(session, cat, await _channel(session))
+    await _article(session, field, cat)
     assert await ensure_pending_deliveries(session) == 1
-    late.is_active = True
-    await session.commit()
+    assert await ensure_pending_deliveries(session) == 0
 
-    assert await ensure_pending_deliveries(session) == 1, "only the new channel is queued"
-    rows = (await session.execute(select(Delivery).order_by(Delivery.id))).scalars().all()
-    assert [row.channel_id for row in rows] == [first.id, late.id]
+
+@pytest.mark.asyncio
+async def test_routes_added_later_do_not_backfill_the_archive(session: AsyncSession):
+    """The activation floor: news generated before a channel existed, or before
+    the category pointed at it, is not replayed into it.
+
+    This is the failure mode that makes routing dangerous to switch on: without
+    the floor, ticking a channel would make the sender enqueue every historical
+    article, and the owner would wake up to a channel full of old news.
+    """
+    cat = await _category(session)
+    field = await _field(session, cat)
+    article = await _article(session, field, cat)
+    late = await _channel(session)
+    await _route(session, cat, late)
+
+    # The route exists but the channel was activated after the article.
+    assert await channels_for_article(session, article) == []
+    assert await ensure_pending_deliveries(session) == 0

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main
 from app.messaging import dispatcher
+from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
     channels_for_article,
     claim_next_delivery,
@@ -63,7 +64,22 @@ async def _channel(session: AsyncSession, platform: str = "bale", chat_id: int =
     channel = Channel(platform=platform, chat_id=chat_id, username="@newschanneltest123")
     session.add(channel)
     await session.commit()
+    await _route_to_all(session)
     return channel
+
+
+async def _route_to_all(session: AsyncSession) -> None:
+    """Name every active channel as a destination for every category.
+
+    Delivery is routed by category now, so a test that just wants news to reach
+    somewhere has to say so. Re-seeding from BOTH ``_channel`` and ``_article``
+    is deliberate: these two helpers are called in either order by different
+    tests, and re-seeding is cheap, whereas seeding only once would silently
+    leave whichever channel was created later unrouted.
+    """
+    categories = (await session.execute(select(Category))).scalars().all()
+    for category in categories:
+        await route_all_active(session, category)
 
 
 async def _article(session: AsyncSession, field: Field | None = None, status: str = "review") -> Main:
@@ -77,10 +93,12 @@ async def _article(session: AsyncSession, field: Field | None = None, status: st
         supervisor="Supervisor",
         status=status,
         field_id=field.id if field else None,
+        category_id=field.category_id if field else None,
         output_json=dict(OUTPUT) if status == "review" else None,
     )
     session.add(article)
     await session.commit()
+    await _route_to_all(session)
     return article
 
 
