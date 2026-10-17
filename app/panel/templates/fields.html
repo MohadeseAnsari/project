@@ -75,18 +75,32 @@
     </form>
   </div>
 
+  {# ── the bulk form ─────────────────────────────────────────────────────
+     This is an EMPTY form element sitting OUTSIDE the table, and the row
+     checkboxes plus the bar below join it through the HTML5 `form` attribute.
+
+     That is not a style preference. HTML forbids nested forms: when the parser
+     meets a <form> start tag while another is already open it silently
+     DISCARDS it, and everything inside is submitted with the OUTER form.
+     Wrapping the table for bulk selection therefore quietly destroyed every
+     per-row form on this page — the category dropdown, the confirm and the
+     delete all posted to /fields/bulk-category, which then moved nothing,
+     which reads exactly like "I changed it and nothing happened".
+
+     A control may belong to a form by id from anywhere in the document, which
+     is the supported way to have both a per-row form and a page-wide one. #}
+  <form method="post" action="/fields/bulk-category" id="bulk-field-form">{{ csrf_field(request) | safe }}</form>
+
   {# Every field as a row, with its category editable in place: the assignment
      and its consequence are visible together, which is the whole point of
      keeping this on the field row rather than on the categories page.
 
-     The whole table is inside the bulk form, so ticking rows and applying is
-     one action with no JS. Editing ONE field still has its own control in the
-     row: "move 300 rows" and "fix this one" are different jobs and a bulk-only
-     UI answers only the first. #}
-  <form method="post" action="/fields/bulk-category" id="bulk-field-form">{{ csrf_field(request) | safe }}
-  <table>
+     Ticking rows and applying is one plain form, no JS. Editing ONE field keeps
+     its own form in the row: "move 300 rows" and "fix this one" are different
+     jobs, and a bulk-only control answers only the first. #}
+  <table id="fields-table">
     <thead><tr>
-      <th style="width:34px"><input type="checkbox" data-select-all-fields title="انتخاب همهٔ این صفحه" aria-label="انتخاب همهٔ رشته‌های این صفحه"></th>
+      <th style="width:34px"><input type="checkbox" form="bulk-field-form" data-select-all-fields title="انتخاب همهٔ این صفحه" aria-label="انتخاب همهٔ رشته‌های این صفحه"></th>
       <th style="width:66px">شناسه</th><th>نام رشته</th><th style="width:200px">دسته</th>
       <th style="width:150px">کلیدواژهٔ تطبیق</th><th style="width:110px">منبع</th>
       <th style="width:80px">تأیید</th><th style="width:44px"><span class="hint">حذف</span></th>
@@ -94,7 +108,7 @@
     <tbody>
       {% for f in fields %}
       <tr class="table-row">
-        <td><input type="checkbox" name="field_ids" value="{{ f.id }}"></td>
+        <td><input type="checkbox" form="bulk-field-form" name="field_ids" value="{{ f.id }}"></td>
         <td class="num">{{ f.id|fa }}</td>
         <td class="title">{{ f.name }}<span class="sub">{{ f.source }}</span></td>
         <td>
@@ -142,18 +156,18 @@
     </div>
   </div>
 
-  {# The bulk bar. It is at the FOOT of the table, not the top, because the
-     decision it acts on is made by looking at the rows -- and it counts what
-     is selected, so the operator can see the batch before committing it. #}
+  {# The bulk bar. It sits at the FOOT of the table because the decision it
+     acts on is made by looking at the rows, and it counts what is selected so
+     the batch can be seen before it is committed. `form=` binds its controls
+     to the empty form above. #}
   <div class="foot" style="border-top:1px solid var(--line2)">
-    <button class="btn btn-primary btn-sm" type="submit" id="bulk-field-submit" disabled>انتقال انتخاب‌شده‌ها به دستهٔ</button>
-    <select name="category_id" aria-label="دستهٔ مقصد">
+    <button class="btn btn-primary btn-sm" type="submit" id="bulk-field-submit" form="bulk-field-form" disabled>انتقال انتخاب‌شده‌ها به دستهٔ</button>
+    <select name="category_id" form="bulk-field-form" aria-label="دستهٔ مقصد">
       {% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}
     </select>
     <span class="hint" id="bulk-field-count"><span class="num">۰</span> رشته انتخاب شده</span>
     <span class="hint">فیلترها و صفحهٔ فعلی می‌مانند؛ فقط انتخاب‌شده‌ها منتقل می‌شوند.</span>
   </div>
-  </form>
 </div>
 
 <div class="two">
@@ -168,13 +182,20 @@
 <script>
 /* Selection count for the bulk category bar.
    Plain JS, no framework: the page has no build step and none is getting one.
-   The selection is NOT held in a Set here, unlike the records table, because
-   this table is not swapped by htmx -- a plain checkbox survives on its own
-   and a Set would only add a way for the two to disagree. */
+
+   The checkboxes are queried from the TABLE, not from the form. They belong to
+   #bulk-field-form through the `form` attribute, which associates a control
+   with a form without nesting it inside, so they are not descendants of the
+   form element and form.querySelectorAll would find none of them.
+
+   The selection is NOT held in a Set, unlike the records table: this table is
+   not swapped by htmx, so a plain checkbox survives on its own, and a Set
+   would only add a way for the counter and the submitted values to disagree. */
 (function () {
+  var table = document.getElementById('fields-table');
   var form = document.getElementById('bulk-field-form');
-  if (!form) return;
-  var all = form.querySelector('[data-select-all-fields]');
+  if (!table || !form) return;
+  var all = table.querySelector('[data-select-all-fields]');
   var count = document.getElementById('bulk-field-count');
   var submit = document.getElementById('bulk-field-submit');
 
@@ -182,22 +203,21 @@
     return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; });
   }
 
-  function render() {
-    var boxes = form.querySelectorAll('input[name="field_ids"]');
-    var n = 0;
-    boxes.forEach(function (b) { if (b.checked) n++; });
-    count.innerHTML = '<span class="num">' + fa(n) + '</span> رشته انتخاب شده';
-    submit.disabled = n === 0;
-    if (all) {
-      all.checked = n > 0 && n === boxes.length;
-    }
+  function boxes() {
+    return Array.prototype.slice.call(table.querySelectorAll('input[name="field_ids"]'));
   }
 
-  form.addEventListener('change', function (event) {
+  function render() {
+    var allBoxes = boxes();
+    var n = allBoxes.filter(function (b) { return b.checked; }).length;
+    count.innerHTML = '<span class="num">' + fa(n) + '</span> رشته انتخاب شده';
+    submit.disabled = n === 0;
+    if (all) all.checked = n > 0 && n === allBoxes.length;
+  }
+
+  table.addEventListener('change', function (event) {
     if (event.target === all) {
-      form.querySelectorAll('input[name="field_ids"]').forEach(function (b) {
-        b.checked = all.checked;
-      });
+      boxes().forEach(function (b) { b.checked = all.checked; });
     }
     if (event.target.name === 'field_ids' || event.target === all) render();
   });

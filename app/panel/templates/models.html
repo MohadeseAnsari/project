@@ -66,11 +66,17 @@
           کلید به‌صورت رمزنگاری‌شده ذخیره می‌شود و هرگز دوباره نمایش داده نمی‌شود.
         </div></div>
       {% if selected.creds.key_hint or selected.api_key_env %}
+      {# This form was nested inside the settings form above, which HTML simply
+         discards: a parser that meets a <form> start tag while one is open
+         throws it away and submits the contents with the OUTER one. So
+         "پاک کردن کلید" was posting the whole settings form instead, which
+         saved the model and cleared nothing. Its own form now sits outside,
+         reached through the `form` attribute. #}
       <div class="body" style="border-top:1px solid var(--line2)">
-        <form method="post" action="/models/{{ selected.id }}/clear-key" style="display:inline" onsubmit="return confirm('کلید ذخیره‌شدهٔ این مدل پاک شود؟ اگر نقطهٔ اتصال خودش را دارد، تا ثبت کلید تازه تولید ناموفق می‌شود.')">{{ csrf_field(request) | safe }}
-          {{ icon('trash', 'کلید ذخیره‌شدهٔ این مدل را پاک کن', 'danger') }}
-          <span class="hint">برای حذف کلید ذخیره‌شده (نه متغیر محیطی) این دکمه را بزنید.</span>
-        </form>
+        <span class="hint" style="display:inline-flex;align-items:center;gap:7px">
+          <button class="icon-btn danger" type="submit" form="clear-key-form-{{ selected.id }}" title="کلید ذخیره‌شدهٔ این مدل را پاک کن" aria-label="کلید ذخیره‌شدهٔ این مدل را پاک کن"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.8 4.4h10.4M6.4 4.4V2.9h3.2v1.5M4.4 4.4l.6 8.2h6l.6-8.2M6.7 6.8v3.6M9.3 6.8v3.6"/></svg></button>
+          برای حذف کلید ذخیره‌شده (نه متغیر محیطی) این دکمه را بزنید.
+        </span>
       </div>
       {% endif %}
       <div class="field"><label>نام متغیر کلید محیطی (api_key_env)</label><input type="text" name="api_key_env" value="{{ selected.api_key_env or '' }}" style="direction:ltr;text-align:left"><div class="hint">فقط <b>نام</b> متغیر محیطی ذخیره می‌شود، نه خود کلید. برای بیشتر نصب‌ها خالی بماند و کلید بالا استفاده شود.</div></div>
@@ -82,6 +88,16 @@
       <div class="field"><label>توضیح</label><input type="text" name="description" value="{{ selected.description or '' }}"></div>
       <button class="btn btn-primary" type="submit">ذخیره</button>
     </form>
+
+      {# The clear-key form lives HERE, a sibling of the settings form rather
+         than inside it. HTML has no nested forms: a parser that meets a form
+         start tag while one is already open discards it, and the contents are
+         then submitted with the OUTER form. That is why "پاک کردن کلید" used to
+         post the whole settings form -- which saved the model and cleared
+         nothing. The button reaches this form by id, which is how a control
+         joins a form it is not inside. #}
+      <form method="post" action="/models/{{ selected.id }}/clear-key" id="clear-key-form-{{ selected.id }}" onsubmit="return confirm('کلید ذخیره‌شدهٔ این مدل پاک شود؟ اگر نقطهٔ اتصال خودش را دارد، تا ثبت کلید تازه تولید ناموفق می‌شود.')">{{ csrf_field(request) | safe }}</form>
+
     {% else %}
     <p>مدلی تعریف نشده است.</p>
     {% endif %}
