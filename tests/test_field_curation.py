@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AuditLog, Category, Field, Main, PanelUser, Role
+from app.db.models import AuditLog, Category, Channel, Field, Main, PanelUser, Role
 from app.panel.auth import hash_password
 from app.services import fields as field_service
 from tests.panel_test_client import panel_client
@@ -433,3 +433,168 @@ async def test_a_viewer_may_not_curate_fields(session: AsyncSession):
             select(Field).where(Field.name == "sneaky")
         )
     ).scalars().all() == []
+
+# --------------------------------------------------------------------------
+# delete a category
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_empty_category(session: AsyncSession):
+    category = await _category(session, "اشتباه")
+    assert await field_service.delete_category(session, category.id) == "deleted"
+    rows = (
+        await session.execute(select(Category).where(Category.id == category.id))
+    ).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_category_takes_its_channel_routes_with_it(session: AsyncSession):
+    """A route that outlives its bucket would resolve to nothing."""
+    from app.db.models import CategoryChannelRoute
+
+    category = await _category(session, "با مسیر")
+    channel = Channel(platform="bale", chat_id=97501, is_active=True)
+    session.add(channel)
+    await session.commit()
+    session.add(CategoryChannelRoute(category_id=category.id, channel_id=channel.id))
+    await session.commit()
+
+    await field_service.delete_category(session, category.id)
+    assert (await session.execute(select(CategoryChannelRoute))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_category_that_holds_fields_is_refused(session: AsyncSession):
+    """category_id is NOT NULL: the fields have to be told where to go first."""
+    from app.services.errors import from_value_error
+
+    category = await _category(session, "پر از رشته")
+    await _field(session, "a-field", category)
+    with pytest.raises(ValueError) as excinfo:
+        await field_service.delete_category(session, category.id)
+    status, message = from_value_error(excinfo.value)
+    assert status == 409
+    # The message must carry the path out, not just the refusal.
+    assert "رشته" in message and "صفحهٔ رشته‌ها" in message
+
+
+@pytest.mark.asyncio
+async def test_a_refused_category_is_still_there(session: AsyncSession):
+    """Refusing must not half-delete: the fields would be orphaned."""
+    category = await _category(session, "پر از رشته")
+    row = await _field(session, "a-field", category)
+    with pytest.raises(ValueError):
+        await field_service.delete_category(session, category.id)
+    rows = (await session.execute(select(Category))).scalars().all()
+    assert category.id in [c.id for c in rows]
+    assert (await session.execute(select(Field))).scalars().one().id == row.id
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_category_records_use_is_refused(session: AsyncSession):
+    """main.category_id is a plain FK; the record must keep resolving."""
+    from app.services.errors import from_value_error
+
+    category = await _category(session, "رکورد دارد")
+    session.add(Main(
+        username="u", title="T", abstract="A", field="x", university="U",
+        author="A", supervisor="S", status="review", category_id=category.id,
+        output_json={"title": "T", "lead": "L", "body": "B"},
+    ))
+    await session.commit()
+    with pytest.raises(ValueError) as excinfo:
+        await field_service.delete_category(session, category.id)
+    _status, message = from_value_error(excinfo.value)
+    assert "رکورد" in message
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_category_that_does_not_exist_is_a_not_found(session: AsyncSession):
+    with pytest.raises(ValueError) as excinfo:
+        await field_service.delete_category(session, 999999)
+    assert str(excinfo.value) == "not-found"
+
+
+@pytest.mark.asyncio
+async def test_the_documented_path_actually_works(session: AsyncSession):
+    """Empty it, then delete -- the sequence the refusal text tells them to do."""
+    source = await _category(session, "مبدأ")
+    target = await _category(session, "مقصد")
+    rows = [await _field(session, f"moving-{i}", source) for i in range(3)]
+
+    with pytest.raises(ValueError):
+        await field_service.delete_category(session, source.id)
+
+    await field_service.bulk_assign_category(session, [r.id for r in rows], target.id)
+    assert await field_service.delete_category(session, source.id) == "deleted"
+    for row in rows:
+        await session.refresh(row)
+        assert row.category_id == target.id
+
+
+@pytest.mark.asyncio
+async def test_the_card_offers_delete_and_says_what_blocks_it(session: AsyncSession):
+    await _admin(session)
+    empty = await _category(session, "خالی")
+    busy = await _category(session, "شاغول")
+    await _field(session, "occupier", busy)
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/categories")
+    assert f'action="/categories/{empty.id}/delete"' in page.text
+    assert f'action="/categories/{busy.id}/delete"' in page.text
+    assert "پس حذف انجام نمی‌شود" in page.text, (
+        "the button must not be a trap that only ever fails"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_category_over_http(session: AsyncSession):
+    await _admin(session)
+    category = await _category(session, "اشتباه")
+    async with panel_client() as client:
+        await _login(client)
+        response = await client.post(
+            f"/categories/{category.id}/delete", follow_redirects=False
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/categories"
+    rows = (
+        await session.execute(select(Category).where(Category.id == category.id))
+    ).scalars().all()
+    assert rows == []
+    assert (await session.execute(
+        select(AuditLog.action).where(AuditLog.action == "category_delete")
+    )).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_busy_category_over_http_explains_why(session: AsyncSession):
+    await _admin(session)
+    category = await _category(session, "شاغول")
+    await _field(session, "occupier", category)
+    async with panel_client() as client:
+        await _login(client)
+        response = await client.post(
+            f"/categories/{category.id}/delete", follow_redirects=False
+        )
+        assert response.status_code == 409
+        assert "صفحهٔ رشته‌ها" in response.text
+        assert "(409" not in response.text, "the message is the sentence, not a tuple"
+    assert (await session.execute(select(Category))).scalars().one().id == category.id
+
+
+@pytest.mark.asyncio
+async def test_a_viewer_may_not_delete_a_category(session: AsyncSession):
+    await _admin(session, username="curate-admin")
+    await _admin(session, username="curate-viewer", role_name="viewer")
+    category = await _category(session, "مال ادمین")
+    async with panel_client() as client:
+        await _login(client, "curate-viewer")
+        response = await client.post(
+            f"/categories/{category.id}/delete", follow_redirects=False
+        )
+        assert response.status_code == 403
+    assert (await session.execute(select(Category))).scalars().one().id == category.id

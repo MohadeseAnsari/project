@@ -437,7 +437,7 @@ _ACTION_FA = {
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "category_channels": "تنظیم کانال‌های دسته",
     "field_create": "افزودن رشته", "field_delete": "حذف رشته",
-    "category_create": "افزودن دسته",
+    "category_create": "افزودن دسته", "category_delete": "حذف دسته",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
@@ -1189,7 +1189,44 @@ async def categories_page(
                  {"id": row["id"], "name": row["name"]}
                  for row in matrix
                  if row["id"] in unrouted and stranded_fields.get(row["id"], 0) > 0
-             ]))
+             ],
+             # Shown on each card so a delete that will be refused says why
+             # before the click rather than after it.
+             record_counts=await field_service.category_record_counts(
+                 session, [row["id"] for row in categories])))
+
+
+@panel_app.post("/categories/{category_id}/delete")
+async def categories_delete(
+    request: Request, category_id: int, session: AsyncSession = Depends(session_dep),
+):
+    """Delete a category (admins), refusing while it still holds fields or records.
+
+    Creating a category without a way to remove one is a trap: a category made
+    by mistake can only be emptied by hand. This closes that, but only for the
+    categories that can safely go.
+
+    The refusals are not obstruction. ``fields.category_id`` is NOT NULL and
+    ``main.category_id`` is a plain FK, so a category holding either cannot be
+    removed without deciding what happens to them -- and deciding that
+    automatically (sweeping its fields into a fallback bucket) would move news
+    to channels the operator never chose. The error text says the exact path:
+    filter the fields page by this category, bulk-assign them, come back.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    try:
+        await field_service.delete_category(session, category_id)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "حذف دسته ممکن نشد.")),
+            status_code=409)
+    await audit_service.record_event(session, user.id, "category_delete", None,
+                                     f"category={category_id}")
+    return RedirectResponse(url="/categories", status_code=303)
 
 
 @panel_app.post("/categories/{category_id}/channels")
@@ -2009,7 +2046,9 @@ GUARDED_ROUTES: dict[str, str] = {
     "/fields/{field_id}/delete": "FIELD_CURATE",
     "/categories": "MANAGE_CONFIG",
     "/fields/{field_id}/category": "FIELD_CURATE",
-"/categories/{category_id}/channels": "MANAGE_CONFIG",
+"/categories": "MANAGE_CONFIG",
+    "/categories/{category_id}/delete": "MANAGE_CONFIG",
+    "/categories/{category_id}/channels": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
     "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",

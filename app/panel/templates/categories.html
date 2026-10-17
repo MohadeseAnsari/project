@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "icons.html" import icon, glyph %}
+{% from "icons.html" import glyph, icon %}
 {% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
@@ -66,7 +66,13 @@
 
   <div class="two" style="padding:14px 22px">
     {% for c in categories %}
-    <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span></h3>
+    <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span>
+      {# Delete is refused while the category holds fields or records, so the
+         card says which of the two is in the way BEFORE the click. A button
+         that only ever fails teaches the operator to ignore it. #}
+      <form method="post" action="/categories/{{ c.id }}/delete" style="display:inline"
+            onsubmit="return confirm('دستهٔ «{{ c.name }}» حذف شود؟{% if c.field_count %} این دسته {{ c.field_count|fa }} رشته دارد، پس حذف انجام نمی‌شود مگر رشته‌هایش را اول جابه‌جا کنید.{% endif %}')">{{ csrf_field(request) | safe }}{{ icon('trash', 'دستهٔ ' ~ c.name ~ ' را حذف کن', 'danger') }}</form>
+      </h3>
       <div class="body">
         {% if c.field_names %}
         <div class="chips">
@@ -79,6 +85,8 @@
         <div class="hint">هنوز رشته‌ای در این دسته نیست.</div>
         {% endif %}
         {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
+        {% set recs = record_counts.get(c.id, 0) if record_counts else 0 %}
+        {% if recs %}<div class="hint" style="margin-top:10px">{{ recs|fa }} رکورد با این دسته ثبت شده، پس تا وقتی آن رکوردها هستند حذف نمی‌شود.</div>{% endif %}
         <div class="hint" style="margin-top:10px">تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
 
         {# The channel picker. <details> rather than a modal so it opens and

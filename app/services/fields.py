@@ -315,6 +315,73 @@ async def field_record_count(session, field_id: int) -> int:
     ).scalar_one()
 
 
+async def category_record_counts(session, category_ids) -> dict[int, int]:
+    """How many records are filed under each of ``category_ids``.
+
+    Shown on a category card so the operator can see that a delete WILL be
+    refused before clicking it, rather than after. One grouped query for the
+    whole page: the panel renders a card per category and a per-card lookup
+    would be a round trip each, to fill in one small number. Categories with no
+    records are simply absent.
+    """
+    ids = [int(c) for c in category_ids]
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Main.category_id, func.count(Main.id))
+            .where(Main.category_id.in_(ids))
+            .group_by(Main.category_id)
+        )
+    ).all()
+    return {category_id: count for category_id, count in rows}
+
+
+async def delete_category(session, category_id: int) -> str:
+    """Delete an empty category.
+
+    Refused while the category still holds fields, and refused while any record
+    points at it. Both refusals are deliberate:
+
+    * **fields** -- ``fields.category_id`` is ``NOT NULL``, so a category that
+      holds fields cannot simply be removed; something has to happen to those
+      fields first. Moving them to a fallback bucket automatically would be a
+      large, invisible reassignment, and the categories the operator picks are
+      the ones whose news actually go somewhere, so guessing one is worse than
+      making them say. The path is: filter ``/fields`` by this category, select
+      all, bulk-assign them elsewhere, then delete.
+    * **records** -- ``main.category_id`` is a plain FK, and a delivered record
+      pointing at a category that no longer exists cannot be explained from the
+      panel at all.
+
+    Its channel routes go with it (``ON DELETE CASCADE`` in the schema, plus the
+    ORM relationship), so no route can outlive the bucket it points at.
+
+    Raises:
+        ValueError: ``not-found`` / ``category-has-fields`` / ``category-in-use``
+    """
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise ValueError("not-found")
+    fields = (
+        await session.execute(
+            select(func.count(Field.id)).where(Field.category_id == category_id)
+        )
+    ).scalar_one()
+    if fields:
+        raise ValueError("category-has-fields")
+    records = (
+        await session.execute(
+            select(func.count(Main.id)).where(Main.category_id == category_id)
+        )
+    ).scalar_one()
+    if records:
+        raise ValueError("category-in-use")
+    await session.delete(category)
+    await session.commit()
+    return "deleted"
+
+
 async def delete_field(session, row: Field) -> str:
     """Delete a field, refusing while any record still points at it.
 
