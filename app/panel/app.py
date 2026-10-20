@@ -1088,14 +1088,16 @@ async def fields_page(
     category_id: int | None = None, source: str = "", unconfirmed: str = "",
     assigned: str = "", skipped: str = "",
 ):
-    """Fields — one row each, with the category editable on that row.
+    """Fields — the known disciplines, their usage, and their archival category.
 
-    A field's category is a property OF THE FIELD, so it belongs on the field
-    row: you can see the assignment and the keyword that produced it in one
-    glance. The categories themselves are a list of destinations and now have
-    their own page at ``/categories``, which the owner asked for.
+    NOTE (v2-combined): a field's category is no longer how a thesis is
+    classified. The LLM assigns each record's ISCED-F 2013 categories during
+    generation (``main_category_matches``); ``fields.category_id`` is legacy
+    grouping kept for the panel. This page shows the field as the dedup
+    identity of a discipline, how many records use it, and lets an operator
+    tidy the archival grouping — which never affects routing.
 
-    ``?tab=categories`` still redirects there so old links keep working.
+    ``?tab=categories`` still redirects to ``/categories`` so old links work.
     """
     user = await require_login(request, session)
     if tab == "categories":
@@ -1363,18 +1365,18 @@ async def routing_page_removed(request: Request):
 
 @panel_app.post("/fields/{field_id}/category")
 async def field_set_category(
-    request: Request, field_id: int, category_id: int = Form(...),
+    request: Request, field_id: int, category_id: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Pin a field to a category once, by hand (item 15).
+    """Set or clear a field's ARCHIVAL category.
 
-    The assignment is stored on the row and marked ``manual``, so the
-    automatic ruleset does not quietly overwrite an operator's decision on the
-    next classification pass.
+    v2-combined note: this does NOT influence the classification of theses or
+    their routing. The LLM chooses each record's ISCED-F 2013 categories at
+    generation time. This control only maintains the historical grouping of
+    field rows; an empty value detaches the grouping cleanly.
 
-    This lives on the fields page only. It decides which CATEGORY a field
-    belongs to — the classification the generator and the records use — and has
-    nothing to do with routing, which no longer exists.
+    The assignment is marked ``manual`` so the page can show a human last
+    touched it.
     """
     user = await require_login(request, session)
     try:
@@ -1384,8 +1386,15 @@ async def field_set_category(
     row = await field_service.get_field(session, field_id)
     if not row:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
+    raw_category = (category_id or "").strip()
     try:
-        row = await field_service.assign_field_category(session, row, category_id)
+        parsed_category = int(raw_category) if raw_category else None
+    except ValueError:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="دستهٔ انتخاب‌شده معتبر نیست."),
+            status_code=422)
+    try:
+        row = await field_service.assign_field_category(session, row, parsed_category)
     except ValueError as e:
         return templates.TemplateResponse(request, "base.html",
             _ctx(request, user, error=_service_error(e, "تعیین دسته ممکن نشد.")),
@@ -1440,23 +1449,30 @@ async def fields_bulk_category(
 
 @panel_app.post("/fields")
 async def fields_create(
-    request: Request, name: str = Form(...), category_id: int = Form(...),
+    request: Request, name: str = Form(...), category_id: str = Form(""),
     session: AsyncSession = Depends(session_dep),
 ):
-    """Add a field by hand, already placed in a category.
+    """Add a field by hand, with an optional ARCHIVAL category.
 
-    A discipline that is missing from the spreadsheet can otherwise only ever
-    reach ``other``, and with routing live that is a bucket that publishes
-    nowhere. Creating it marked ``manual`` means the next classification pass
-    cannot quietly move it either.
+    A field is the dedup identity of a discipline; the LLM classifies each
+    thesis from ISCED-F 2013, so a category here is legacy grouping only and
+    may be left empty. ``source='manual'`` still marks the row as an operator
+    addition rather than a spreadsheet import.
     """
     user = await require_login(request, session)
     try:
         _require_role(user, Action.FIELD_CURATE)
     except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    raw_category = (category_id or "").strip()
     try:
-        field = await field_service.create_field(session, name, category_id)
+        parsed_category = int(raw_category) if raw_category else None
+    except ValueError:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error="دستهٔ انتخاب‌شده معتبر نیست."),
+            status_code=422)
+    try:
+        field = await field_service.create_field(session, name, parsed_category)
     except ValueError as e:
         return templates.TemplateResponse(request, "base.html",
             _ctx(request, user, error=_service_error(e, "افزودن رشته ممکن نشد.")),

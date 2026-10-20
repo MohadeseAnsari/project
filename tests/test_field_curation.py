@@ -15,6 +15,8 @@ The assertions that matter most are the negative ones: what must NOT be
 rewritten, what must NOT be deleted, and who must NOT be allowed to do it.
 """
 
+import re
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -598,3 +600,82 @@ async def test_a_viewer_may_not_delete_a_category(session: AsyncSession):
         )
         assert response.status_code == 403
     assert (await session.execute(select(Category))).scalars().one().id == category.id
+
+
+# ---------------------------------------------------------------------------
+# v2-combined: the fields page is about dedup identity + usage, while the
+# LLM owns thesis classification. The archival category must be labelled as
+# such and must be clearable (new runtime fields are stored with NULL).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fields_page_uses_records_and_labels_the_category_as_archival(
+    session: AsyncSession,
+):
+    await _admin(session)
+    category = await _category(session, "بهداشت")
+    field = await _field(session, "cardio-usage-field", category)
+    for index in range(2):
+        session.add(Main(
+            username="u", title=f"t{index}", abstract="a", field=field.name,
+            university="u", author="a", supervisor="s", field_id=field.id,
+        ))
+    await session.commit()
+
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/fields")
+
+    assert page.status_code == 200
+    # The page explains the v2 model instead of the old "the field decides".
+    assert "ISCED-F 2013" in page.text and "مدل زبانی" in page.text
+    assert "دستهٔ بایگانی" in page.text
+    assert "کلیدواژهٔ قدیمی" in page.text
+
+    row_html = next(
+        block for block in re.findall(r'<tr class="table-row">(.*?)</tr>', page.text, re.S)
+        if field.name in block
+    )
+    assert '<td class="num">۲</td>' in row_html, "the row must show real record usage"
+
+
+@pytest.mark.asyncio
+async def test_an_uncategorized_field_can_be_cleared_and_renders_an_empty_option(
+    session: AsyncSession,
+):
+    await _admin(session)
+    category = await _category(session, "علوم پایه")
+    field = await _field(session, "basics-field", category)
+
+    async with panel_client() as client:
+        await _login(client)
+        response = await client.post(
+            f"/fields/{field.id}/category", data={"category_id": ""},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        page = await client.get("/fields")
+
+    await session.refresh(field)
+    assert field.category_id is None, "an empty submit must detach the archival category"
+    block = page.text.split(f'action="/fields/{field.id}/category"')[1].split("</select>")[0]
+    assert '<option value="" selected>بدون دسته</option>' in block
+
+
+@pytest.mark.asyncio
+async def test_a_field_can_be_created_without_a_category(session: AsyncSession):
+    await _admin(session)
+    async with panel_client() as client:
+        await _login(client)
+        response = await client.post(
+            "/fields", data={"name": "رشتهٔ بدون دسته", "category_id": ""},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+    row = (
+        await session.execute(select(Field).where(Field.name == "رشتهٔ بدون دسته"))
+    ).scalar_one()
+    assert row.category_id is None
+    assert row.source == "manual"

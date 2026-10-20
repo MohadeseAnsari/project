@@ -71,33 +71,37 @@ async def field_category_rows(
     session, q: str = "", page: int = 1, page_size: int = 50,
     category_id: int | None = None, source: str = "", unconfirmed_only: bool = False,
 ) -> tuple[list[dict], int]:
-    """Fields with their category, for the "field → category" editor.
+    """Fields with their (archival) category and record usage.
 
-    The owner's requirement (item 15): the assignment is stored once in the
-    database and edited by hand here, instead of a ruleset being re-applied on
-    every submission. ``category_source`` records whether the current value was
-    set by hand or came from the automatic rules, so the panel can show it.
+    NOTE (v2-combined): a field's category no longer classifies anything. The
+    LLM assigns each THESIS its ISCED-F 2013 categories at generation time
+    (``main_category_matches``); ``fields.category_id`` is legacy metadata kept
+    for the panel's historical grouping. This listing therefore also returns
+    ``record_count`` so the page can show what a field is actually used for:
+    the dedup identity of records.
 
     Returns ``(rows, total)`` as plain dicts, SEARCHED and PAGINATED. A
     deployment has hundreds of fields, and rendering every one of them as a
     row made the page unusable — the control an operator needs is as rare as
     the ones they want to change.
 
-    Only ``category_source='manual'`` rows are protected from reclassification;
-    the rest are listed so the whole mapping is inspectable.
-
     Every filter is applied INSIDE both queries. That distinction is the whole
     point: filtering after the LIMIT means the page you are shown is not the
     page the count claims, and "next" walks off the end of the real result set.
     ``total`` and the rows must come from the same predicate, or the pager lies.
-
-    This is the function the panel SHOULD have been using all along. The fields
-    page called ``list_fields()``, which has a default ``limit=100`` and was
-    called with no argument -- so 449 of 549 fields were never rendered, and
-    because the search box then filtered that already-truncated list in Python,
-    those 449 could not be found by searching either.
     """
-    base = select(Field, Category.name).outerjoin(Category, Category.id == Field.category_id)
+    # Correlated count: how many thesis records point at this field. One scalar
+    # subquery keeps the page to a single query (no N+1 over hundreds of rows).
+    record_count = (
+        select(func.count(Main.id))
+        .where(Main.field_id == Field.id)
+        .correlate(Field)
+        .scalar_subquery()
+    )
+    base = (
+        select(Field, Category.name, record_count.label("record_count"))
+        .outerjoin(Category, Category.id == Field.category_id)
+    )
     count_query = select(func.count()).select_from(Field)
     filters = []
     term = q.strip()
@@ -140,26 +144,35 @@ async def field_category_rows(
                 "category_source": field.category_source,
                 # The table shows the ingestion source under the name.
                 "source": field.source,
+                # How many records use this field (dedup identity, not a rule).
+                "record_count": int(record_count_value or 0),
             }
-            for field, category_name in rows
+            for field, category_name, record_count_value in rows
         ],
         total,
     )
 
 
-async def assign_field_category(session, field: Field, category_id: int) -> Field:
-    """Pin a field to a category by hand (item 15).
+async def assign_field_category(
+    session, field: Field, category_id: int | None
+) -> Field:
+    """Set (or clear) a field's ARCHIVAL category by hand.
 
-    Sets ``category_source='manual'`` so it is visibly an operator decision and
-    is not overwritten by the next automatic classification pass.
+    NOTE (v2-combined): this does NOT classify theses. Record categories are
+    chosen by the LLM from ISCED-F 2013 at generation time; this column is
+    legacy grouping only. ``category_source='manual'`` simply records that a
+    human last touched the archival value.
 
     Raises:
-        ValueError: ``unknown-category`` when the category does not exist.
+        ValueError: ``unknown-category`` when a non-null id does not exist.
     """
-    category = await session.get(Category, category_id)
-    if category is None:
-        raise ValueError("unknown-category")
-    field.category_id = category.id
+    if category_id is None:
+        field.category_id = None
+    else:
+        category = await session.get(Category, category_id)
+        if category is None:
+            raise ValueError("unknown-category")
+        field.category_id = category.id
     field.category_source = "manual"
     await session.commit()
     await session.refresh(field)
@@ -199,18 +212,25 @@ async def create_category(session, name: str, description: str | None = None) ->
     return category
 
 
-async def create_field(session, name: str, category_id: int) -> Field:
-    """Add a field by name and place it in a category.
+async def create_field(
+    session, name: str, category_id: int | None = None
+) -> Field:
+    """Add a field by name, optionally tagging an ARCHIVAL category.
 
     ``normalized_name`` is the stable identity used for exact matching and
-    duplicate prevention, so it is computed the same way the classifier
-    computes it. Skipping that would let a field be added under a name that
-    looks new but normalizes onto an existing one, and the second insert would
-    blow up on the unique index with an error the operator cannot read.
+    duplicate prevention, so it is computed the same way the seed script does.
+    Skipping that would let a field be added under a name that looks new but
+    normalizes onto an existing one, and the second insert would blow up on the
+    unique index with an error the operator cannot read.
 
     ``source='manual'`` marks it as an operator addition rather than something
     the spreadsheet supplied, so the field list can tell the two apart and a
     later spreadsheet import does not mistake it for its own.
+
+    ``category_id`` is optional and archival only: since v2-combined a field is
+    the dedup identity of a discipline, while the LLM classifies each thesis.
+    New runtime fields are stored with NULL, and the page must be able to do
+    the same.
 
     Raises:
         ValueError: ``empty-name`` / ``duplicate-field`` / ``unknown-category``
@@ -223,7 +243,7 @@ async def create_field(session, name: str, category_id: int) -> Field:
     normalized = normalize_field(trimmed)
     if not normalized:
         raise ValueError("empty-name")
-    if await session.get(Category, category_id) is None:
+    if category_id is not None and await session.get(Category, category_id) is None:
         raise ValueError("unknown-category")
     clash = (
         await session.execute(
