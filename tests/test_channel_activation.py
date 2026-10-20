@@ -15,8 +15,8 @@ The rule these tests pin:
     an article is a target for a channel only if the channel was switched on
     no later than the article
 
-which is enforced in two places that MUST agree -- ``resolve_channels`` in
-Python and ``_has_undelivered_channel`` in SQL. A disagreement in either
+which is enforced in two places that MUST agree -- ``channels_for_article_multi``
+in Python and ``_has_undelivered_channel`` in SQL. A disagreement in either
 direction is a silent bug: skip too much and news never goes out, skip too
 little and the archive floods a new channel. Most of this file exists to keep
 those two in step.
@@ -29,11 +29,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Category, Channel, Delivery, Field, Main
+from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
-    channels_for_article,
-    channels_for_article_with_source,
+    channels_for_article_multi,
     ensure_pending_deliveries,
     resolve_channels,
 )
@@ -42,10 +41,7 @@ OUTPUT = {"title": "تیتر", "lead": "lead", "body": "body"}
 
 
 async def _field(session: AsyncSession) -> Field:
-    category = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(category)
-    await session.commit()
-    field = Field(name="test-field", normalized_name="test-field", category_id=category.id)
+    field = Field(name="test-field", normalized_name="test-field", category_id=None)
     session.add(field)
     await session.commit()
     return field
@@ -67,23 +63,35 @@ async def _channel(session: AsyncSession, activated_at: datetime, active: bool =
 
 async def _article(session: AsyncSession, field: Field, created_at: datetime,
                    status: str = "review") -> Main:
+    """A record WITH the qualifying category match that routing reads."""
+    category = (await session.execute(select(Category).order_by(Category.id))).scalars().first()
+    if category is None:
+        category = Category(name="پزشکی و علوم سلامت", description="Medical")
+        session.add(category)
+        await session.commit()
     article = Main(
         username="u", title="T", abstract="A", field="پزشکی", university="U",
         author="A", supervisor="S", status=status, field_id=field.id,
-        category_id=field.category_id,
+        category_id=category.id,
         output_json=OUTPUT, created_at=created_at,
     )
     session.add(article)
+    await session.flush()
+    session.add(MainCategoryMatch(
+        main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
+    await _route_to_all(session)
     return article
 
 
 async def _route_to_all(session: AsyncSession) -> None:
     """Every category reaches every active channel.
 
-    Re-seeded after each channel is created so call order does not matter. The
-    activation floor is untouched: a channel switched on AFTER an article
-    still must not receive it, and these tests assert exactly that.
+    Re-seeded after each channel AND each article is created so call order
+    does not matter. The activation floor is untouched: a channel switched on
+    AFTER an article still must not receive it, and these tests assert exactly
+    that.
     """
     categories = (await session.execute(select(Category))).scalars().all()
     for category in categories:
@@ -103,7 +111,7 @@ async def test_a_channel_does_not_receive_news_that_predates_it(session: AsyncSe
     field = await _field(session)
     old = await _article(session, field, NOW)
     new_channel = await _channel(session, NOW + timedelta(days=1))
-    assert await channels_for_article(session, old) == [], (
+    assert [c.id for c, _s in await channels_for_article_multi(session, old)] == [], (
         "the archive must not be delivered to a channel added afterwards"
     )
 
@@ -113,7 +121,7 @@ async def test_a_channel_receives_news_created_after_it_was_switched_on(session:
     field = await _field(session)
     channel = await _channel(session, NOW)
     later = await _article(session, field, NOW + timedelta(minutes=1))
-    assert [c.id for c in await channels_for_article(session, later)] == [channel.id]
+    assert [c.id for c, _s in await channels_for_article_multi(session, later)] == [channel.id]
 
 
 @pytest.mark.asyncio
@@ -128,7 +136,7 @@ async def test_the_boundary_minute_itself_is_included(session: AsyncSession):
     field = await _field(session)
     channel = await _channel(session, NOW)
     same = await _article(session, field, NOW)
-    assert [c.id for c in await channels_for_article(session, same)] == [channel.id]
+    assert [c.id for c, _s in await channels_for_article_multi(session, same)] == [channel.id]
 
 
 @pytest.mark.asyncio
@@ -137,7 +145,7 @@ async def test_an_old_channel_still_receives_new_news(session: AsyncSession):
     field = await _field(session)
     old_channel = await _channel(session, NOW - timedelta(days=365))
     fresh = await _article(session, field, NOW)
-    assert [c.id for c in await channels_for_article(session, fresh)] == [old_channel.id]
+    assert [c.id for c, _s in await channels_for_article_multi(session, fresh)] == [old_channel.id]
 
 
 @pytest.mark.asyncio
@@ -149,8 +157,8 @@ async def test_a_channel_only_sees_the_news_of_its_own_era(session: AsyncSession
     after_switch = await _article(session, field, NOW + timedelta(days=10))
     joined_late = await _channel(session, NOW)
 
-    assert [c.id for c in await channels_for_article(session, early)] == [before_switch.id]
-    assert [c.id for c in await channels_for_article(session, after_switch)] == [
+    assert [c.id for c, _s in await channels_for_article_multi(session, early)] == [before_switch.id]
+    assert [c.id for c, _s in await channels_for_article_multi(session, after_switch)] == [
         before_switch.id, joined_late.id
     ]
 
@@ -172,8 +180,8 @@ async def test_switching_a_channel_off_and_on_moves_its_start_forward(session: A
     await _route_to_all(session)
     stale = await _article(session, field, NOW + timedelta(days=1))
     fresh = await _article(session, field, datetime.utcnow() + timedelta(seconds=5))
-    assert [c.id for c in await channels_for_article(session, stale)] == []
-    assert [c.id for c in await channels_for_article(session, fresh)] == [dormant.id]
+    assert [c.id for c, _s in await channels_for_article_multi(session, stale)] == []
+    assert [c.id for c, _s in await channels_for_article_multi(session, fresh)] == [dormant.id]
 
 
 @pytest.mark.asyncio
@@ -189,18 +197,26 @@ async def test_switching_a_channel_off_leaves_its_boundary_alone(session: AsyncS
 
 
 @pytest.mark.asyncio
-async def test_provenance_is_still_broadcast_for_new_news(session: AsyncSession):
+async def test_provenance_is_still_category_for_new_news(session: AsyncSession):
+    """A single qualifying match names the category that reached the channel."""
     field = await _field(session)
     await _channel(session, NOW - timedelta(days=1))
     article = await _article(session, field, NOW)
-    assert {s for _c, s in await channels_for_article_with_source(session, article)} == {"category"}
+    pairs = await channels_for_article_multi(session, article)
+    assert all(source == "پزشکی و علوم سلامت" for _c, source in pairs), (
+        "one match, one category name as provenance"
+    )
 
 
 @pytest.mark.asyncio
 async def test_no_article_means_no_floor(session: AsyncSession):
     """The preview endpoint asks 'where would news generated NOW go?'."""
     field = await _field(session)
-    category = await session.get(Category, field.category_id)
+    category = (await session.execute(select(Category).order_by(Category.id))).scalars().first()
+    if category is None:
+        category = Category(name="پزشکی و علوم سلامت", description="Medical")
+        session.add(category)
+        await session.commit()
     await _route_to_all(session)
     channel = await _channel(session, datetime(2099, 1, 1))
     assert [c.id for c, _s in await resolve_channels(session, None, category.id)] == [channel.id]
@@ -261,7 +277,7 @@ async def test_the_queue_and_the_resolver_agree_on_both_sides(session: AsyncSess
         settings.require_human_confirmation = before
 
     for article in (early, middle, late):
-        expected = sorted(c.id for c in await channels_for_article(session, article))
+        expected = sorted(c.id for c, _s in await channels_for_article_multi(session, article))
         actual = sorted(
             row.channel_id
             for row in (

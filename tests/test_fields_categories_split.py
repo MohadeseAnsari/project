@@ -185,9 +185,17 @@ def test_the_standalone_page_is_a_real_template():
 
 
 def test_no_link_goes_through_the_old_tab_url():
+    """The RECORDS/fields pages must not resurrect the removed ?tab=categories view.
+
+    Exception: ``record_detail.html`` now has its own ``?tab=categories`` tab —
+    "دسته‌بندی‌های خودکار" (v2-combined) — a per-record classification view, not
+    the removed global fields/categories split.
+    """
     from pathlib import Path
 
     for name in Path("app/panel/templates").glob("*.html"):
+        if name.name == "record_detail.html":
+            continue
         html = name.read_text(encoding="utf-8")
         assert "tab=categories" not in html, f"{name} still links via the old tab URL"
 

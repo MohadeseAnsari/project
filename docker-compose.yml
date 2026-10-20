@@ -53,6 +53,10 @@ services:
       AVALAI_API_KEY: ${AVALAI_API_KEY}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+      # Combined generation + ISCED-F 2013 classification (v2-combined).
+      TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
+      MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
+      AUTO_PUBLISH_ON_CLASSIFICATION: ${AUTO_PUBLISH_ON_CLASSIFICATION:-false}
       # Browser origins allowed to call the API (the demo UI is served from :8080).
       # Add the host you will present from, e.g. "http://example.com:8080".
       DEMO_CORS_ORIGINS: ${DEMO_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
@@ -90,6 +94,10 @@ services:
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
       WORKER_LEASE_MINUTES: ${WORKER_LEASE_MINUTES:-5}
+      # Combined generation + ISCED-F 2013 classification (v2-combined).
+      TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
+      MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
+      AUTO_PUBLISH_ON_CLASSIFICATION: ${AUTO_PUBLISH_ON_CLASSIFICATION:-false}
     volumes:
       - credentials_data:/app/data
     depends_on:

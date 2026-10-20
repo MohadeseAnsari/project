@@ -21,6 +21,7 @@ from app.api.limits import limiter
 from app.auth.secret import verify_secret
 from app.db.connection import get_session
 from app.schemas.news import (
+    ClassificationResponse,
     ConnectionTestResponse,
     DeliveryInfo,
     DeliveryListResponse,
@@ -246,6 +247,111 @@ async def _record_detail_payload(session: AsyncSession, record) -> dict:
     return await record_service.record_detail(session, record)
 
 
+@router.get(
+    "/records/{record_id}/classification",
+    response_model=ClassificationResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+    },
+)
+async def get_record_classification(
+    record_id: int = Path(..., description="The record identifier."),
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Lightweight classification payload: only the stored matches.
+
+    The v2-combined generation stores up to 3 ISCED-F 2013 matches per record
+    (``main_category_matches``); this endpoint returns exactly those, with the
+    primary flagged, without the full record body.
+    """
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from app.services import records as record_service
+
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return {
+        "record_id": record.id,
+        "category_id": record.category_id,
+        "matches": await record_service.record_category_matches(session, record.id),
+    }
+
+
+@router.post(
+    "/records/{record_id}/category-matches",
+    response_model=ClassificationResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        422: {"model": ErrorResponse, "description": "Unknown category name or invalid payload"},
+    },
+)
+async def override_category_matches(
+    record_id: int = Path(..., description="The record identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Manual override: a reviewer replaces the stored classification.
+
+    Body: ``{ "shared_Secret", "matches": [{"category", "score", "reason"}] }``.
+    The list REPLACES the previous matches (LLM answer included); the
+    top-scoring entry becomes the primary category. Names must be exact live
+    categories (the 29 ISCED-F 2013 names or ``other``); scores are clamped
+    to [0, 1]. Audited.
+    """
+    from app.services import audit as audit_service
+    from app.services import records as record_service
+    from app.schemas.news import CategoryMatchesOverrideRequest
+
+    _require_secret(payload)
+    try:
+        data = CategoryMatchesOverrideRequest(**(payload or {}))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        await record_service.replace_category_matches(
+            session,
+            record_id,
+            [
+                {"category": m.category, "score": m.score, "reason": m.reason}
+                for m in data.matches
+            ],
+        )
+    except ValueError as e:
+        message = str(e)
+        if message.startswith("unknown-category:"):
+            raise HTTPException(
+                status_code=422, detail=f"Unknown category: {message.split(':', 1)[1]}"
+            )
+        if message == "not-found":
+            raise HTTPException(status_code=404, detail="Record not found")
+        if message == "too-many-matches":
+            raise HTTPException(status_code=422, detail="At most 5 matches")
+        raise HTTPException(status_code=422, detail=message)
+
+    record = await record_service.get_record(session, record_id)
+    matches = await record_service.record_category_matches(session, record_id)
+    names = ", ".join(m["category"] for m in matches) or "empty"
+    await audit_service.record_event(
+        session,
+        None,  # machine API: no panel user to attribute
+        "override_category_matches",
+        main_id=record_id,
+        detail=f"matches: {names}"[:500],
+    )
+    logger.info("Manual category override record=%s matches=%s", record_id, names)
+    return {
+        "record_id": record_id,
+        "category_id": record.category_id if record else None,
+        "matches": matches,
+    }
+
+
 @router.patch(
     "/records/{record_id}",
     response_model=RecordDetailResponse,
@@ -454,6 +560,9 @@ async def get_stats(
     queue depth at a glance. Freshness is the newest ``main.heartbeat_at`` —
     the last time the generation Worker touched a job — and nothing else: no
     per-record processing times are exposed here (the demo must not show them).
+
+    ``records_by_category`` counts records by their PRIMARY (rank-1) match,
+    so a multi-category article is counted once, under its strongest match.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -465,6 +574,7 @@ async def get_stats(
         "records": await record_service.record_status_counts(session),
         "deliveries": await delivery_service.delivery_status_counts(session),
         "worker_last_heartbeat_at": await record_service.worker_heartbeat(session),
+        "records_by_category": await record_service.records_by_category(session),
     }
 
 

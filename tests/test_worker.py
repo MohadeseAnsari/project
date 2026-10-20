@@ -6,8 +6,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Main, Field, Category, Model, Prompt
-from app.worker.worker import recover_stale_jobs, claim_next_job, resolve_field, process_job, fail_job
+from app.db.models import Main, Field, Model, Prompt
+from app.schemas.news import CategoryMatch, GeneratedNews
+from app.worker.worker import recover_stale_jobs, claim_next_job, _upsert_field, process_job, fail_job
+
+# NOTE (v2-combined): the old ``test_resolve_field_*`` tests are gone with the
+# rule-based resolver itself — the field row is now only a dedup identity
+# (see ``_upsert_field``), classification lives in ``main_category_matches``
+# and is covered by ``tests/test_combined_classification.py``.
 
 
 @pytest.mark.asyncio
@@ -58,51 +64,32 @@ async def test_claim_next_job(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_claim_returns_none_when_no_ready_jobs(session: AsyncSession):
-    claimed = await claim_next_job(session)
-    assert claimed is None
+async def test_upsert_field_inserts_without_category(session: AsyncSession):
+    """A new field row is a dedup identity: NO category, NO keyword."""
+    field = await _upsert_field(session, "پزشکی")
+    await session.commit()
+    assert field is not None
+    assert field.category_id is None
+    assert field.matched_keyword is None
+    assert field.source == "runtime"
 
 
 @pytest.mark.asyncio
-async def test_resolve_field_known(session: AsyncSession):
-    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(cat)
+async def test_upsert_field_dedupes_normalized(session: AsyncSession):
+    """Same normalized identity → same row (first sighting wins)."""
+    first = await _upsert_field(session, "پزشکی")
+    # Zero-width space must normalize to the same identity.
+    second = await _upsert_field(session, "پزشکی\u200b")
     await session.commit()
+    assert first is not None and second is not None
+    assert first.id == second.id
 
-    field = Field(name="پزشکی", normalized_name="پزشکی", category_id=cat.id)
-    session.add(field)
-    await session.commit()
-
-    result_field, result_cat = await resolve_field(session, "پزشکی")
-    assert result_field is not None
-    assert result_field.name == "پزشکی"
-    assert result_cat is not None
-    assert result_cat.name == "پزشکی و علوم سلامت"
-
-
-@pytest.mark.asyncio
-async def test_resolve_field_unknown(session: AsyncSession):
-    other_cat = Category(name="other", description="Other")
-    session.add(other_cat)
-    await session.commit()
-
-    result_field, result_cat = await resolve_field(session, "unknown field xyz")
-    assert result_field is not None
-    assert result_field.source == "runtime"
-    assert result_cat is not None
-    assert result_cat.name == "other"
+    count = await session.execute(select(func.count()).select_from(Field))
+    assert count.scalar_one() == 1
 
 
 @pytest.mark.asyncio
 async def test_process_job_success(session: AsyncSession):
-    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(cat)
-    await session.commit()
-
-    field = Field(name="پزشکی", normalized_name="پزشکی", category_id=cat.id)
-    session.add(field)
-    await session.commit()
-
     job = Main(
         username="test",
         title="Test",
@@ -116,12 +103,14 @@ async def test_process_job_success(session: AsyncSession):
     session.add(job)
     await session.commit()
 
+    output = GeneratedNews(
+        title="Generated Title",
+        lead="Generated Lead",
+        body="Generated Body",
+        categories=[],
+    )
     with patch("app.worker.worker.generate_news") as mock_gen:
-        mock_gen.return_value = AsyncMock(
-            title="Generated Title",
-            lead="Generated Lead",
-            body="Generated Body",
-        )
+        mock_gen.return_value = output
         await process_job(session, job)
 
     await session.refresh(job)
@@ -188,14 +177,6 @@ async def test_claim_next_job_fifo_order(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_process_job_failure_marks_failed(session: AsyncSession):
-    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(cat)
-    await session.commit()
-
-    field = Field(name="پزشکی", normalized_name="پزشکی", category_id=cat.id)
-    session.add(field)
-    await session.commit()
-
     job = Main(
         username="test",
         title="Test",
@@ -223,14 +204,6 @@ async def test_process_job_failure_marks_failed(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_process_job_sets_model_prompt_and_heartbeat(session: AsyncSession):
-    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(cat)
-    await session.commit()
-
-    field = Field(name="پزشکی", normalized_name="پزشکی", category_id=cat.id)
-    session.add(field)
-    await session.commit()
-
     model = Model(name="gpt-5.6-luna", provider="openai", version="latest", is_active=True)
     prompt = Prompt(version="v1", system_prompt="test prompt", is_active=True)
     session.add_all([model, prompt])
@@ -249,8 +222,9 @@ async def test_process_job_sets_model_prompt_and_heartbeat(session: AsyncSession
     session.add(job)
     await session.commit()
 
+    output = GeneratedNews(title="T", lead="L", body="B", categories=[])
     with patch("app.worker.worker.generate_news") as mock_gen:
-        mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
+        mock_gen.return_value = output
         await process_job(session, job)
 
     await session.refresh(job)
@@ -261,13 +235,15 @@ async def test_process_job_sets_model_prompt_and_heartbeat(session: AsyncSession
 
 
 @pytest.mark.asyncio
-async def test_secret_not_sent_to_llm(session: AsyncSession):
-    cat = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(cat)
-    await session.commit()
+async def test_process_job_stores_classification(session: AsyncSession):
+    """The combined call's categories land in main_category_matches."""
+    from app.db.models import Category, MainCategoryMatch
 
-    field = Field(name="پزشکی", normalized_name="پزشکی", category_id=cat.id)
-    session.add(field)
+    session.add_all([
+        Category(name="بهداشت", deprecated=False, description="health"),
+        Category(name="فناوری اطلاعات و ارتباطات", deprecated=False, description="ict"),
+        Category(name="other", deprecated=False, description="fallback"),
+    ])
     await session.commit()
 
     job = Main(
@@ -283,44 +259,88 @@ async def test_secret_not_sent_to_llm(session: AsyncSession):
     session.add(job)
     await session.commit()
 
+    output = GeneratedNews(
+        title="T", lead="L", body="B",
+        categories=[
+            CategoryMatch(category="بهداشت", score=0.92, reason="پزشکی است"),
+            CategoryMatch(category="فناوری اطلاعات و ارتباطات", score=0.7, reason="ai"),
+        ],
+    )
     with patch("app.worker.worker.generate_news") as mock_gen:
-        mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
+        mock_gen.return_value = output
+        await process_job(session, job)
+
+    await session.refresh(job)
+    rows = (await session.execute(
+        select(MainCategoryMatch).where(MainCategoryMatch.main_id == job.id)
+    )).scalars().all()
+    assert len(rows) == 2
+    top = next(r for r in rows if r.rank == 1)
+    assert top.score == 0.92
+    assert job.category_id == top.category_id
+    assert job.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_process_job_no_qualifying_match_falls_back_to_other(session: AsyncSession):
+    """Empty categories → exactly one 'other' row, no qualifying match."""
+    from app.db.models import Category, MainCategoryMatch
+
+    session.add(Category(name="other", deprecated=False, description="fallback"))
+    await session.commit()
+
+    job = Main(
+        username="test",
+        title="Test",
+        abstract="Test abstract",
+        field="پزشکی",
+        university="Test University",
+        author="Author",
+        supervisor="Supervisor",
+        status="processing",
+    )
+    session.add(job)
+    await session.commit()
+
+    output = GeneratedNews(title="T", lead="L", body="B", categories=[])
+    with patch("app.worker.worker.generate_news") as mock_gen:
+        mock_gen.return_value = output
+        await process_job(session, job)
+
+    await session.refresh(job)
+    rows = (await session.execute(
+        select(MainCategoryMatch).where(MainCategoryMatch.main_id == job.id)
+    )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].score == 0.0
+    assert rows[0].rank == 1
+    assert rows[0].reason == "no auto-match"
+    other = (await session.execute(
+        select(Category).where(Category.name == "other")
+    )).scalar_one()
+    assert job.category_id == other.id
+
+
+@pytest.mark.asyncio
+async def test_secret_not_sent_to_llm(session: AsyncSession):
+    job = Main(
+        username="test",
+        title="Test",
+        abstract="Test abstract",
+        field="پزشکی",
+        university="Test University",
+        author="Author",
+        supervisor="Supervisor",
+        status="processing",
+    )
+    session.add(job)
+    await session.commit()
+
+    output = GeneratedNews(title="T", lead="L", body="B", categories=[])
+    with patch("app.worker.worker.generate_news") as mock_gen:
+        mock_gen.return_value = output
         await process_job(session, job)
 
     thesis_data = mock_gen.call_args[0][0]
     assert "shared_Secret" not in thesis_data
     assert settings.shared_secret not in str(list(thesis_data.values()))
-
-
-@pytest.mark.asyncio
-async def test_resolve_field_specific_not_swallowed(session: AsyncSession):
-    art = Category(name="هنر و معماری", description="Art and architecture")
-    session.add(art)
-    await session.commit()
-
-    specific, cat = await resolve_field(session, "معماری داخلی")
-    assert specific is not None
-    assert specific.name == "معماری داخلی"
-    assert specific.normalized_name == "معماری داخلی"
-    assert specific.source == "runtime"
-    assert cat.name == "هنر و معماری"
-
-    broad, cat2 = await resolve_field(session, "معماری")
-    assert broad is not None
-    assert broad.name == "معماری"
-    assert broad.id != specific.id
-    assert cat2.name == "هنر و معماری"
-
-
-@pytest.mark.asyncio
-async def test_resolve_field_duplicate_normalized(session: AsyncSession):
-    med = Category(name="پزشکی و علوم سلامت", description="Medical")
-    session.add(med)
-    await session.commit()
-
-    first, _ = await resolve_field(session, "پزشکی")
-    second, _ = await resolve_field(session, "پزشکی\u200b")
-    assert first.id == second.id
-
-    count = await session.execute(select(func.count()).select_from(Field))
-    assert count.scalar_one() == 1

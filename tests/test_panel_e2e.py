@@ -7,7 +7,7 @@ it. The LLM call and the platform HTTP call are the only fakes; every state
 transition, query, and audit row is real.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -48,6 +48,7 @@ async def _admin(session: AsyncSession) -> None:
                   role_id=role.id, is_active=True)
     )
     session.add(Category(name="other", description="Other"))
+    session.add(Category(name="بهداشت", description="health"))
     session.add(Channel(platform="bale", chat_id=98001, username="@c", is_active=True))
     await session.commit()
 
@@ -92,17 +93,33 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
         # state machine only allows processing -> review.
         claimed = await claim_next_job(session)
         assert claimed is not None and claimed.id == record_id
+        from app.db.models import MainCategoryMatch
+        from app.schemas.news import CategoryMatch, GeneratedNews
+
+        # A real qualifying match: a fallback-only record queues NO deliveries
+        # by design, and this test verifies the delivery handoff, not the gate.
         with patch("app.worker.worker.generate_news") as mock_gen:
-            mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
+            mock_gen.return_value = GeneratedNews(
+                title="T", lead="L", body="B",
+                categories=[CategoryMatch(category="بهداشت", score=0.9, reason="پزشکی است")],
+            )
             await process_job(session, claimed)
         await session.refresh(row)
         assert row.status == "review"
         assert row.output_json == {"title": "T", "lead": "L", "body": "B"}
 
-        # Delivery is routed by category, and the category is only chosen by the
-        # generation step above, so the route has to be seeded here rather than
-        # in setup. This file verifies every HANDOFF, not routing.
-        await session.refresh(row)
+        # Delivery routes through the STORED MATCH, not category_id: the
+        # combined call's classification is stored above and the display
+        # primary points at the top match.
+        matches = (await session.execute(
+            select(MainCategoryMatch).where(MainCategoryMatch.main_id == record_id)
+        )).scalars().all()
+        assert len(matches) == 1, "the combined call must store its match"
+        assert row.category_id == matches[0].category_id
+
+        # The category is routed to every active channel; routing itself is
+        # covered elsewhere.
+        assert row.category_id is not None
         await route_all_active(session, await session.get(Category, row.category_id))
 
         # Sender queues it, but the human gate holds it back.

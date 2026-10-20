@@ -1,4 +1,12 @@
-"""Deterministic, rule-based field classification.
+"""DEPRECATED — deterministic, rule-based field classification.
+
+@deprecated: Superseded by the v2-combined single-call LLM classification
+(news + ISCED-F 2013 categories in one response, stored per record in
+``main_category_matches`` by ``app.services.records``). Nothing in the
+active pipeline imports this module any more — it is kept only as reference
+for the retired rule set and for the standalone audit script
+``scripts/reclassify_fields.py``, which still uses it to explain historical
+rows. Do not wire it back into request/worker paths.
 
 Matching is token-aware, not first-match-wins: the normalized name is split
 into tokens and every keyword is tested, so a short keyword can never win

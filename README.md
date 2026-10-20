@@ -8,22 +8,29 @@
 
 Automatic journalistic news generation from IranDoc thesis metadata, with a
 human review panel in front of publishing. A thesis is submitted as JSON,
-stored in PostgreSQL as a job, processed by a persistent Worker that generates
-a Persian news article (title, lead, body) with an LLM — then a reviewer
-approves it in a server-rendered panel before a separate sender Worker
-publishes it to Bale/Telegram channels.
+stored in PostgreSQL as a job, processed by a persistent Worker that makes ONE
+LLM call producing a Persian news article (title, lead, body) AND its
+ISCED-F 2013 classification together — then a reviewer approves it in a
+server-rendered panel before a separate sender Worker publishes it to
+Bale/Telegram channels.
 
 ```text
 Thesis JSON ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (status='ready')
                                                       │  FOR UPDATE SKIP LOCKED, FIFO
 Generation Worker ◀──claim────────────────────────────┘
-  │  normalize + rule-based classify (deterministic, never the LLM)
-  │  PydanticAI Agent ──▶ AvalAI ──▶ {title, lead, body}
+  │  register field for dedup (fields, NO classification)
+  │  ONE PydanticAI Agent call ──▶ AvalAI
+  │     → GeneratedNews{title, lead, body, categories[≤3]}
+  │  post-process: hallucination filter → clamp 0..1 → dedupe
+  │     → threshold MIN_CATEGORY_RELEVANCE → top TOP_N_CATEGORIES
+  │     → rows in main_category_matches (rank 1..N)
+  │     → empty answer = single 'other' fallback row (sends nothing)
   ▼
-PostgreSQL (status='review', output_json) ──▶ sender queues awaiting_confirmation
-                                                      │  human gate (default ON)
-Review panel ◀── reviewer edits + approves ───────────┘──▶ status='pending'
-                                                      │
+PostgreSQL (status='review', matches + output_json) ──▶ sender unions the
+  │     qualifying matches' channels (multi-category; 'other' qualifies for
+  │     nothing even at threshold 0 — a fallback-only record never autopublishes)
+Review panel ◀── reviewer edits, overrides matches, approves ──▶ status='pending'
+                                                       │
 Sender Worker ◀──claim── render ──▶ Bale / Telegram ──▶ status='sent'
 ```
 
@@ -31,14 +38,21 @@ Sender Worker ◀──claim── render ──▶ Bale / Telegram ──▶ st
   Kubernetes, or microservices — one modular monolith, four runtime
   components (`postgres`, `api`, `worker`, `sender`) plus the review panel
   (`web`, same image, different command).
-- **The LLM is used ONLY for news generation.** Field/category classification
-  is deterministic and rule-based; the LLM never classifies.
+- **ONE LLM call does both jobs.** The model answers with the article and up
+  to three `{category, score, reason}` entries drawn from the 29 ISCED-F 2013
+  intermediate fields (+ the `other` fallback). The Worker post-processes the
+  answer into `main_category_matches` (hallucination filter against the live
+  categories, score clamp, dedupe keep-highest, threshold, top-N); no
+  rule-based classifier is in the live path (`app/fields/classification.py`
+  is retired reference code).
+- **Multi-category routing.** Every qualifying match sends the article to that
+  category's channels; a channel hit by two categories gets one delivery. A
+  category with no channels publishes nothing (no broadcast fallback), and an
+  `other`-only record queues no deliveries at all.
 - **Nothing publishes without a human.** Deliveries queue as
   `awaiting_confirmation` and flip to `pending` only on approval
-  (`REQUIRE_HUMAN_CONFIRMATION`, default `true`).
-- **One system, not two apps.** The panel shares the same database, ORM
-  models, settings, and domain helpers as the workers
-  (see `docs/admin-panel.md` → *Wiring*).
+  (`REQUIRE_HUMAN_CONFIRMATION` + `AUTO_PUBLISH_ON_CLASSIFICATION=false`,
+  both default).
 
 ## Contents
 
@@ -85,8 +99,11 @@ step, no CDN — see [Review panel](#review-panel)):
 
 - Login with per-IP lockout, argon2 passwords, signed cookies, full audit.
 - Dashboard (KPIs, 7-day chart, health, timeline, channels), records list
-  with live HTMX tables, tabbed review page (edit, raw JSON, metadata,
-  history, delivery preview of exactly what approval will send), deliveries
+  with live HTMX tables (each row shows its primary category + count badge),
+  tabbed review page (edit, raw JSON, metadata, **دسته‌بندی‌های خودکار** —
+  every stored match with score/rank/reason/primary badge, fallback warning
+  and a manual category form — history, delivery preview of exactly what
+  approval will send), deliveries
   with retry, submit form, models/prompts/channels/fields/categories
   management, users + roles, and a global audit trail.
 - Three roles: **viewer** (read-only), **editor** (review), **admin** (full).
@@ -109,10 +126,11 @@ project/
 │   ├── auth/secret.py        # Constant-time shared-secret check (machines only)
 │   ├── fields/
 │   │   ├── normalization.py  # NFC, zero-width removal, whitespace collapse
-│   │   └── classification.py # Priority-ordered keyword rules → category
+│   │   └── classification.py # RETIRED keyword rules (reference only)
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + shared resolve/probe helpers
-│   │   └── prompts.py        # Packaged fallback system prompt (injection-safe)
+│   │   ├── prompts.py        # Packaged v2-combined prompt (injection-safe)
+│   │   └── isced.py          # Canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/worker.py      # Persistent sequential generation Worker + recovery
 │   ├── messaging/
 │   │   ├── formatting.py     # Article → channel message text
@@ -124,7 +142,7 @@ project/
 │       ├── auth.py           # argon2, signed cookies, login lockout, proxy IP
 │       ├── templates/        # Jinja2 pages ported from the approved design
 │       └── static/           # panel.css (byte-identical design), HTMX, Vazirmatn
-├── migrations/               # SQL migrations 001–015 (authoritative schema)
+├── migrations/               # SQL migrations 001–023 (authoritative schema)
 ├── scripts/
 │   ├── apply_migrations.py   # Ordered, once-only runner (`_migrations` table)
 │   ├── seed_fields.py        # Loads data/fields.xlsx (idempotent)
@@ -157,7 +175,10 @@ nothing secret is ever baked into images or committed.
 | `AVALAI_API_KEY` | AvalAI API key | Yes |
 | `AVALAI_BASE_URL` | AvalAI base URL | Yes |
 | `LLM_MODEL` | Model runtime identifier (`gpt-5.6-luna`) | Yes |
-| `LLM_TIMEOUT_SECONDS` | LLM call timeout | No (default: 120) |
+| `LLM_TIMEOUT_SECONDS` | Combined LLM call timeout | No (default: 120) |
+| `TOP_N_CATEGORIES` | Max category matches kept per record | No (default: 3) |
+| `MIN_CATEGORY_RELEVANCE` | Score threshold for routing a match to channels | No (default: 0.5) |
+| `AUTO_PUBLISH_ON_CLASSIFICATION` | Queue `pending` (skip the gate) when a real classification exists | No (default: false) |
 | `WORKER_POLL_INTERVAL_SECONDS` | Generation queue poll interval | No (default: 1) |
 | `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Heartbeat interval (must stay ≪ lease) | No (default: 30) |
 | `WORKER_LEASE_MINUTES` | Stale-job recovery timeout | No (default: 5) |
@@ -243,7 +264,9 @@ requests — no mocks).
 | `PATCH /records/{id}` | `shared_Secret` in body | `{action: approve\|reject\|save_draft, title?,lead?,body?}`; review-only, else `409` |
 | `GET /deliveries` | `shared_Secret` query | Paginated; filters `status`, `platform`, `main_id` |
 | `POST /deliveries/{id}/retry` | `shared_Secret` in body | Re-queue `failed` as `pending` (attempts reset); else `409` |
-| `GET /stats` | `shared_Secret` query | Counts per status + Worker heartbeat freshness |
+| `GET /stats` | `shared_Secret` query | Counts per status + Worker heartbeat freshness + `records_by_category` (per rank-1 match) |
+| `GET /records/{id}/classification` | `shared_Secret` query | Stored category matches: `{record_id, category_id, matches:[{category, score, rank, reason, is_primary}]}` |
+| `POST /records/{id}/category-matches` | `shared_Secret` in body | Reviewer override — replaces all matches with up to 5 `{category, score, reason}` entries; unknown category/score → `422`; empty list re-stores the `other` fallback |
 | `GET/POST /models`, `GET/PATCH /models/{id}` | `shared_Secret` | Model CRUD (`is_active` only via activate) |
 | `POST /models/{id}/activate` | `shared_Secret` in body | Exactly one active model, atomically |
 | `POST /models/{id}/test-connection` | `shared_Secret` in body | Real 1-token probe → `{ok,model,error}`; key never returned |
@@ -266,11 +289,11 @@ reference: `docs/admin-panel.md`.
 |---|---|
 | Dashboard | KPIs, 7-day chart, Worker/sender health, recent events, channels |
 | Records | Filterable queue; per-row approve shortcut and review links |
-| Record review | Tabbed: editable text, raw model JSON, input metadata, history, delivery preview of exactly what approval will send; approve / save draft / reject / regenerate-with-model |
+| Record review | Tabbed: editable text, raw model JSON, input metadata, **دسته‌بندی‌های خودکار** (every stored match: score, rank, reason, primary badge + fallback warning + manual «تعیین دستی دسته» form), history, delivery preview of exactly what approval will send; approve / save draft / reject / regenerate-with-model |
 | Deliveries | Filterable send states; retry failed rows |
 | Submit | Same intake as `POST /submit`, with model/prompt override selects |
-| Models / Prompts / Channels | Activate + connection test; immutable prompt versions; routes matrix |
-| Fields / Categories | Reference data with routing and usage |
+| Models / Prompts / Channels | Activate + connection test; immutable prompt versions; category→channel routes matrix |
+| Fields / Categories | Reference data; Categories carries the routes matrix, ISCED-F 2013 vocabulary with منسوخ badges, usage bars, and the "no destination" warning |
 | Users / Audit | Admin-only accounts (create, role, activate, password reset), own-password change on Profile, immutable event trail |
 
 Roles: **viewer** (read-only — every mutation is `403`), **editor**
@@ -296,8 +319,8 @@ are the authoritative schema, applied in filename order and tracked in
 no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 
 1. `001_initial_schema.sql` — `categories`, `fields`, `models`, `prompts`, `main`
-2. `002_seed_categories.sql` — 13 categories + `other`
-3. `003_seed_prompt.sql` — the v1 system prompt
+2. `002_seed_categories.sql` — the original 13 rule categories + `other`
+3. `003_seed_prompt.sql` — the v1 system prompt (deactivated by 023)
 4. `004_seed_model.sql` — the active model configuration
 5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`, `deliveries` + initial Bale channel and routes
 6. `006_add_rejected_status.sql` — allow `rejected` on `main.status`
@@ -310,6 +333,10 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 13. `013_record_publish_timestamps.sql` — `main.approved_at`/`published_at`
 14. `014_channel_bot_token_env.sql` — `channels.bot_token_env`
 15. `015_field_category_source.sql` — `fields.category_source` (`rules`/`curated`)
+16. `016–018` — `approved`/`published` lifecycle + delivery backfills (`deleted_from_channel` state)
+17. `019–021` — encrypted panel-managed credentials, soft-deleted panel users, `route_source` provenance
+18. `022_channel_activated_at.sql` — the channel activation floor (no archive backfill)
+19. `023_isced_categories.sql` — **v2-combined**: `categories.deprecated/isc_code`, the 29 ISCED-F 2013 rows, `fields.category_id` NULLable, `main_category_matches` (score/rank CHECKs + indexes), seeded routes for the new vocabulary, and the active `v2-combined` prompt row
 
 Migrations are additive-only and never edited after applying — schema changes
 always add the next numbered file. Full ER diagram: `docs/erd.md`.
@@ -318,15 +345,22 @@ always add the next numbered file. Full ER diagram: `docs/erd.md`.
 
 **Generation Worker** (`worker`): recovers stale `processing` jobs past
 `WORKER_LEASE_MINUTES`, claims the oldest `ready` row with
-`FOR UPDATE SKIP LOCKED`, resolves field → category deterministically,
-links the effective model/prompt (per-record override → active row →
-config fallback), keeps a heartbeat alive across the bounded LLM call, stores
-`output_json` as `review` — or `failed` with the error text. Generation is
-*not* retried; crashes recover to `ready` (at-least-once).
+`FOR UPDATE SKIP LOCKED`, registers the field name for dedup (no
+classification on it), links the effective model/prompt (per-record override →
+active row → config fallback), keeps a heartbeat alive across the ONE bounded
+LLM call (news **and** ISCED-F 2013 categories), post-processes the
+classification into `main_category_matches` (see the pipeline above; empty
+answer → single `other` row), stores `output_json` as `review` — or `failed`
+with the error text. Generation is *not* retried; crashes recover to `ready`
+(at-least-once).
 
 **Sender Worker** (`sender`): turns `review` rows into one `deliveries` row
-per routed channel (`awaiting_confirmation` under the human gate, `pending`
-otherwise, `pending` directly with the gate off), claims the oldest due
+per routed channel — resolved as the per-channel UNION over the record's
+qualifying `main_category_matches` (`route_source` names the category, or
+`multi`) — with `awaiting_confirmation` under the
+gate (`REQUIRE_HUMAN_CONFIRMATION` + `AUTO_PUBLISH_ON_CLASSIFICATION=false`
+defaults) or `pending` otherwise; `other`-only records queue nothing,
+claims the oldest due
 delivery, renders the message, sends via the platform client, waits
 `SENDER_SEND_DELAY_SECONDS`, and retries retryable failures with exponential
 backoff up to `SENDER_MAX_ATTEMPTS` (permanent errors fail immediately).
@@ -338,7 +372,8 @@ Sending *is* retried — a lost article is worse than a duplicate post.
   checked with `hmac.compare_digest` **before** validation.
 - LLM/bot credentials from env only; `models.api_key_env` stores an env *var
   name*, never a key; connection probes never return keys; channel rows are
-  destinations, never credentials.
+  destinations, never credentials. Thesis content is sent to the model, but
+  secrets never are (`tests/test_worker.py::test_secret_not_sent_to_llm`).
 - Panel passwords are argon2 hashes; sessions are signed, `HttpOnly`,
   time-boxed cookies; login is lockout-guarded and audited.
 - `.env` is git-ignored; `.env.example` holds placeholders only; no real
@@ -365,11 +400,15 @@ offline (one test file covers the live end-to-end flow with a stubbed LLM):
 python -m pytest -q
 ```
 
-159 tests cover auth order and contracts, normalization/classification
-(including `معماری داخلی` vs `معماری`), Worker claim/process/fail/recovery,
-model/prompt resolution priority, the human gate, review actions, delivery
-retry policy, stats, panel pages/roles/lockout, and the full
-panel→worker→approve→sender chain.
+The suite covers the single-call contract end to end
+(`tests/test_combined_classification.py`: schema, normalization
+hallucination/clamp/dedupe/threshold, Worker storage, multi-category routing,
+the fresh-DB migration state, the override endpoints), the human gate, prompt
+placeholders and injection guard, Worker claim/process/fail/recovery,
+model/prompt resolution priority, review actions, delivery retry policy,
+stats, panel pages/roles/lockout, and the full
+panel→worker→approve→sender chain. The retired rule-classifier suites remain
+as module-level skips documenting why they are gone.
 
 ## Troubleshooting
 
@@ -377,8 +416,9 @@ panel→worker→approve→sender chain.
 |---|---|
 | `/health` reports `disconnected` | `postgres` container, `DATABASE_URL`, compose network |
 | Jobs stuck in `processing` | Worker logs; `WORKER_LEASE_MINUTES` vs heartbeat interval |
-| Jobs in `failed` | `main.error_message` (LLM/provider errors) |
-| Article never delivered | Still `awaiting_confirmation`? It needs panel approval; `pending` with future `next_attempt_at` is backing off; `failed` has `error_message` |
+| Jobs in `failed` | `main.error_message` (LLM/provider/schema errors) |
+| Record classifies only as `other` | `main.error_message` none + review the raw JSON tab; correct it via «تعیین دستی دسته» or `POST /records/{id}/category-matches` |
+| Article never delivered | `other`-only classification? (fallback never delivers — needs a manual match or correction). Otherwise still `awaiting_confirmation`? It needs panel approval; `pending` with future `next_attempt_at` is backing off; `failed` has `error_message` |
 | Sends fail immediately | `deliveries.error_message`; `no bot token configured` means the platform token is missing from `sender` |
 | Panel login loops back to `/login` | Cookie has `Secure` but you are on plain HTTP — go through the TLS proxy (or unset `PANEL_COOKIE_SECURE` for loopback-only use) |
 | Panel login `429` | Per-IP lockout tripped — wait out `PANEL_LOGIN_LOCKOUT_MINUTES`, then check the audit trail |
@@ -386,9 +426,10 @@ panel→worker→approve→sender chain.
 
 ## Docs
 
-- `docs/architecture.md` — components, queues, recovery, security model
+- `docs/architecture.md` — components, combined classification, routing, recovery, security model
+- `docs/llm-prompt.md` — the exact v2-combined prompt + schema + post-processing contract
 - `docs/codebase-guide.md` — junior-developer walkthrough of the whole lifecycle
-- `docs/erd.md` — entity-relationship diagram (Mermaid)
+- `docs/erd.md` — entity-relationship diagram (Mermaid, incl. `main_category_matches`)
 - `docs/demo-guide.md` — reproducible supervisor demo
 - `docs/admin-panel.md` — panel pages, endpoints used, roles, wiring proof
 

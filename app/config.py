@@ -43,19 +43,20 @@ class Settings(BaseSettings):
     # figures are cheap `GROUP BY` counts.
     panel_dashboard_refresh_seconds: int = 15
 
-    # Field -> category classification.
+    # Combined generation + ISCED-F 2013 classification.
     #
-    # OFF by default and the default is deliberate: the deterministic rules in
-    # ``app/fields/classification.py`` are instant, free, auditable (they
-    # report the matched keyword) and never fail. Turning this on asks the
-    # active model to choose a category instead, which can place a field the
-    # rules have never seen — at the cost of a network call per NEW field, a
-    # non-deterministic answer, and no keyword to explain it.
-    #
-    # Either way the result is stored ONCE on the field row (item 15) and read
-    # from then on, so this flag affects only the first sighting of a field.
-    use_llm_for_categorization: bool = False
-    llm_classification_timeout_seconds: float = 20.0
+    # ONE LLM call per thesis returns the news AND the classification. The
+    # model answers with up to ``top_n_categories`` ISCED-F 2013 categories,
+    # each with a 0..1 relevance score; the worker stores every qualifying
+    # match and routing fans the article out to each category's channels.
+    top_n_categories: int = 3
+    # A match only counts (for storage and routing) at or above this score.
+    min_category_relevance: float = 0.5
+    # If True, deliveries for articles with at least one qualifying match skip
+    # the human gate (start as ``pending``). The default keeps the human gate:
+    # an article with no qualifying match NEVER auto-publishes, even when this
+    # is True — it goes to ``other`` and waits for a reviewer.
+    auto_publish_on_classification: bool = False
 
     # Outbound delivery (sender Worker).
     #

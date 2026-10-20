@@ -1,9 +1,12 @@
 """Field and category reference data for the panel.
 
 Read-heavy reference tables: enriched listings, usage bars, and category
-cards with real field names. Classification itself stays in
-``app.fields.classification``; the curated-confirm action lives here once
-the ``category_source`` column exists (migration 015).
+cards with real field names. NOTE (v2-combined): a FIELD's own category is
+deprecated metadata — record classification now comes from the combined
+generation call (``main_category_matches``, see ``app.services.records``),
+so ``assign_field_category`` here only affects the legacy
+``fields.category_id`` column (kept for the curated-confirm workflow and
+historical rows); it does NOT influence routing any more.
 """
 
 from sqlalchemy import and_, func, or_, select
@@ -341,18 +344,21 @@ async def delete_category(session, category_id: int) -> str:
     """Delete an empty category.
 
     Refused while the category still holds fields, and refused while any record
-    points at it. Both refusals are deliberate:
+    points at it. Both refusals are deliberate (the mechanism, not the
+    feasibility):
 
-    * **fields** -- ``fields.category_id`` is ``NOT NULL``, so a category that
-      holds fields cannot simply be removed; something has to happen to those
-      fields first. Moving them to a fallback bucket automatically would be a
-      large, invisible reassignment, and the categories the operator picks are
-      the ones whose news actually go somewhere, so guessing one is worse than
-      making them say. The path is: filter ``/fields`` by this category, select
-      all, bulk-assign them elsewhere, then delete.
+    * **fields** -- ``fields.category_id`` is nullable since migration 023, so
+      detaching would be *possible*; that is exactly why the refusal carries
+      the meaning: fields pointing at a bucket are the curated legacy mapping
+      (``category_source='manual'|'rules'``), and sweeping them into a fallback
+      automatically would be a large, invisible reassignment. The path is:
+      filter ``/fields`` by this category, select all, bulk-assign them
+      elsewhere, then delete.
     * **records** -- ``main.category_id`` is a plain FK, and a delivered record
       pointing at a category that no longer exists cannot be explained from the
-      panel at all.
+      panel at all. (Routing itself reads ``main_category_matches``, but the
+      display primary and historical deliveries keep resolving through this
+      column.)
 
     Its channel routes go with it (``ON DELETE CASCADE`` in the schema, plus the
     ORM relationship), so no route can outlive the bucket it points at.

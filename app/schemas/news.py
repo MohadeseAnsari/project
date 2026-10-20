@@ -101,6 +101,25 @@ class DeliveryInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CategoryMatchResponse(BaseModel):
+    """One stored classification match, as reported to the API/panel."""
+
+    category: str = Field(description="Exact ISCED-F 2013 category name (or \"other\").")
+    category_id: int | None = None
+    score: float = Field(description="Relevance 0.0–1.0 as stored (clamped).")
+    rank: int = Field(description="1 = primary (highest score).")
+    reason: str | None = Field(default=None, description="Brief Persian explanation.")
+    is_primary: bool = Field(default=False, description="True when this is the record's display primary category.")
+
+
+class ClassificationResponse(BaseModel):
+    """Payload for ``GET /records/{id}/classification`` — the matches only."""
+
+    record_id: int
+    category_id: int | None = Field(default=None, description="Display primary category (top match).")
+    matches: list[CategoryMatchResponse] = Field(default_factory=list)
+
+
 class RecordDetailResponse(RecordResponse):
     """Extended ``GET /records/{id}`` payload for the review panel.
 
@@ -121,6 +140,9 @@ class RecordDetailResponse(RecordResponse):
     model_id: int | None = None
     prompt_id: int | None = None
     deliveries: list[DeliveryInfo] = Field(default_factory=list)
+    # The stored LLM classification (multi-category). Empty for records
+    # generated before this feature or still awaiting generation.
+    category_matches: list[CategoryMatchResponse] = Field(default_factory=list)
 
 
 class ReviewActionRequest(BaseModel):
@@ -160,6 +182,27 @@ class StatsResponse(BaseModel):
     records: dict[str, int]
     deliveries: dict[str, int]
     worker_last_heartbeat_at: datetime | None = None
+    # Count of records whose PRIMARY (rank-1) classification is each category.
+    records_by_category: dict[str, int] = Field(default_factory=dict)
+
+
+class CategoryMatchInput(BaseModel):
+    """One manual match supplied by a reviewer."""
+
+    category: str = Field(min_length=1, description="Exact category name.")
+    score: float = Field(ge=0.0, le=1.0)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class CategoryMatchesOverrideRequest(BaseModel):
+    """Body for ``POST /records/{id}/category-matches`` — replace the matches.
+
+    A reviewer's manual decision fully replaces the LLM's stored answer; the
+    primary category becomes the first entry (highest score).
+    """
+
+    shared_Secret: str = Field(description="Authentication secret.")
+    matches: list[CategoryMatchInput] = Field(default_factory=list, max_length=5)
 
 
 class PreviewChannel(BaseModel):
@@ -177,8 +220,14 @@ class RoutingPreviewResponse(BaseModel):
 
     input: str = Field(description="The raw field name or record reference previewed.")
     record_id: int | None = None
-    category: str
-    matched_keyword: str | None = None
+    # None when nothing irreversible is known yet: classification now happens
+    # inside the generation call, so a bare field name has no category until a
+    # record carrying it has been generated (or a reviewer assigned one).
+    category: str | None = None
+    matched_keyword: str | None = Field(
+        default=None,
+        description="Legacy rule-based keyword. Always None for new records.",
+    )
     channels: list[PreviewChannel]
 
 
@@ -195,12 +244,36 @@ class ErrorResponse(BaseModel):
     detail: str = Field(json_schema_extra={"example": "Unauthorized"})
 
 
+class CategoryMatch(BaseModel):
+    """One ISCED category matched for an article (returned by the LLM).
+
+    ``category`` must be one of the 29 EXACT ISCED-F 2013 Persian names (or
+    "other"); anything else is treated as a hallucination and filtered by the
+    worker. ``score`` is nominally 0.0–1.0 — values outside that range are
+    clamped during post-processing rather than failing the whole generation.
+    """
+
+    category: str = Field(description="Exact ISCED-F 2013 category name (or \"other\").")
+    score: float = Field(description="Relevance between 0.0 and 1.0.")
+    reason: str = Field(description="Brief Persian explanation, one sentence max.")
+
+
 class GeneratedNews(BaseModel):
-    """Structured LLM output contract (PydanticAI ``output_type``)."""
+    """Structured LLM output: news + classification in ONE response.
+
+    The single call per thesis (v2-combined) writes the article and the
+    ISCED-F 2013 classification together; ``categories`` defaults to [] so
+    older constructors (tests, saved drafts) keep working unchanged.
+    """
 
     title: str
     lead: str
     body: str
+    categories: list[CategoryMatch] = Field(
+        default_factory=list,
+        max_length=3,
+        description="Top ISCED-F 2013 categories, highest score first. Empty if none apply.",
+    )
 
 
 class RecordListItem(BaseModel):

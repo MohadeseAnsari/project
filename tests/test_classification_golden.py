@@ -1,142 +1,20 @@
-"""Golden classification table: catalogue names must land in sensible categories.
+"""Golden classification table (RULE-BASED) — SKIPPED.
 
-Pairs are taken from the 82-row owner-reviewed conflict fixture
-(``classification-conflicts.csv``: field, current category, proposed
-category) plus stable anchors for categories the fixture does not cover
-(دامپزشکی, کامپیوتر, حقوق) and the ``other`` fallback. Every seeded
-category appears at least once.
+Rule-based classification was removed in v2-combined: classification of a
+thesis now comes from the LLM inside the single generation call, validated
+against the 29 ISCED-F 2013 names in ``app.news.isced`` and stored per record
+in ``main_category_matches`` (see ``tests/test_combined_classification.py``).
 
-These tests FAIL on the old first-match-wins substring classifier and PASS
-on the token-aware longest-match classifier.
+The original golden table lived in git history (this file, before the v2
+rework) and remains recoverable for:
+- ``scripts/reclassify_fields.py`` audits of historical rows;
+- judging future disputes like the old ``classification-conflicts.csv``.
 """
 
 import pytest
 
-from app.fields.classification import classify_field, classify_with_reason
-from app.fields.normalization import normalize_field
-
-# (raw field name, expected category) — proposed categories come straight
-# from the owner-reviewed fixture; anchors pin already-correct behavior.
-GOLDEN = [
-    # پزشکی و علوم سلامت (substring traps: مو, رادیو, مواد, آب, کنترل, ...).
-    ("آموزش بهداشت و ارتقاء سلامت", "علوم تربیتی و روان‌شناسی"),
-    ("امور فرهنگی", "علوم انسانی"),
-    ("انگل‌شناسی دامپزشکی", "پزشکی و علوم سلامت"),
-    ("بهداشت آبزیان", "پزشکی و علوم سلامت"),
-    ("بهداشت مواد غذایی", "پزشکی و علوم سلامت"),
-    ("بهداشت مواد غذایی با منشأ دامی", "پزشکی و علوم سلامت"),
-    ("بهداشت و ایمنی مواد غذایی", "پزشکی و علوم سلامت"),
-    ("بهداشت و بیماریهای آبزیان", "پزشکی و علوم سلامت"),
-    ("بهداشت و بیماریهای طیور", "پزشکی و علوم سلامت"),
-    ("بیماریهای طیور", "پزشکی و علوم سلامت"),
-    ("بیولوژی و کنترل ناقلین بیماریها", "پزشکی و علوم سلامت"),
-    ("پاتولوژی مولکولاروسیتوژنتیک", "علوم پایه"),
-    ("پزشکی اجتماعی", "علوم اجتماعی و اقتصاد"),
-    ("پزشکی مولکولی", "علوم پایه"),
-    ("پزشکی ورزشی", "ورزش و تربیت بدنی"),
-    ("تکنولوژی پرتوشناسی (رادیولوژی)", "پزشکی و علوم سلامت"),
-    ("دستیاری رادیولوژی دندان و فک و صورت", "پزشکی و علوم سلامت"),
-    ("رادیولوژی", "پزشکی و علوم سلامت"),
-    ("رادیولوژی - سونوگرافی", "پزشکی و علوم سلامت"),
-    ("رادیولوژی دامپزشکی", "پزشکی و علوم سلامت"),
-    ("زیست فناوری پزشکی", "پزشکی و علوم سلامت"),
-    ("شیمی مواد خوراکی و آب‌شناسی پزشکی", "پزشکی و علوم سلامت"),
-    ("علوم آزمایشگاهی دامپزشکی", "پزشکی و علوم سلامت"),
-    ("علوم و فناوری‌های تصویربرداری پزشکی", "پزشکی و علوم سلامت"),
-    ("فناوری تصویربرداری پزشکی (MRI)", "پزشکی و علوم سلامت"),
-    ("قارچ‌شناسی پزشکی", "پزشکی و علوم سلامت"),
-    ("مامایی و بیماریهای تولیدمثل دام", "پزشکی و علوم سلامت"),
-    ("مهندسی بهداشت محیط", "پزشکی و علوم سلامت"),
-    ("مهندسی پزشکی", "پزشکی و علوم سلامت"),
-    ("مهندسی زیست‌شناسی", "پزشکی و علوم سلامت"),
-    ("میکروب‌شناسی مواد غذایی", "پزشکی و علوم سلامت"),
-    ("میکروبیولوژی دامپزشکی", "علوم پایه"),
-    ("نانوفناوری پزشکی (نانوتکنولوژی پزشکی)", "پزشکی و علوم سلامت"),
-    ("کارشناسی حرفه‌ای بهداشت مواد غذایی با منشأ دامی", "پزشکی و علوم سلامت"),
-    ("کتابداری در شاخه پزشکی", "علوم انسانی"),
-    ("کتابداری و اطلاع رسانی پزشکی", "علوم انسانی"),
-    ("کنترل دارو و فرآورده‌های آرایشی و بهداشتی", "پزشکی و علوم سلامت"),
-    # علوم انسانی.
-    ("تاریخ تطبیقی و تحلیلی هنر اسلامی", "علوم انسانی"),
-    ("تاریخ هنر ایران اسلامی", "علوم انسانی"),
-    ("تاریخ هنر ایران باستان", "علوم انسانی"),
-    ("تاریخ هنر جهان اسلام", "علوم انسانی"),
-    ("مرمت اشیاء فرهنگی و تاریخی", "علوم انسانی"),
-    ("مرمت و احیای ابنیه و بافت‌های تاریخی", "علوم انسانی"),
-    ("هنرهای نمایشی", "علوم انسانی"),
-    # هنر و معماری.
-    ("صنایع دستی", "هنر و معماری"),
-    ("هنرهای پژوهشی و صنایع دستی", "هنر و معماری"),
-    ("مدیریت موزه", "هنر و معماری"),
-    ("مطالعات موزه", "هنر و معماری"),
-    ("موسیقی", "هنر و معماری"),
-    ("موسیقی‌شناسی (اتنوموزیکولوژی)", "هنر و معماری"),
-    ("نوازندگی موسیقی ایرانی", "هنر و معماری"),
-    ("نوازندگی موسیقی جهانی", "هنر و معماری"),
-    ("طراحی فضاهای اموزشی", "هنر و معماری"),
-    ("معماری و انرژی", "هنر و معماری"),
-    ("مهندسی معماری منظر", "هنر و معماری"),
-    # علوم تربیتی و روان‌شناسی.
-    ("برنامه‌ریزی درسی", "علوم تربیتی و روان‌شناسی"),
-    ("تربیت بدنی و علوم ورزشی", "ورزش و تربیت بدنی"),
-    ("تغذیه ورزشی", "ورزش و تربیت بدنی"),
-    ("روان‌شناسی بالینی پزشکی", "علوم تربیتی و روان‌شناسی"),
-    ("روان‌شناسی سلامت", "علوم تربیتی و روان‌شناسی"),
-    ("سنجش آموزش", "علوم تربیتی و روان‌شناسی"),
-    ("مدیریت توانبخشی", "علوم تربیتی و روان‌شناسی"),
-    ("مغز و اعصاب کودکان", "علوم تربیتی و روان‌شناسی"),
-    ("مشاوره ژنتیک", "علوم تربیتی و روان‌شناسی"),
-    ("پزشکی فیزیکی و توانبخشی", "علوم تربیتی و روان‌شناسی"),
-    # علوم اجتماعی و اقتصاد.
-    ("برنامه‌ریزی یادگیری الکترونیکی", "علوم اجتماعی و اقتصاد"),
-    ("سلامت دهان و دندان‌پزشکی اجتماعی", "علوم اجتماعی و اقتصاد"),
-    ("سلامت و رفاه اجتماعی", "علوم اجتماعی و اقتصاد"),
-    ("مدیریت و اطلاع‌رسانی پزشکی", "علوم اجتماعی و اقتصاد"),
-    ("کارآفرینی در نظام سلامت", "علوم اجتماعی و اقتصاد"),
-    # کشاورزی و منابع طبیعی.
-    ("مهندسی منابع طبیعی", "کشاورزی و منابع طبیعی"),
-    ("مهندسی کشاورزی", "کشاورزی و منابع طبیعی"),
-    # رسانه و ارتباطات / مهندسی anchors.
-    ("ژورنالیسم پزشکی", "رسانه و ارتباطات"),
-    ("مهندسی تکنولوژی ارتباطات و فناوری اطلاعات (ICT)", "مهندسی و فناوری"),
-    # Stable anchors for categories the fixture does not dispute.
-    ("دامپزشکی", "دامپزشکی"),
-    ("پرورش طیور", "دامپزشکی"),
-    ("هوش مصنوعی", "کامپیوتر و فناوری اطلاعات"),
-    ("یادگیری ماشین", "کامپیوتر و فناوری اطلاعات"),
-    ("حقوق", "حقوق و علوم سیاسی"),
-    ("حقوق خانواده", "حقوق و علوم سیاسی"),
-    ("unknown field xyz", "other"),
-]
-
-
-@pytest.mark.parametrize("raw,expected", GOLDEN)
-def test_golden_table(raw, expected):
-    assert classify_field(normalize_field(raw)) == expected
-
-
-def test_golden_reason_is_explainable():
-    """Every golden row also reports its matched keyword and rule position."""
-    for raw, expected in GOLDEN:
-        if expected == "other":
-            continue
-        category, keyword, rule = classify_with_reason(normalize_field(raw))
-        assert category == expected
-        assert keyword, f"no matched keyword recorded for {raw!r}"
-        assert isinstance(rule, int) and rule >= 0
-
-
-def test_short_keyword_never_matches_inside_longer_token():
-    """The مو/آموزش family: ≤4-char keywords are whole-token only."""
-    for raw in ("مدیریت موزه", "مطالعات موزه", "موسیقی", "آموزش بهداشت و ارتقاء سلامت", "امور فرهنگی"):
-        category, keyword, _ = classify_with_reason(normalize_field(raw))
-        assert keyword not in ("مو", "آب", "دو", "توپ"), raw
-        assert category != "مهندسی و فناوری", raw
-
-
-def test_radiology_resolves_to_medicine():
-    """رادیولوژی must beat the رادیو substring trapped in engineering."""
-    for raw in ("رادیولوژی", "رادیولوژی - سونوگرافی", "دستیاری رادیولوژی دندان و فک و صورت"):
-        category, keyword, _ = classify_with_reason(normalize_field(raw))
-        assert category == "پزشکی و علوم سلامت"
-        assert keyword == "رادیولوژی"
+pytest.skip(
+    "rule-based classification removed (v2-combined): the LLM classifies inside "
+    "the generation call against the ISCED-F 2013 vocabulary",
+    allow_module_level=True,
+)

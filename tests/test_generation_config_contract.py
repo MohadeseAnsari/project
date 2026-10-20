@@ -156,7 +156,8 @@ async def test_process_job_calls_generate_news_with_the_real_config(session: Asy
 
     model = Model(name="worker-model", provider="openai", version="v1",
                   is_active=True, api_model="provider/real-id")
-    # A category must exist for classification to resolve the field.
+    # Classification no longer needs a category up front (v2-combined: the
+    # combined call carries it); the seeded row here is just vocabulary.
     from app.db.models import Category
 
     session.add(Category(name="پزشکی و علوم سلامت", description="Medical"))
@@ -171,8 +172,10 @@ async def test_process_job_calls_generate_news_with_the_real_config(session: Asy
 
     claimed = await claim_next_job(session)
     assert claimed is not None
+    from app.schemas.news import GeneratedNews
+
     with patch("app.worker.worker.generate_news") as mock_gen:
-        mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
+        mock_gen.return_value = GeneratedNews(title="T", lead="L", body="B", categories=[])
         await process_job(session, claimed)
     assert mock_gen.await_args is not None
     assert "api_model" in mock_gen.await_args.kwargs

@@ -30,13 +30,26 @@ class Base(DeclarativeBase):
 
 
 class Category(Base):
-    """A deterministic field category (e.g. ``پزشکی و علوم سلامت``, ``other``)."""
+    """A destination bucket for classification.
+
+    Two vocabularies live here side by side. The LLM classifies against the
+    29 ISCED-F 2013 intermediate fields (+ the ``other`` fallback); those rows
+    have ``deprecated = FALSE`` and are the only ones a NEW record references.
+    The old rule-based categories stay as ``deprecated = TRUE`` rows so every
+    historical ``fields``/``main``/``deliveries`` FK keeps resolving — nothing
+    is ever deleted.
+
+    ``isc_code`` records the indicative ISCED-F 2013 reference code (metadata
+    only; routing never reads it).
+    """
 
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
     description = Column(Text, nullable=True)
+    deprecated = Column(Boolean, nullable=False, default=False, server_default="false")
+    isc_code = Column(String(10), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     fields = relationship("Field", back_populates="category")
@@ -44,15 +57,22 @@ class Category(Base):
     channel_routes = relationship(
         "CategoryChannelRoute", back_populates="category", cascade="all, delete-orphan"
     )
+    main_matches = relationship(
+        "MainCategoryMatch", back_populates="category", cascade="all, delete-orphan"
+    )
 
 
 class Field(Base):
     """A known thesis field.
 
     ``normalized_name`` is the stable identity used for exact matching and
-    duplicate prevention;     ``source`` distinguishes spreadsheet-seeded fields
-    from runtime-discovered ones; ``matched_keyword`` records WHY the field
-    got its category (see ``classify_with_reason``).
+    duplicate prevention; ``source`` distinguishes spreadsheet-seeded fields
+    from runtime-discovered ones. ``category_id`` is DEPRECATED for new rows —
+    it is kept (nullable now) for the historical, rule-based classification of
+    previously seen fields and for the panel's manual curation of that legacy
+    metadata; classification of a RECORD now lives in
+    ``main_category_matches``. ``matched_keyword`` is likewise legacy: new
+    runtime fields insert it as NULL.
     """
 
     __tablename__ = "fields"
@@ -60,7 +80,7 @@ class Field(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(500), unique=True, nullable=False)
     normalized_name = Column(String(500), unique=True, nullable=False)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     source = Column(String(20), nullable=False, default="spreadsheet")
     matched_keyword = Column(String(200), nullable=True)
     category_source = Column(String(20), nullable=False, default="rules")
@@ -174,9 +194,13 @@ class Main(Base):
     ``ready`` → ``processing`` → ``review`` → ``approved`` → ``published``,
     plus ``rejected`` (human rejection from ``review``) and ``failed``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
-    ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
-    auditability of the classification and generation configuration used;
-    ``approved_at``/``published_at`` record the decision/publication times.
+    ``field_id``/``model_id``/``prompt_id`` provide auditability of the field
+    identity and generation configuration used; ``approved_at``/``published_at``
+    record the decision/publication times.
+
+    ``category_id`` is the DISPLAY primary category only (the LLM's top
+    match, or a reviewer's manual choice). It is deprecated for routing:
+    delivery resolution reads ``main_category_matches``.
     """
 
     __tablename__ = "main"
@@ -220,6 +244,52 @@ class Main(Base):
     deliveries = relationship(
         "Delivery", back_populates="article", cascade="all, delete-orphan"
     )
+    category_matches = relationship(
+        "MainCategoryMatch",
+        back_populates="article",
+        cascade="all, delete-orphan",
+        order_by="MainCategoryMatch.rank",
+    )
+
+
+class MainCategoryMatch(Base):
+    """One stored classification answer for a record (v2-combined).
+
+    The single generation call classifies each thesis into up to
+    ``settings.top_n_categories`` ISCED-F 2013 categories; every qualifying
+    match (score >= ``settings.min_category_relevance``, exact category name)
+    becomes a row here, ranked 1..N by score. ``rank == 1`` is the primary.
+
+    Rows are replaced wholesale on regeneration/manual override. A record
+    whose only row is the ``other`` fallback (score 0.0, rank 1,
+    reason ``no auto-match``) received no auto-deliveries and waits for a
+    reviewer's manual assignment.
+
+    ``model_id``/``prompt_id`` snapshot WHICH configuration classified the
+    record; ``deliveries.category_id`` snapshots only the top-1 category for
+    audit (a known limitation in the multi-category case).
+    """
+
+    __tablename__ = "main_category_matches"
+    __table_args__ = (
+        CheckConstraint("score >= 0.0 AND score <= 1.0", name="ck_main_category_matches_score"),
+        CheckConstraint("rank >= 1 AND rank <= 5", name="ck_main_category_matches_rank"),
+        Index("ix_main_cat_matches_main_id", "main_id"),
+        Index("ix_main_cat_matches_score", "main_id", "score"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    main_id = Column(Integer, ForeignKey("main.id", ondelete="CASCADE"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    score = Column(Float, nullable=False)
+    rank = Column(Integer, nullable=False)
+    reason = Column(Text, nullable=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
+    prompt_id = Column(Integer, ForeignKey("prompts.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    article = relationship("Main", back_populates="category_matches")
+    category = relationship("Category", back_populates="main_matches")
 
 
 class Channel(Base):

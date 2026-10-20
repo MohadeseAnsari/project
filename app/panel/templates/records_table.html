@@ -3,7 +3,7 @@
   <thead>
     <tr>
       <th style="width:36px"><input type="checkbox" data-select-all title="انتخاب همهٔ این صفحه"></th><th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
-      <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
+      <th style="width:142px">دانشگاه</th><th style="width:132px">دستهٔ اصلی</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
       <th style="width:88px">عملیات</th>
     </tr>
   </thead>
@@ -15,6 +15,14 @@
       <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
       <td>{{ r.field }}</td>
       <td>{{ r.university }}</td>
+      <td>
+        {# Primary classification + extra-match count (the v2 multi-category
+           answer). The badge only appears from the SECOND match on: a single
+           match is the whole answer and needs no counter. #}
+        {% set cv = category_view.get(r.id) if category_view is defined else None %}
+        {% if cv and cv.name %}{{ cv.name }}{% if cv.extras > 0 %} <span class="badge s-processing">+ {{ cv.extras|fa }}</span>{% endif %}
+        {% else %}<span class="hint">—</span>{% endif %}
+      </td>
       <td>
         {% if r.status == 'review' %}<span class="badge s-review">★ در انتظار بازبینی</span>
         {% elif r.status == 'approved' %}<span class="badge s-ready">✓ تأیید شده</span>

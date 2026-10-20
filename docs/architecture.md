@@ -2,7 +2,7 @@
 
 ## Overview
 
-IranDoc News Generation is a modular monolithic service that receives thesis metadata via HTTP, stores it in PostgreSQL, processes it sequentially through a single Worker that generates journalistic news using an LLM, and publishes finished articles to messaging channels through a second, separate Worker.
+IranDoc News Generation is a modular monolithic service that receives thesis metadata via HTTP, stores it in PostgreSQL, processes it sequentially through a single Worker that makes ONE LLM call per thesis — returning the journalistic article AND its ISCED-F 2013 classification together — and publishes finished articles to messaging channels through a second, separate Worker.
 
 See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker lifecycle, recovery, Docker, VPS, troubleshooting).
 
@@ -20,35 +20,43 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - PATCH `/records/{id}` — review decision (approve/reject/save_draft, only from review, 409 otherwise)
 - GET `/deliveries` — paginated deliveries (filters status/platform/main_id) plus `POST /deliveries/{id}/retry` (failed only, resets attempts)
 - GET `/stats` — record/delivery counts per status plus worker heartbeat freshness (no per-record timings)
+- GET `/records/{id}/classification` — the record's stored category matches (category, score, rank, reason, primary flag) as the combined call / reviewers wrote them
+- POST `/records/{id}/category-matches` — reviewer override: replaces ALL stored matches with the submitted list (unknown category or invalid score → 422; an empty list re-stores the `other` fallback so a record is never left unclassified)
 
 ### Worker (Sequential, Persistent)
 - Polls PostgreSQL for `ready` jobs
 - Claims job with `FOR UPDATE SKIP LOCKED`
 - Updates heartbeat during processing
-- Calls preprocessing → classification → LLM generation
-- Stores result as JSONB, sets status to `review`
-- On failure: sets status to `failed` with error message
+- Registers the field name for dedup (`fields`, WITHOUT classifying it), then makes ONE structured LLM call: news + ISCED-F 2013 `categories` in the same response
+- Post-processes the classification (hallucination filter against the live non-deprecated `categories` rows, score clamp to [0,1], dedupe keep-highest, threshold `MIN_CATEGORY_RELEVANCE`, trim to `TOP_N_CATEGORIES`) and stores every qualifying match in `main_category_matches` (ranked 1..N); sets `main.category_id` to the top match — or to the single `other` fallback row (score 0, rank 1, reason `no auto-match`) when nothing qualifies
+- Stores the article as JSONB, sets status to `review`
+- On failure (including LLM/schema errors): sets status to `failed` with error message
 - Recovers stale `processing` jobs on startup and each loop iteration
 
 ### Sender Worker (Channel Delivery)
 - Polls for processed articles (`main.status = 'review'`) that have no delivery for an active channel
 - Creates one `deliveries` row per (article, channel) — the unit of work
-- Resolves channels for an article: **the channels its CATEGORY names**, via
-  `category_channel_routes`. A record with no category, or one whose category
-  has no channels selected, goes **nowhere** — there is no fallback to "every
-  active channel", because a fallback would make the panel's matrix a
-  decoration the owner watches change while nothing happens. The matrix is
-  edited on `/categories`, one category at a time; routing each of 500+ fields
-  individually is a screen nobody fills in. Each delivery snapshots its
-  `category_id` and records `route_source='category'` so a send stays
-  explainable.
+- Resolves channels for an article: **MULTI-category** — every qualifying
+  row in `main_category_matches` (score >= `MIN_CATEGORY_RELEVANCE`, live
+  category, never the `other` fallback) fans the article out to that
+  category's channels (`category_channel_routes`), deduped per channel. The
+  union is the whole answer: a channel reached by two of the record's
+  categories gets ONE delivery (source recorded as `multi`); a record whose
+  only answer is `other` qualifies for nothing and queues **no deliveries at
+  all** — it waits for a reviewer (`other` is excluded from qualifying even
+  when the threshold is set to 0). A category with no channels selected goes
+  **nowhere** — there is no fallback to "every active channel", because a
+  fallback would make the panel's matrix a decoration the owner watches
+  change while nothing happens. The matrix is edited on `/categories`. Each
+  delivery snapshots the TOP-1 match's `category_id` (audit-only limitation
+  in the multi-category case) and records `route_source='category'`.
 - **A channel only receives news from the moment it was switched on.** The
   filter is `channels.activated_at <= main.created_at`, and `activated_at` moves
   forward every time a channel is switched ON. Without it, adding a channel made
   the sender enqueue the entire archive to it — a brand new channel has no
   delivery rows for anything, so every historical record looked like pending
   work, forever. The same floor is expressed twice on purpose: in
-  `resolve_channels()` for the rows that get created, and in
+  `channels_for_article_multi()` for the rows that get created, and in
   `_has_undelivered_channel()` for the batch query that finds the articles.
   They must agree or news is silently dropped or silently flooded.
 - Renders the message (`app/messaging/formatting.py`): emoji-headed title in bold, lead, body, and the destination channel handle
@@ -58,30 +66,49 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Retries retryable failures with exponential backoff up to `SENDER_MAX_ATTEMPTS`, then parks the delivery as `failed`; permanent errors (unknown chat, revoked token) fail immediately
 - Recovers abandoned `sending` deliveries after `SENDER_LEASE_MINUTES`
 - `awaiting_confirmation` is the gated initial status when
-  `REQUIRE_HUMAN_CONFIRMATION=true` (default): the sender never claims it, and
-  approval flips it to `pending`. With the flag off, queueing writes `pending`
-  directly.
+  `REQUIRE_HUMAN_CONFIRMATION=true` AND `AUTO_PUBLISH_ON_CLASSIFICATION=false`
+  (both defaults): the sender never claims it, and approval flips it to
+  `pending`. With the flag off, or auto-publish on classification enabled,
+  queueing writes `pending` directly — except that a record whose only
+  classification is the `other` fallback never auto-publishes under any
+  setting, because nothing qualified.
 - Runs as its own compose service so channel rate limits and platform outages never affect generation
-- Human gate (`REQUIRE_HUMAN_CONFIRMATION`, default true): new deliveries queue as
-  `awaiting_confirmation` and only become `pending` on explicit approval; when
-  false they queue as `pending` directly (pre-gate behaviour)
 
-### Field Classification (Deterministic)
-- Normalizes field names (Unicode NFC, trim, collapse whitespace)
-- Looks up exact normalized match in database
-- Falls back to token-aware longest-match keyword rules: multi-token
-  phrases match exactly, ≤4-char keywords match whole tokens only (so `مو`
-  never fires inside `موزه`), longer keywords may substring-match at lower
-  score; the longest match wins and category order breaks ties only
-- Negative keywords veto genuine collisions (documented in code)
-- Every decision returns `(category, matched_keyword, rule)` — the panel
-  shows WHY, and `fields.matched_keyword` stores it
-- Unknown fields → `other` category (reviewed names only; see report)
-- No LLM involvement
+### Classification (LLM, combined with generation)
+
+One call, one answer, one point of trust:
+
+- Classification of a thesis comes from the SAME LLM call that writes the news
+  (v2-combined): the model answers with up to 3
+  `{category, score 0.0–1.0, reason}` entries next to the article.
+- The vocabulary is the 29 ISCED-F 2013 intermediate fields + the `other`
+  fallback, defined once in `app/news/isced.py` and pinned char-for-char
+  (ZWNJ included) against the live `categories` rows.
+- The Worker post-processes the answer and is the only point of trust: names
+  that are not live (`deprecated = FALSE`) `categories` rows are dropped as
+  hallucinations, scores are clamped to [0,1], duplicates collapse to the
+  highest score, and only matches at/above `MIN_CATEGORY_RELEVANCE` — never
+  `other` — are stored in `main_category_matches`, ranked 1..N by score
+  (`main.category_id` becomes the display primary).
+- An empty answer stores exactly one `other` row (score 0.0, rank 1, reason
+  `no auto-match`) so "unclassified" is always distinguishable from "not yet
+  generated", and such a record queues no deliveries.
+- Regeneration and the reviewer's manual assignment (panel «تعیین دستی دسته»,
+  API `POST /records/{id}/category-matches`) REPLACE the stored rows wholesale
+  (manual rows score 1.0, reason «تعیین دستی توسط بازبین»), so the routing
+  answer is always exactly one generation or one human decision old.
+- Classification is queried per record via `GET /records/{id}/classification`
+  and counted by primary category in `GET /stats` (`records_by_category`).
+- `fields.category_id` / `matched_keyword` are legacy metadata: new field rows
+  are inserted with NULLs (dedup identity only), and
+  `app/fields/classification.py` is retired to reference status (kept for
+  `scripts/reclassify_fields.py` audits of historical rows).
+- No deterministic rules anywhere in the live path.
 
 ### LLM Generation (PydanticAI + AvalAI)
 - Receives thesis metadata as structured data
-- Returns GeneratedNews(title, lead, body)
+- Returns `GeneratedNews(title, lead, body, categories)` — the article AND its
+  ISCED-F 2013 classification in one structured reply
 - Resolves model+prompt per job: per-record override (`main.model_id`/`prompt_id` from `POST /submit`) → active row (`is_active`) → config fallback (`settings.llm_model`, packaged prompt)
 - Per-model `base_url`/`api_key_env` (env var name, never the key) override the provider endpoint/key
 - Models/prompts managed via `/models` + `/prompts` (list/create/detail, single-active `POST /{id}/activate`); prompts immutable (new version = new row, never edit); `POST /models/{id}/test-connection` probes with a 1-token call without returning the key
@@ -107,8 +134,11 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
   else configuration). `temperature` / `max_output_tokens` are stored per
   model row and shown in the panel, but the provider call currently uses
   provider defaults for them — see the panel note where they are displayed.
-- **Required output shape**: strict JSON `{title, lead, body}` validated by
-  Pydantic (`GeneratedNews`); anything else fails the job with the error.
+- **Required output shape**: strict JSON `{title, lead, body, categories}`
+  validated by Pydantic (`GeneratedNews`), where `categories` is a list of
+  at most 3 `{category, score, reason}` with exact ISCED-F 2013 names from
+  the numbered list embedded in the system prompt (+`other` fallback);
+  anything else fails the job with the error.
 - **Preview**: the record page's `پرامپت نهایی` tab renders the exact system
   prompt + user message + resolved model name for that record. No secret is
   ever included in either message or shown in the preview.
@@ -166,11 +196,15 @@ and `failed`. Deliveries: `awaiting_confirmation → pending → sending → sen
 plus `failed` and `deleted_from_channel`.
 
 Every stuck state has an explicit recovery action in the panel: regenerate
-(record), cancel / retry / release / delete-from-channel (delivery),
-reassign category (record). `records.record_timeline` renders the resulting
-flow per record — submitted → field/category (with the matched keyword) →
-generated with `<model>/<prompt>` → reviewed by `<user>` → delivered to
-`<channel>` with the message id — from real columns and audit rows only.
+(record, which rewrites the classification with the new answer), cancel /
+retry / release / delete-from-channel (delivery), reassign category (record —
+replaces the stored matches with one manual match, score 1.0). The record
+page's دسته‌بندی‌های خودکار tab shows every stored match (score, rank, reason,
+primary badge) plus the fallback warning when a record classified only as
+`other`. `records.record_timeline` renders the resulting flow per record —
+submitted → classified (primary category) → generated with
+`<model>/<prompt>` → reviewed by `<user>` → delivered to `<channel>` with the
+message id — from real columns and audit rows only.
 
 What the operator sees follows from those states, not from timestamps:
 
@@ -284,11 +318,12 @@ project/
 │   ├── auth/
 │   │   └── secret.py        # Secret verification
 │   ├── fields/
-│   │   ├── normalization.py # Field normalization
-│   │   └── classification.py# Deterministic classification
+│   │   ├── normalization.py # Field normalization (dedup identity)
+│   │   └── classification.py# RETIRED rule engine (reference only)
 │   ├── news/
-│   │   ├── generation.py    # LLM client
-│   │   └── prompts.py       # Prompt template
+│   │   ├── generation.py    # Combined LLM call (news + classification)
+│   │   ├── prompts.py       # v2-combined prompt template
+│   │   └── isced.py         # Canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/
 │   │   └── worker.py        # Sequential worker
 │   └── messaging/

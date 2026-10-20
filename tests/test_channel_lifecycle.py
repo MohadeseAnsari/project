@@ -277,13 +277,14 @@ async def test_switch_flips_one_channel_only(session: AsyncSession, stub_get_cha
 @pytest.mark.asyncio
 async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub_get_chat):
     """A switched-off channel is not a delivery target, even with a category route."""
-    from app.messaging.dispatcher import channels_for_article
+    from app.db.models import MainCategoryMatch
+    from app.messaging.dispatcher import channels_for_article_multi
 
     await _admin(session)
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="off-field", normalized_name="off-field", category_id=category.id)
+    field = Field(name="off-field", normalized_name="off-field", category_id=None)
     session.add(field)
     async with panel_client() as client:
         await _login(client)
@@ -300,12 +301,16 @@ async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub
         output_json={"title": "T", "lead": "L", "body": "B"},
     )
     session.add(article)
+    await session.flush()
+    session.add(MainCategoryMatch(
+        main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
     async with panel_client() as client:
         await _login(client)
         await client.post(f"/channels/{off.id}/toggle", follow_redirects=False)
-    routed = await channels_for_article(session, article)
-    assert [c.id for c in routed] == [on.id], "only the enabled channel is a target"
+    routed = await channels_for_article_multi(session, article)
+    assert [c.id for c, _s in routed] == [on.id], "only the enabled channel is a target"
 
 
 # --------------------------------------------------------------------------

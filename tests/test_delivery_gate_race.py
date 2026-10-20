@@ -14,12 +14,12 @@ from tests.routing_setup import route_all_active
 
 
 async def _article(session: AsyncSession, status: str) -> int:
-    from app.db.models import Category, Channel, Field, Main
+    from app.db.models import Category, Channel, Field, Main, MainCategoryMatch
 
     category = Category(name="gate-race-cat", description="test")
     session.add(category)
     await session.commit()
-    field = Field(name="gate-race-field", normalized_name="gate-race-field", category_id=category.id)
+    field = Field(name="gate-race-field", normalized_name="gate-race-field", category_id=None)
     channel = Channel(platform="bale", chat_id=8877001, username="@race", is_active=True)
     session.add_all([field, channel])
     await session.commit()
@@ -30,10 +30,15 @@ async def _article(session: AsyncSession, status: str) -> int:
         output_json={"title": "T", "lead": "L", "body": "B"},
     )
     session.add(row)
+    await session.flush()
+    # Routing resolves through the stored matches; this file tests the gate,
+    # not the classification, so one qualifying match is enough.
+    session.add(MainCategoryMatch(
+        main_id=row.id, category_id=category.id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
-    # Routing is by category; this file tests the gate, not the routing, so the
-    # category is pointed at every active channel to give the gate something to
-    # act on.
+    # The category is pointed at every active channel to give the gate
+    # something to act on.
     await route_all_active(session, category)
     return row.id
 
@@ -102,7 +107,7 @@ async def test_race_approval_between_select_and_insert(session: AsyncSession, mo
     monkeypatch.setattr(settings, "require_human_confirmation", True)
     article_id = await _article(session, "review")
 
-    original = dispatcher.channels_for_article_with_source
+    original = dispatcher.channels_for_article_multi
 
     async def approve_then_resolve(session, article):
         # Approve (as the panel would) while the sender holds the article list.
@@ -112,7 +117,7 @@ async def test_race_approval_between_select_and_insert(session: AsyncSession, mo
         await confirm_deliveries_for_article(session, article_id)
         return await original(session, article)
 
-    monkeypatch.setattr(dispatcher, "channels_for_article_with_source", approve_then_resolve)
+    monkeypatch.setattr(dispatcher, "channels_for_article_multi", approve_then_resolve)
 
     assert await ensure_pending_deliveries(session) == 1
     delivery = (await session.execute(select(Delivery))).scalars().one()

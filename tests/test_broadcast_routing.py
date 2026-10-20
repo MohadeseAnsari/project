@@ -10,9 +10,10 @@ narrower and easier to get wrong, so these tests pin it from both sides:
   because then two tables would each be able to decide where news goes and
   they would disagree.
 
-``fields.category_id`` is not routing: it is the CLASSIFICATION the generator
-and the records use, and it lives on the fields page. That is what decides
-which row of the matrix a record reads.
+``fields.category_id`` is not routing AND no longer the classification that
+feeds it: a record routes through its stored ``main_category_matches`` rows
+(written by the combined generation call or a reviewer), so ``_article``
+below attaches a qualifying match instead of only a ``category_id``.
 """
 
 import pytest
@@ -27,10 +28,11 @@ from app.db.models import (
     Field,
     FieldChannelRoute,
     Main,
+    MainCategoryMatch,
     PanelUser,
     Role,
 )
-from app.messaging.dispatcher import channels_for_article, channels_for_article_with_source
+from app.messaging.dispatcher import channels_for_article_multi
 from app.panel.auth import hash_password
 from app.services import channels as channel_service
 from app.services import fields as field_service
@@ -53,6 +55,8 @@ async def _world(session: AsyncSession) -> tuple[Category, list[Channel]]:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
+    # The field row keeps its (legacy) category here: this file also covers
+    # the panel's "fields in categories that have no channels" warning.
     field = Field(name="test-field", normalized_name="test-field", category_id=category.id)
     session.add(field)
     await session.commit()
@@ -65,12 +69,21 @@ async def _world(session: AsyncSession) -> tuple[Category, list[Channel]]:
     return category, channels
 
 
-async def _article(session: AsyncSession, category: Category, field: Field) -> Main:
+async def _article(session: AsyncSession, category: Category, *, rank: int = 1) -> Main:
+    """Approved article WITH the qualifying match the matrix reads.
+
+    (Before v2-combined this helper relied on ``category_id`` alone; routing
+    now resolves through ``main_category_matches``.)
+    """
     row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
-               author="A", supervisor="S", status="approved", field_id=field.id,
+               author="A", supervisor="S", status="approved",
                category_id=category.id,
                output_json={"title": "T", "lead": "L", "body": "B"})
     session.add(row)
+    await session.flush()
+    session.add(MainCategoryMatch(
+        main_id=row.id, category_id=category.id, score=0.9, rank=rank, reason="test",
+    ))
     await session.commit()
     return row
 
@@ -83,31 +96,30 @@ async def _article(session: AsyncSession, category: Category, field: Field) -> M
 @pytest.mark.asyncio
 async def test_only_the_channels_the_matrix_names_are_targets(session: AsyncSession):
     category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    article = await _article(session, category)
     await route_category(session, category, [channels[0]])
-    assert [c.id for c in await channels_for_article(session, article)] == [channels[0].id]
+    pairs = await channels_for_article_multi(session, article)
+    assert [c.id for c, _source in pairs] == [channels[0].id]
 
 
 @pytest.mark.asyncio
 async def test_an_empty_matrix_sends_nothing(session: AsyncSession):
     """Not "everything", which is what a fallback would do."""
-    category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
-    assert await channels_for_article(session, article) == []
+    category, _channels = await _world(session)
+    article = await _article(session, category)
+    assert await channels_for_article_multi(session, article) == []
 
 
 @pytest.mark.asyncio
 async def test_switching_a_channel_off_removes_it_from_every_category(session: AsyncSession):
     """A channel is a destination, not a rule: off means off everywhere."""
     category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    article = await _article(session, category)
     await route_category(session, category, channels)
     channels[1].is_active = False
     await session.commit()
-    assert [c.id for c in await channels_for_article(session, article)] == [
+    pairs = await channels_for_article_multi(session, article)
+    assert [c.id for c, _source in pairs] == [
         channels[0].id, channels[2].id
     ]
 
@@ -115,11 +127,12 @@ async def test_switching_a_channel_off_removes_it_from_every_category(session: A
 @pytest.mark.asyncio
 async def test_provenance_names_the_category_that_decided(session: AsyncSession):
     category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    article = await _article(session, category)
     await route_category(session, category, [channels[0]])
-    pairs = await channels_for_article_with_source(session, article)
-    assert {(c.id, source) for c, source in pairs} == {(channels[0].id, "category")}
+    pairs = await channels_for_article_multi(session, article)
+    assert {(c.id, source) for c, source in pairs} == {
+        (channels[0].id, category.name)
+    }
 
 
 # --------------------------------------------------------------------------
@@ -138,10 +151,10 @@ async def test_a_field_route_alone_routes_nothing(session: AsyncSession):
     """
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    article = await _article(session, category)
     session.add(FieldChannelRoute(field_id=field.id, channel_id=channels[0].id))
     await session.commit()
-    assert await channels_for_article(session, article) == []
+    assert await channels_for_article_multi(session, article) == []
 
 
 @pytest.mark.asyncio
@@ -149,15 +162,16 @@ async def test_a_field_route_does_not_add_to_the_matrix(session: AsyncSession):
     """It must not widen the matrix either."""
     category, channels = await _world(session)
     field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
+    article = await _article(session, category)
     await route_category(session, category, [channels[0]])
     session.add(FieldChannelRoute(field_id=field.id, channel_id=channels[2].id))
     await session.commit()
-    assert [c.id for c in await channels_for_article(session, article)] == [channels[0].id]
+    pairs = await channels_for_article_multi(session, article)
+    assert [c.id for c, _source in pairs] == [channels[0].id]
 
 
 # --------------------------------------------------------------------------
-# classification is NOT routing, and it stays
+# the legacy field-category curation still works (deprecated metadata)
 # --------------------------------------------------------------------------
 
 
@@ -192,7 +206,7 @@ async def test_assigning_an_unknown_category_is_refused(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_field_category_is_editable_on_the_fields_page(session: AsyncSession):
-    """Classification kept its home; routing lives on /categories."""
+    """The curated field mapping kept its home; routing lives on /categories."""
     await _admin(session)
     category, _channels = await _world(session)
     other = Category(name="فنی و مهندسی", description="Engineering")
@@ -251,12 +265,12 @@ async def test_an_empty_selection_clears_a_category(session: AsyncSession):
 async def test_a_saved_matrix_actually_changes_where_news_goes(session: AsyncSession):
     """The end-to-end claim: edit the picker, and delivery follows."""
     category, channels = await _world(session)
-    field = (await session.execute(select(Field))).scalars().one()
-    article = await _article(session, category, field)
-    assert await channels_for_article(session, article) == []
+    article = await _article(session, category)
+    assert await channels_for_article_multi(session, article) == []
 
     await channel_service.set_category_channels(session, category.id, [channels[2].id])
-    assert [c.id for c in await channels_for_article(session, article)] == [channels[2].id]
+    pairs = await channels_for_article_multi(session, article)
+    assert [c.id for c, _source in pairs] == [channels[2].id]
 
 
 # --------------------------------------------------------------------------
@@ -375,6 +389,3 @@ async def test_saving_the_matrix_is_admin_only_and_audited(session: AsyncSession
         select(AuditLog.action).where(AuditLog.action == "category_channels")
     )).scalars().all()
     assert len(actions) == 1, "exactly the admin attempt is audited"
-
-
-from app.db.models import AuditLog  # noqa: E402  (used only by the audit test)

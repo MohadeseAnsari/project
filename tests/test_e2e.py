@@ -14,7 +14,7 @@ exercised. Skipped automatically when PostgreSQL is not available.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -70,12 +70,8 @@ async def test_submit_process_review_flow(test_database, postgres_available, ses
 
     if (await session.execute(select(Category).limit(1))).scalars().first() is None:
         for name in (
-            "پزشکی و علوم سلامت", "مهندسی و فناوری", "هنر و معماری",
-            "دامپزشکی", "علوم اجتماعی و اقتصاد", "علوم انسانی",
-            "علوم پایه", "علوم تربیتی و روان‌شناسی",
-            "کامپیوتر و فناوری اطلاعات", "حقوق و علوم سیاسی",
-            "کشاورزی و منابع طبیعی", "ورزش و تربیت بدنی",
-            "رسانه و ارتباطات", "other",
+            "بهداشت", "فناوری اطلاعات و ارتباطات", "علوم اجتماعی و رفتاری",
+            "حقوق", "other",
         ):
             session.add(Category(name=name))
         await session.commit()
@@ -118,14 +114,36 @@ async def test_submit_process_review_flow(test_database, postgres_available, ses
             await session.commit()
 
         if job is not None:
+            from app.db.models import Category, MainCategoryMatch
+            from sqlalchemy import select as sa_select
+
+            from app.schemas.news import CategoryMatch, GeneratedNews
+
+            output = GeneratedNews(
+                title="T", lead="L", body="B",
+                categories=[
+                    CategoryMatch(category="بهداشت", score=0.9, reason="پزشکی است"),
+                    CategoryMatch(category="فناوری اطلاعات و ارتباطات", score=0.6, reason="ai"),
+                ],
+            )
             with patch("app.worker.worker.generate_news") as mock_gen:
-                mock_gen.return_value = AsyncMock(title="T", lead="L", body="B")
+                mock_gen.return_value = output
                 await process_job(session, job)
             await session.refresh(job)
             assert job.status == "review"
             assert job.output_json == {"title": "T", "lead": "L", "body": "B"}
             assert job.model_id is not None
             assert job.prompt_id is not None
+            # The combined call also classified the thesis: two qualifying
+            # matches stored, the display primary is the top one.
+            matches = (await session.execute(
+                sa_select(MainCategoryMatch).where(MainCategoryMatch.main_id == job.id)
+            )).scalars().all()
+            assert len(matches) == 2
+            top = next(m for m in matches if m.rank == 1)
+            top_name = (await session.get(Category, top.category_id)).name
+            assert top_name == "بهداشت" and top.score == 0.9
+            assert job.category_id == top.category_id
         else:
             final_status = await _wait_for_terminal_status(record_id)
             assert final_status == "review"

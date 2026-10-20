@@ -57,8 +57,9 @@ PostgreSQL-backed queue.
 docker compose logs --tail=100 worker
 ```
 
-The Worker claims the job (`processing`), normalizes and classifies the field,
-calls the LLM, and stores the result.
+The Worker claims the job (`processing`), registers the field for dedup
+(`fields`, `category_id = NULL`), makes the ONE combined LLM call (news +
+ISCED-F 2013 categories), and stores the result.
 
 ## 6. See the generated news
 
@@ -67,13 +68,15 @@ curl.exe "http://localhost:8000/records/1?shared_Secret=REPLACE_WITH_REAL_SECRET
 ```
 
 Expected: `status: "review"` with `output_json` containing the generated
-`title`, `lead`, and `body`.
+`title`, `lead`, and `body`, plus stored classification in `main_category_matches`
+(`10.` below shows how to query it).
 
 ## 7. Demonstrate unknown-field behavior
 
 Submit a thesis with a field that is **not** in the Excel dataset (e.g. a made-up
 field). The Worker inserts it into the `fields` table with `source='runtime'`
-and a stable normalized identity, classified into a category (or `other`).
+and a stable normalized identity, `category_id = NULL` — classification of the
+THESIS happens per record in `main_category_matches`, not on the field row.
 
 ## 8. Demonstrate duplicate prevention
 
@@ -82,7 +85,7 @@ is created — because matching is on the unique `normalized_name`.
 
 ## 9. Demonstrate failure and recovery
 
-- A job that fails (e.g. LLM error) is marked `failed` with the error message.
+- A job that fails (e.g. LLM error, schema violation) is marked `failed` with the error message.
 - A job left in `processing` by a crashed Worker is reset to `ready` after
   `WORKER_LEASE_MINUTES` and reprocessed (at-least-once).
 
@@ -101,34 +104,41 @@ SELECT id, status, field, created_at FROM main ORDER BY id DESC LIMIT 10;
 -- Count jobs by status
 SELECT status, count(*) FROM main GROUP BY status;
 
--- Recently registered fields
-SELECT id, name, source FROM fields ORDER BY id DESC LIMIT 10;
+-- Recently registered fields (legacy categories are NULL for new rows)
+SELECT id, name, source, category_id FROM fields ORDER BY id DESC LIMIT 10;
 
 -- A finished record with its generated news
 SELECT id, status, field, output_json FROM main
 WHERE status = 'review' ORDER BY id DESC LIMIT 5;
+
+-- The combined call's classification, ranked
+SELECT main_id, rank, score, reason, c.name
+FROM main_category_matches m JOIN categories c ON c.id = m.category_id
+ORDER BY main_id DESC, rank ASC LIMIT 15;
 ```
 
 ## Assignment 4 demo questions
 
 - **What data is accepted and retained?** The nine input fields are validated
-  and stored in `main`; the shared secret is checked but never stored.
+  and stored in `main`; the shared secret is checked but never stored (and
+  never sent to the LLM).
 - **Why is the Shared Secret checked before content validation?** So an
   unauthenticated request never reaches thesis validation and never creates a
   record.
 - **How are unknown fields registered?** Normalized → exact match → if absent,
-  classified and inserted into `fields` with `source='runtime'`.
+  inserted into `fields` with `source='runtime'` and NO category (dedup
+  identity only; classification is per record).
 - **How are duplicate unknown fields prevented?** Matching is on the unique
   `normalized_name`; repeated values reuse the same row.
 - **How are spacing/letter differences handled?** Unicode NFC normalization,
   zero-width removal, trim, and whitespace collapsing produce a stable
   identity.
-- **What is the `معماری داخلی` issue?** A broad `معماری` rule must not
-  swallow the specific `معماری داخلی`. Specific keywords are listed before
-  broad ones, so `معماری داخلی` maps to its own rule first.
-- **Why one mapping fix may not be enough.** Fixing a single keyword without
-  checking rule order and substring precedence can misclassify other fields;
-  the fix must be systematic.
+- **How is a thesis classified today?** By the SAME LLM call that writes the
+  news: up to three `{category, score, reason}` from the 29 ISCED-F 2013
+  names, filtered/clamped/deduped/thresholded by the Worker into
+  `main_category_matches`; an empty answer becomes the single `other` fallback
+  row (score 0.0, `no auto-match`) that never auto-publishes. A reviewer can
+  replace the answer with one manual match (score 1.0).
 - **Why one persistent sequential Worker?** At this scale PostgreSQL is the
   queue; a single Worker keeps processing ordered and the architecture simple.
 - **How does queue order work?** `ORDER BY created_at` (oldest first) with

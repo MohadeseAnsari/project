@@ -12,8 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, Main
-from tests.routing_setup import route_category
+from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from tests.routing_setup import route_category
 from app.messaging.dispatcher import (
     claim_next_delivery,
@@ -41,6 +40,7 @@ async def _field(session: AsyncSession) -> Field:
 
 
 async def _article(session: AsyncSession, field: Field) -> Main:
+    """A review record WITH the qualifying match the resolver reads."""
     article = Main(
         username="tester",
         title="Thesis",
@@ -55,6 +55,12 @@ async def _article(session: AsyncSession, field: Field) -> Main:
         output_json=dict(OUTPUT),
     )
     session.add(article)
+    await session.flush()
+    # v2-combined: routing resolves through main_category_matches, so the
+    # gate needs a qualifying match to have something to act on.
+    session.add(MainCategoryMatch(
+        main_id=article.id, category_id=field.category_id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
     return article
 

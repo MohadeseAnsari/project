@@ -15,11 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main
+from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main, MainCategoryMatch
 from app.messaging import dispatcher
 from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
-    channels_for_article,
+    channels_for_article_multi,
     claim_next_delivery,
     deliver_one,
     ensure_pending_deliveries,
@@ -47,17 +47,26 @@ _field_counter = itertools.count(1)
 
 
 async def _field(session: AsyncSession) -> Field:
-    """Create a field with a unique name (``fields.name`` is UNIQUE)."""
-    cat = await session.get(Category, 1)
+    """Create a field with a unique name (``fields.name`` is UNIQUE).
+
+    The row carries NO category any more: fields only identify disciplines;
+    a record's classification comes from its matches (see ``_article``).
+    """
+    unique = f"field-{next(_field_counter)}"
+    field = Field(name=unique, normalized_name=unique, category_id=None)
+    session.add(field)
+    await session.commit()
+    return field
+
+
+async def _classification_category(session: AsyncSession) -> Category:
+    """The category the helper articles are classified into."""
+    cat = (await session.execute(select(Category).order_by(Category.id))).scalars().first()
     if cat is None:
         cat = Category(name="پزشکی و علوم سلامت", description="Medical")
         session.add(cat)
         await session.commit()
-    unique = f"field-{next(_field_counter)}"
-    field = Field(name=unique, normalized_name=unique, category_id=cat.id)
-    session.add(field)
-    await session.commit()
-    return field
+    return cat
 
 
 async def _channel(session: AsyncSession, platform: str = "bale", chat_id: int = 100) -> Channel:
@@ -83,6 +92,16 @@ async def _route_to_all(session: AsyncSession) -> None:
 
 
 async def _article(session: AsyncSession, field: Field | None = None, status: str = "review") -> Main:
+    """A record whose classification comes from a stored qualifying match.
+
+    (v2-combined: ``category_id`` alone is only the display primary; the
+    resolver reads ``main_category_matches``, so the helper writes one row —
+    the same shape the Worker stores for a 0.9-score match.)
+    """
+    if field is not None and field.category_id is not None:
+        category = await session.get(Category, field.category_id)
+    else:
+        category = await _classification_category(session)
     article = Main(
         username="tester",
         title="Thesis",
@@ -93,10 +112,15 @@ async def _article(session: AsyncSession, field: Field | None = None, status: st
         supervisor="Supervisor",
         status=status,
         field_id=field.id if field else None,
-        category_id=field.category_id if field else None,
+        category_id=category.id if category else None,
         output_json=dict(OUTPUT) if status == "review" else None,
     )
     session.add(article)
+    await session.flush()
+    if category is not None:
+        session.add(MainCategoryMatch(
+            main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+        ))
     await session.commit()
     await _route_to_all(session)
     return article
@@ -345,8 +369,8 @@ async def test_every_active_channel_is_a_target_even_with_a_legacy_field_route(
     await session.commit()
 
     article = await _article(session, field)
-    channels = await channels_for_article(session, article)
-    assert [c.id for c in channels] == [bale.id, telegram.id]
+    channels = await channels_for_article_multi(session, article)
+    assert [c.id for c, _s in channels] == [bale.id, telegram.id]
 
 
 @pytest.mark.asyncio
@@ -357,7 +381,7 @@ async def test_channels_for_article_covers_every_active_channel(session: AsyncSe
     await session.commit()
 
     article = await _article(session, field)
-    assert len(await channels_for_article(session, article)) == 2
+    assert len(await channels_for_article_multi(session, article)) == 2
 
 
 @pytest.mark.asyncio
@@ -369,8 +393,8 @@ async def test_only_inactive_channels_are_excluded(session: AsyncSession):
     await session.commit()
 
     article = await _article(session, field)
-    channels = await channels_for_article(session, article)
-    assert [c.id for c in channels] == [active.id]
+    channels = await channels_for_article_multi(session, article)
+    assert [c.id for c, _s in channels] == [active.id]
 
 
 @pytest.mark.asyncio
@@ -379,7 +403,7 @@ async def test_inactive_channel_is_never_resolved(session: AsyncSession):
     session.add(channel)
     await session.commit()
     article = await _article(session)
-    assert await channels_for_article(session, article) == []
+    assert await channels_for_article_multi(session, article) == []
 
 
 # --------------------------------------------------------------------------

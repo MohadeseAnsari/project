@@ -1,7 +1,10 @@
 """LLM news generation via PydanticAI against AvalAI's OpenAI-compatible API.
 
-The LLM is used ONLY for journalistic news generation (Assignment 2/3
-boundary). Field/category classification never goes through this module.
+v2-combined: ONE call per thesis returns the article AND the ISCED-F 2013
+classification together (``GeneratedNews.categories``). The news/catalogue
+boundary moved: classification is no longer a separate rule engine — the
+resolved system prompt carries the 29-category vocabulary, and the Worker
+post-processes the answer (validation, clamping, ranking) before storing it.
 """
 
 import logging
@@ -209,8 +212,10 @@ def _get_client() -> AsyncOpenAI:
 def _get_agent() -> Agent:
     """Return the shared PydanticAI agent, creating it on first use.
 
-    The agent is bound to the ``GeneratedNews`` output type, so every run
-    returns a structured ``{title, lead, body}`` result validated by Pydantic.
+    The agent is bound to the ``GeneratedNews`` output type (title/lead/body
+    plus ``categories``), so every run returns one structured result
+    validated by Pydantic. The system prompt is static by design — same
+    prompt, one cached Agent (provider caching cost saving).
     """
     global _agent
     if _agent is None:
@@ -269,7 +274,8 @@ async def generate_news(
 
     Returns:
         A structured ``GeneratedNews`` with Persian ``title``, ``lead`` and
-        ``body``.
+        ``body``, plus the ``categories`` classification (up to 3
+        :class:`~app.schemas.news.CategoryMatch` entries, possibly empty).
 
     Raises:
         Exception: Any provider/validation error propagates to the caller

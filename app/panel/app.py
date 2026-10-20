@@ -556,6 +556,10 @@ async def records_page(
         order=order, approved=approved_flag,
     )
     needs_review = await record_service.needs_review_count(session)
+    # Primary category + match-count badge per row (one grouped query).
+    category_view = await record_service.primary_category_snapshot(
+        session, [r.id for r in items]
+    )
     query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
@@ -570,6 +574,7 @@ async def records_page(
             kpi_failed=counts.get("failed", 0),
             field_options=options["fields"], university_options=options["universities"],
             items=items, total=total, page=page, page_size=page_size,
+            category_view=category_view,
         ),
     )
 
@@ -591,11 +596,15 @@ async def records_table(
         field=field or None, university=university or None, q=q or None,
         order=order, approved=approved_flag,
     )
+    # Primary category + match-count badge per row (one grouped query).
+    category_view = await record_service.primary_category_snapshot(
+        session, [r.id for r in items]
+    )
     from urllib.parse import urlencode
 
     query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
     return templates.TemplateResponse(request, "records_table.html",
-        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str},
+        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str, "category_view": category_view},
     )
 
 
@@ -611,9 +620,9 @@ async def record_detail(
     request: Request, record_id: int, session: AsyncSession = Depends(session_dep),
     tab: str = "text",
 ):
-    """Show one record with editable output, raw/meta/history/delivery tabs."""
+    """Show one record with editable output, raw/meta/history/delivery/categories tabs."""
     user = await require_login(request, session)
-    if tab not in ("text", "raw", "meta", "history", "delivery", "final"):
+    if tab not in ("text", "raw", "meta", "history", "delivery", "final", "categories"):
         tab = "text"
     record = await record_service.get_record(session, record_id)
     if not record:
@@ -665,10 +674,12 @@ async def record_detail(
     message_preview = None
     preview_channel = None
     # Same route resolution the sender uses (no copy of the query here).
-    from app.messaging.dispatcher import channels_for_article
+    from app.messaging.dispatcher import channels_for_article_multi
     from app.messaging.formatting import render_article
 
-    routed = await channels_for_article(session, record)
+    routed = [channel for channel, _source in await channels_for_article_multi(session, record)]
+    if routed:
+        routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
     if routed:
         routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
     if tab == "delivery" and record.output_json:
@@ -707,6 +718,8 @@ async def record_detail(
             current_category=overview["current_category"],
             field_keyword=overview["field_keyword"], prompt_preview=prompt_preview,
             published_count=published_count, delete_note=delete_note,
+            category_matches=overview["category_matches"],
+            classification_fallback=overview["classification_fallback"],
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )

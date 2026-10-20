@@ -20,13 +20,57 @@
     </h3>
     <div class="tabs">
       <a href="/records/{{ record.id }}?tab=text" style="text-decoration:none;color:inherit"><span class="{% if tab=='text' %}on{% endif %}">متن خبر</span></a>
+      <a href="/records/{{ record.id }}?tab=categories" style="text-decoration:none;color:inherit"><span class="{% if tab=='categories' %}on{% endif %}">دسته‌بندی‌های خودکار</span></a>
       <a href="/records/{{ record.id }}?tab=raw" style="text-decoration:none;color:inherit"><span class="{% if tab=='raw' %}on{% endif %}">خروجی خام مدل</span></a>
       <a href="/records/{{ record.id }}?tab=meta" style="text-decoration:none;color:inherit"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
       <a href="/records/{{ record.id }}?tab=history" style="text-decoration:none;color:inherit"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
       <a href="/records/{{ record.id }}?tab=delivery" style="text-decoration:none;color:inherit"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
       <a href="/records/{{ record.id }}?tab=final" style="text-decoration:none;color:inherit"><span class="{% if tab=='final' %}on{% endif %}">پرامپت نهایی</span></a>
     </div>
-    {% if tab == 'raw' %}
+    {% if tab == 'categories' %}
+    <div class="body">
+      {# The combined call's classification: every qualifying match with the
+         score and the reason the model offered, so the reviewer can judge
+         the answer instead of trusting it. The primary row is what
+         ``main.category_id`` (the display primary) points at. #}
+      {% if category_matches %}
+      <table>
+        <thead><tr><th>دسته</th><th style="width:88px">نمره</th><th style="width:66px">ترتیب</th><th>توضیح مدل</th></tr></thead>
+        <tbody>
+          {% for m in category_matches %}
+          <tr {% if m.is_primary %}style="background:var(--blue-soft)"{% endif %}>
+            <td class="title">{{ m.category }}
+              {% if m.is_primary %}<span class="badge s-ready">اصلی</span>{% endif %}
+            </td>
+            <td class="num">{{ '%.2f'|format(m.score) }}</td>
+            <td class="num">{{ m.rank|fa }}</td>
+            <td><small>{{ m.reason or '—' }}</small></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if classification_fallback %}
+      <div class="note" style="margin-top:10px">دسته‌بندی خودکار ناموفق بود — لطفاً دستی تعیین کنید.
+        <form method="post" action="/records/{{ record.id }}/category" style="display:flex;gap:9px;align-items:center;margin-top:9px">{{ csrf_field(request) | safe }}
+          <select name="category_id">
+            {% for c in categories %}{% if not c.deprecated %}<option value="{{ c.id }}">{{ c.name }}</option>{% endif %}{% endfor %}
+          </select>
+          <button class="btn btn-soft btn-sm" type="submit">تعیین دستی دسته</button>
+        </form>
+      </div>
+      {% else %}
+      <div class="hint" style="margin-top:9px">
+        فقط دسته‌های با نمرهٔ ≥ آستانه ذخیره و مسیریابی می‌شوند؛ ستاره‌دار(زمینهٔ آبی) دستهٔ اصلی است.
+        با «تولید دوباره» همین فهرست کامل جایگزین می‌شود.
+      </div>
+      {% endif %}
+      {% elif record.output_json %}
+      <p>مدل هنوز دسته‌ای برای این خبر ثبت نکرده است یا پاسخ دسته‌ها خالی بوده و در «other» قرار گرفته است.</p>
+      {% else %}
+      <p>خروجی هنوز تولید نشده است؛ دسته‌بندی همراه همان فراخوانِ تولید انجام می‌شود.</p>
+      {% endif %}
+    </div>
+    {% elif tab == 'raw' %}
     <div class="body">
       <div class="code">{{ record.output_json | tojson_fa if record.output_json else '{}' }}</div>
       <div class="hint" style="margin-top:9px">اگر مدل JSON نامعتبر برگرداند، رکورد در وضعیت failed می‌ماند و پیام خطا در تاریخچه ثبت می‌شود.</div>
@@ -182,19 +226,21 @@
     </div>
 
     {# Recovery: a record filed under the wrong category publishes to the
-       wrong channel until an operator re-points it. #}
+       wrong channel until an operator re-points it. Routing reads the stored
+       matches, so this correction ALSO replaces them with one definitive
+       manual match. #}
     <div class="card">
       <h3>اصلاح دستهٔ رکورد</h3>
       <div class="body">
         <form method="post" action="/records/{{ record.id }}/category">{{ csrf_field(request) | safe }}
           <div class="field" style="margin:0"><label>دسته</label>
             <select name="category_id">
-              {% for c in categories %}<option value="{{ c.id }}" {% if c.id == record.category_id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+              {% for c in categories %}<option value="{{ c.id }}" {% if c.id == record.category_id %}selected{% endif %}>{{ c.name }}{% if c.deprecated %} (منسوخ){% endif %}</option>{% endfor %}
             </select>
           </div>
           <div style="display:flex;gap:9px;align-items:center;margin-top:9px">
             <button class="btn btn-soft" type="submit">تغییر دسته</button>
-            <span class="hint">مسیر ارسال از دستهٔ رکورد خوانده می‌شود؛ این تغییر فقط روی همین رکورد اثر دارد و دستهٔ رشته را عوض نمی‌کند.</span>
+            <span class="hint">مسیریابی از «دسته‌بندی‌های خودکار» همین رکورد خوانده می‌شود؛ این اصلاح دسته‌های ذخیره‌شده را با یک دستهٔ قطعیِ دستی جایگزین می‌کند و فقط روی همین رکورد اثر دارد.</span>
           </div>
         </form>
       </div>

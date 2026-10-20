@@ -7,7 +7,10 @@ answer the two halves of the loop:
   A processed article is a ``main`` row in ``review`` (generation finished,
   ``output_json`` populated). It is not a flag anywhere: "processed but not
   sent" is defined by the absence of a ``sent``/``failed`` delivery for each
-  routed channel.
+  routed channel. Routing is MULTI-category (v2-combined): every qualifying
+  ``main_category_matches`` row (score >= ``MIN_CATEGORY_RELEVANCE``) fans the
+  article out to that category's channels; a record classified only as
+  ``other`` qualifies for nothing, so it never auto-publishes.
 - ``claim_next_delivery`` takes the oldest due delivery and marks it
   ``sending``, so the send happens at most once per attempt even if several
   sender replicas are ever run.
@@ -24,9 +27,10 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import CategoryChannelRoute, Channel, Delivery, Main
+from app.db.models import Category, CategoryChannelRoute, Channel, Delivery, Main, MainCategoryMatch
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
+from app.news.isced import OTHER_CATEGORY
 from app.services.transitions import assert_delivery_transition, assert_record_transition
 
 logger = logging.getLogger(__name__)
@@ -53,18 +57,23 @@ async def preview_routing(
     """Preview the routing chain for a raw field name or an existing record.
 
     Shared by the machine preview endpoint and the panel routing page, so
-    both show the same answer: the resolved category, the matched keyword,
-    and the channels (with route level) the sender would use right now.
-    For records the category/keyword are the stored snapshot (what the
-    Worker used); channels are resolved live because routes may have
-    changed since processing.
+    both show the same answer: the resolved category and the channels (with
+    the category name that reached each of them) the sender would use right
+    now. For records the category is the stored primary (what the Worker
+    stored / the reviewer chose); channels are resolved live because routes
+    may have changed since processing.
+
+    Classification now happens INSIDE the generation call (v2-combined), so
+    a bare field name no longer resolves to a category of its own: what can
+    be shown for it is the legacy stored field mapping (curated rows, if
+    any) — ``category``/``matched_keyword`` may be ``None``. There is no
+    fallback to rule-based matching: that classifier is retired.
 
     Raises:
         ValueError: exactly one of ``field``/``record_id`` must be given.
         LookupError: unknown record id.
     """
-    from app.db.models import Category, Field
-    from app.fields.classification import classify_with_reason
+    from app.db.models import Field
     from app.fields.normalization import normalize_field
 
     if (field is None) == (record_id is None):
@@ -83,14 +92,12 @@ async def preview_routing(
         if record.field_id is not None:
             field_row = await session.get(Field, record.field_id)
             if field_row is not None:
-                keyword = field_row.matched_keyword
-        if keyword is None:
-            _, keyword, _ = classify_with_reason(normalize_field(record.field))
-        pairs = await resolve_channels(session, record.created_at, record.category_id)
+                keyword = field_row.matched_keyword  # legacy rule-based value
+        pairs = await channels_for_article_multi(session, record)
         return {
             "input": record.field,
             "record_id": record.id,
-            "category": category_name or "other",
+            "category": category_name,
             "matched_keyword": keyword,
             "channels": [
                 {
@@ -106,14 +113,18 @@ async def preview_routing(
 
     assert field is not None
     norm = normalize_field(field)
-    category_name, keyword, _ = classify_with_reason(norm)
+    result = await session.execute(
+        select(Field).where(Field.normalized_name == norm)
+    )
+    stored = result.scalar_one_or_none()
+    category_name = keyword = None
     category_id = None
-    if category_name != "other":
-        result = await session.execute(
-            select(Category).where(Category.name == category_name)
-        )
-        category = result.scalar_one_or_none()
-        category_id = category.id if category else None
+    if stored is not None:
+        keyword = stored.matched_keyword  # legacy value; None for new rows
+        if stored.category_id is not None:
+            category = await session.get(Category, stored.category_id)
+            if category is not None:
+                category_id, category_name = category.id, category.name
     pairs = await resolve_channels(session, None, category_id)
     return {
         "input": field,
@@ -131,51 +142,107 @@ async def preview_routing(
             for channel, source in pairs
         ],
     }
-async def channels_for_article(session, article: Main) -> list[Channel]:
-    """Return the active channels this article must be published to.
+async def qualifying_categories(session, article: Main) -> list[tuple[int, str]]:
+    """The article's qualifying matches: ``(category_id, name)`` score-desc.
 
-    **Routing is live.** The chain is one link: a record's category names the
-    channels it goes to. A thesis is submitted, classified into a category, and
-    that category's selected channels are the only ones it publishes to.
-
-    An article whose category has NO routes goes NOWHERE. That is deliberate,
-    and it is the strict reading of "choose which channels this category's news
-    goes to": falling back to every active channel would mean the panel shows
-    a mapping that silently does not apply, which is worse than showing
-    nothing. The panel therefore flags every category with zero routes and
-    says how many fields are stranded behind it.
-
-    ``category_channel_routes`` replaces the ``field_channel_routes`` link:
-    routing each of 500+ fields individually is a configuration screen nobody
-    ever fills in, so the category is the unit the owner manages. A record
-    with no category at all has no route either, and goes nowhere.
+    A match qualifies when its category is a CURRENT (non-deprecated) one,
+    is not the ``other`` fallback, and its stored score reaches
+    ``settings.min_category_relevance``. This is the single definition of
+    "which categories route this article" — the channel resolver, the
+    delivery predicate and the primary-lookup all delegate to it.
     """
-    return [channel for channel, _ in await channels_for_article_with_source(session, article)]
+    rows = (
+        await session.execute(
+            select(MainCategoryMatch.category_id, Category.name)
+            .join(Category, Category.id == MainCategoryMatch.category_id)
+            .where(
+                MainCategoryMatch.main_id == article.id,
+                Category.deprecated.is_(False),
+                Category.name != OTHER_CATEGORY,
+                MainCategoryMatch.score >= settings.min_category_relevance,
+            )
+            .order_by(MainCategoryMatch.score.desc(), MainCategoryMatch.rank)
+        )
+    ).all()
+    # Duplicates across (main_id, category_id) are impossible (UNIQUE) but a
+    # name can only repeat if two rows shared an id — defensive dedup only.
+    seen: set[int] = set()
+    out: list[tuple[int, str]] = []
+    for category_id, name in rows:
+        if category_id not in seen:
+            seen.add(category_id)
+            out.append((category_id, name))
+    return out
+
+
+async def channels_for_article_multi(
+    session, article: Main
+) -> list[tuple[Channel, str]]:
+    """Resolve ``(channel, source)`` pairs from the article's category matches.
+
+    - Query ``main_category_matches`` JOIN ``categories`` where
+      ``deprecated = FALSE`` and ``main_id = article.id`` and
+      ``score >= settings.min_category_relevance`` (the ``other`` fallback is
+      deliberately excluded too: a fallback never auto-publishes, even if
+      the threshold were set to 0.0).
+    - For each qualifying category, look up ``category_channel_routes`` JOIN
+      ``channels`` where ``is_active = TRUE`` and
+      ``activated_at <= article.created_at``.
+    - Union all channels, dedupe by ``channel.id``.
+    - Return sorted by ``channel.id`` with ``source`` = the category name
+      that produced it (or ``"multi"`` when several categories route to the
+      same channel).
+
+    An article with no qualifying categories (only ``other``, or none at all)
+    resolves to NO destinations: it stays in review for manual assignment.
+    """
+    qualifying = await qualifying_categories(session, article)
+    if not qualifying:
+        return []
+    cat_ids = [category_id for category_id, _name in qualifying]
+    name_by_id = dict(qualifying)
+
+    route_rows = (
+        await session.execute(
+            select(CategoryChannelRoute.category_id, Channel)
+            .join(Channel, Channel.id == CategoryChannelRoute.channel_id)
+            .where(CategoryChannelRoute.category_id.in_(cat_ids))
+            .where(Channel.is_active.is_(True))
+            .where(Channel.activated_at <= article.created_at)
+            .order_by(Channel.id)
+        )
+    ).all()
+
+    channel_by_id: dict[int, Channel] = {}
+    sources_by_channel: dict[int, list[str]] = {}
+    for category_id, channel in route_rows:
+        channel_by_id[channel.id] = channel
+        names = sources_by_channel.setdefault(channel.id, [])
+        name = name_by_id[category_id]
+        if name not in names:
+            names.append(name)
+
+    pairs: list[tuple[Channel, str]] = []
+    for channel_id in sorted(channel_by_id):
+        names = sources_by_channel[channel_id]
+        pairs.append((channel_by_id[channel_id], names[0] if len(names) == 1 else "multi"))
+    return pairs
 
 
 async def resolve_channels(
     session, since: datetime | None, category_id: int | None
 ) -> list[tuple[Channel, str]]:
-    """Resolve ``(channel, route_source)`` for one article.
+    """Resolve ``(channel, route_source)`` for ONE fixed category.
 
-    The neutral core shared by the sender (via articles), the routing preview
-    endpoint and the panel, so every surface agrees on where an article goes.
+    Legacy but still necessary: the raw-field routing preview shows what a
+    stored/curated field mapping would resolve to. Live delivery resolution
+    no longer goes through here — see
+    :func:`channels_for_article_multi`.
 
-    The rule: the article's category's channels, and nothing else. No category,
-    or a category with no channels selected, means no destinations.
-
-    **A channel only receives news from the moment it was switched on.**
-    ``since`` is the article's ``created_at``, and a channel qualifies when
-    ``activated_at <= since``. Without that floor, turning routing on would
-    make the sender enqueue the whole archive to whichever channel was ticked,
-    because every historical article predates the mapping and would match.
-    Passing ``None`` means "no article yet" and applies no floor, which is what
-    the preview endpoint wants: it answers "where would news generated right
-    now go?".
-
-    ``route_source`` is ``"category"`` whenever a destination exists. The
-    ``"all"`` value is never produced any more, but the column keeps the value
-    because it is part of the delivery's history and older rows still carry it.
+    A channel only receives news from the moment it was switched on:
+    ``since`` is the article's ``created_at`` and a channel qualifies when
+    ``activated_at <= since``. ``None`` applies no floor ("where would news
+    generated right now go?").
     """
     if category_id is None:
         return []
@@ -197,40 +264,33 @@ async def resolve_channels(
     return [(channel, "category") for channel in channels]
 
 
-async def channels_for_article_with_source(
-    session, article: Main
-) -> list[tuple[Channel, str]]:
-    """Resolve ``(channel, route_source)`` pairs for an article.
-
-    Same rule as :func:`channels_for_article`, additionally reporting that the
-    channel was reached through the category mapping, so the delivery row can
-    snapshot its provenance at queue time.
-    """
-    return await resolve_channels(session, article.created_at, article.category_id)
-
-
 def _has_undelivered_channel():
-    """SQL predicate: the article's category routes to an active channel that
+    """SQL predicate: some qualifying category matches an active channel that
     has no delivery row yet.
 
-    Mirrors :func:`resolve_channels` exactly, which is the whole reason it is a
-    correlated EXISTS rather than a Python pass over the batch. If the two
-    disagree the sender fails silently in both directions: a predicate that is
-    too wide selects articles the resolver will route nowhere, and they sit in
-    the batch window forever crowding out articles that do need sending; a
-    predicate that is too narrow never selects an article whose channel is
-    still missing, so it is never delivered at all.
+    Mirrors :func:`channels_for_article_multi` exactly, which is the whole
+    reason it is a correlated EXISTS rather than a Python pass over the batch.
+    If the two disagree the sender fails silently in both directions: a
+    predicate that is too wide selects articles the resolver will route
+    nowhere, and they sit in the batch window forever crowding out articles
+    that do need sending; a predicate that is too narrow never selects an
+    article whose channel is still missing, so it is never delivered at all.
 
-    The category join is an INNER join on purpose. A record with no category,
-    or one whose category has no routes, has no destination, so the predicate
-    must match nothing for it, which is exactly what the inner join does. The
-    activation floor (``channels.activated_at <= main.created_at``) is the
+    The chain is the multi-category version of the old route join:
+    ``main_category_matches`` (qualifying only) → ``categories`` (live,
+    non-deprecated, never ``other``) → ``category_channel_routes`` →
+    ``channels``. The legacy ``route_source='all'`` broadcast is gone — an
+    article reaches a channel ONLY through a qualifying category's mapping.
+
+    The activation floor (``channels.activated_at <= main.created_at``) is the
     other half of the agreement: it stops a channel that was just switched on
     from inheriting the whole archive.
     """
     return exists(
         select(1)
-        .select_from(CategoryChannelRoute)
+        .select_from(MainCategoryMatch)
+        .join(Category, Category.id == MainCategoryMatch.category_id)
+        .join(CategoryChannelRoute, CategoryChannelRoute.category_id == Category.id)
         .join(Channel, Channel.id == CategoryChannelRoute.channel_id)
         .outerjoin(
             Delivery,
@@ -241,7 +301,10 @@ def _has_undelivered_channel():
         )
         .where(
             and_(
-                CategoryChannelRoute.category_id == Main.category_id,
+                MainCategoryMatch.main_id == Main.id,
+                Category.deprecated.is_(False),
+                Category.name != OTHER_CATEGORY,
+                MainCategoryMatch.score >= settings.min_category_relevance,
                 Channel.is_active.is_(True),
                 Channel.activated_at <= Main.created_at,
                 Delivery.id.is_(None),
@@ -273,17 +336,26 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     as the queue drains. Keeping the exclusion inside the query means the
     ``LIMIT`` only ever counts articles that have real work to do.
 
-    Human gate: when ``settings.require_human_confirmation`` is True (default),
+    Human gate: when ``settings.require_human_confirmation`` is True AND
+    ``settings.auto_publish_on_classification`` is False (both default),
     rows for ``review`` articles are created as ``awaiting_confirmation`` so
     nothing publishes without explicit approval; approving the record moves it
-    to ``approved`` and flips its gated deliveries to ``pending``. When False
-    (or the article is already approved/published), rows are created as
-    ``pending`` directly. The gate only changes the initial status — the
+    to ``approved`` and flips its gated deliveries to ``pending``. When the
+    gate is off OR auto-publish on classification is True, rows are created
+    as ``pending`` directly — EXCEPT for an article with no qualifying
+    categories, which queues nothing at all regardless of settings: the
+    ``other`` fallback always needs a reviewer (the gate holds even when
+    auto-publish is on). The gate only changes the initial status — the
     anti-join/LIMIT selection above is unchanged.
 
     The per-article ``already`` set below is kept as a race guard for a second
     sender replica inserting between the SELECT and the INSERT; the unique
     constraint on ``(main_id, channel_id)`` is the final backstop.
+
+    Known limitation (audit only): in the multi-category case,
+    ``deliveries.category_id`` snapshots the TOP-1 qualifying match's
+    category — the row itself proves the (article, channel) pair came from
+    per-category routing, not which specific category produced it.
 
     Returns:
         Number of deliveries created.
@@ -307,7 +379,13 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
         )
         already = set(existing.scalars().all())
 
-        for channel, route_source in await channels_for_article_with_source(session, article):
+        # Provenance snapshot: the top-1 qualifying match (audit only).
+        primary_category_id = None
+        qualifying = await qualifying_categories(session, article)
+        if qualifying:
+            primary_category_id = qualifying[0][0]
+
+        for channel, route_source in await channels_for_article_multi(session, article):
             if channel.id in already:
                 continue
             if not render_article(article.output_json, channel.username):
@@ -320,9 +398,11 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
                 )
                 continue
             # The human gate applies only before the approval decision: a
-            # 'review' article queues as awaiting_confirmation (gate on);
-            # an already-approved/published article queues directly as
-            # pending (the decision already happened).
+            # 'review' article queues as awaiting_confirmation (gate on and
+            # auto-publish off); an already-approved/published article queues
+            # directly as pending (the decision already happened). Auto-publish
+            # on classification bypasses the gate ONLY when a qualifying match
+            # exists — which is guaranteed here by the anti-join above.
             #
             # The article status is re-read here on purpose. It was read in
             # the SELECT above, but between that query and this insert a
@@ -334,14 +414,16 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
             current = await session.get(Main, article.id)
             current_status = current.status if current is not None else article.status
             gated = (
-                current_status == "review" and settings.require_human_confirmation
+                current_status == "review"
+                and settings.require_human_confirmation
+                and not settings.auto_publish_on_classification
             )
             session.add(
                 Delivery(
                     main_id=article.id,
                     channel_id=channel.id,
-                    category_id=article.category_id,
-                    route_source=route_source,
+                    category_id=primary_category_id,
+                    route_source="category",
                     status="awaiting_confirmation" if gated else "pending",
                     attempts=0,
                 )
