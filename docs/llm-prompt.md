@@ -239,7 +239,8 @@ was generated with.
 - `app/news/isced.py` — the canonical 29-name ISCED-F 2013 vocabulary plus the
   `other` fallback, in ONE place, used to build the prompt's list, to validate
   the migration seed and to seed `category_channel_routes`. The retired
-  14-name rule vocabulary lives only in the deprecated `categories` rows.
+  14-name rule vocabulary was remapped and deleted by migration 024; only the
+  canonical names exist in `categories` now.
 - `build_user_message` — the seven-line template. It is one small, stable
   function shared by the model call and the preview, which is the point:
   two copies would drift and the preview would stop being trustworthy.

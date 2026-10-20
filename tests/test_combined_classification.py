@@ -558,10 +558,13 @@ async def test_migration_seeds_the_exact_isced_vocabulary(migrated_db):
             assert name in by_name, f"missing ISCED category: {name}"
             assert by_name[name].deprecated is False, f"{name} must be live"
 
-        # The old rule categories survive, flagged deprecated (audit trail).
+        # Migration 024 deleted the pre-ISCED vocabulary after remapping its
+        # fields/records, so only the 30 live rows may remain.
         for legacy in ("پزشکی و علوم سلامت", "ورزش و تربیت بدنی", "کامپیوتر و فناوری اطلاعات"):
-            assert by_name[legacy].deprecated is True
-        # دامپزشکی is both a legacy and an ISCED name — it stays live.
+            assert legacy not in by_name, f"legacy category survived: {legacy}"
+        assert all(row.deprecated is False for row in rows)
+        assert len(rows) == len(ISCED_CATEGORY_NAMES), "vocabulary must be exactly 29 + other"
+        # دامپزشکی was both a legacy and an ISCED name — it stays live.
         assert by_name["دامپزشکی"].deprecated is False
 
     # And the SQL artifact itself carries every name (drift guard).
@@ -608,9 +611,10 @@ async def test_migration_keeps_routes_and_seeds_new_categories(migrated_db):
         for name in ISCED_CATEGORY_NAMES:
             assert name in routed_names, f"{name} must have a seeded route"
 
-        # Deprecated rule categories keep the routes 011 gave them (nothing
-        # is ever deleted).
-        assert "ورزش و تربیت بدنی" in routed_names
+        # The retired vocabulary is gone (migration 024), so its routes are gone
+        # too; every routed category is a live ISCED row.
+        assert "ورزش و تربیت بدنی" not in routed_names
+        assert routed_names <= set(ISCED_CATEGORY_NAMES)
 
 
 @pytest.mark.asyncio

@@ -141,13 +141,15 @@ returns a record's status and (when finished) its output.
 ## 5. Database
 
 PostgreSQL is both the persistent store and the queue. Tables (see
-`migrations/023_isced_categories.sql` for the v2-combined vocabulary changes
-and `docs/erd.md` for the full picture):
+`migrations/023_isced_categories.sql` and
+`migrations/024_drop_legacy_categories.sql` for the v2-combined vocabulary
+changes and `docs/erd.md` for the full picture):
 
-- **categories** — the 29 ISCED-F 2013 intermediate fields + `other` are live
-  (`deprecated=FALSE`, with indicative `isc_code`); the retired 13+1 rule
-  vocabulary stays flagged `deprecated=TRUE` so historical FKs resolve but is
-  never answered by the model nor routed.
+- **categories** — exactly the 29 ISCED-F 2013 intermediate fields + `other`
+  are live (`deprecated=FALSE`, with indicative `isc_code`). The retired rule
+  vocabulary was remapped onto these rows and deleted by migration 024, so
+  no dead vocabulary is left for the model or the router to trip over. The
+  `deprecated` flag remains for retiring a category without breaking its FKs.
 - **fields** — 533 fields seeded from `data/fields.xlsx` (migration-free,
   via `scripts/seed_fields.py`) plus runtime-discovered fields;
   `normalized_name` is the unique stable identity, `source` distinguishes

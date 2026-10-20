@@ -6,9 +6,9 @@
 -- classification, so the old 14 rule categories are retired and the 29
 -- ISCED-F 2013 intermediate fields become the vocabulary.
 --
--- Nothing is deleted: deprecated categories keep their rows (existing FKs
--- from fields/main/deliveries keep resolving) and are only flagged
--- deprecated=TRUE so the resolver and the prompt never pick them again.
+-- Nothing is deleted HERE: deprecated categories keep their rows so existing
+-- FKs resolve. Migration 024 remaps those references and deletes the retired
+-- rows; this file stays as the historical seed of the v2-combined schema.
 --
 -- Columns added on categories:
 --   deprecated: TRUE for the retired rule categories; FALSE for everything

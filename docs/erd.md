@@ -28,11 +28,11 @@ erDiagram
         VARCHAR isc_code
         TIMESTAMP created_at
     }
-    # deprecated=TRUE marks the retired 14-name rule vocabulary: the rows stay
-    # (existing FKs from fields/main/deliveries keep resolving) but the LLM
-    # never answers with them and routing never reads them. The 29 ISCED-F
-    # 2013 intermediate fields + other stay live; isc_code is indicative
-    # metadata only (not used for routing, nullable by design).
+    # deprecated is retained for retiring a row without breaking its FKs, but
+    # the pre-ISCED rule vocabulary is gone: migration 024 remapped its fields,
+    # records and deliveries onto the closest live rows, then deleted it. The
+    # 29 ISCED-F 2013 intermediate fields + other stay live; isc_code is
+    # indicative metadata only (not used for routing, nullable by design).
 
     fields {
         SERIAL id PK
@@ -199,9 +199,9 @@ erDiagram
     # hit the same channel) is what gets queued. A category with no rows here
     # publishes nothing — no fallback to "every active channel", because a
     # fallback would make the matrix a control that looks live and is not.
-    # Legacy note: rows written before v2-combined (for the deprecated rule
-    # categories) still exist and are simply never reached, because deprecated
-    # categories never qualify a record.
+    # Legacy note: deliveries written before v2-combined were remapped to the
+    # closest ISCED category by migration 024. Routing still reads only the
+    # current matches of a record.
 
     deliveries {
         SERIAL id PK

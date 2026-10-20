@@ -142,7 +142,7 @@ project/
 │       ├── auth.py           # argon2, signed cookies, login lockout, proxy IP
 │       ├── templates/        # Jinja2 pages ported from the approved design
 │       └── static/           # panel.css (byte-identical design), HTMX, Vazirmatn
-├── migrations/               # SQL migrations 001–023 (authoritative schema)
+├── migrations/               # SQL migrations 001–024 (authoritative schema)
 ├── scripts/
 │   ├── apply_migrations.py   # Ordered, once-only runner (`_migrations` table)
 │   ├── seed_fields.py        # Loads data/fields.xlsx (idempotent)
@@ -293,7 +293,7 @@ reference: `docs/admin-panel.md`.
 | Deliveries | Filterable send states; retry failed rows |
 | Submit | Same intake as `POST /submit`, with model/prompt override selects |
 | Models / Prompts / Channels | Activate + connection test; immutable prompt versions; category→channel routes matrix |
-| Fields / Categories | Reference data; Categories carries the routes matrix, ISCED-F 2013 vocabulary with منسوخ badges, usage bars, and the "no destination" warning |
+| Fields / Categories | Reference data; Categories carries the routes matrix, the ISCED-F 2013 vocabulary, usage bars, and the "no destination" warning |
 | Users / Audit | Admin-only accounts (create, role, activate, password reset), own-password change on Profile, immutable event trail |
 
 Roles: **viewer** (read-only — every mutation is `403`), **editor**
@@ -337,6 +337,7 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 17. `019–021` — encrypted panel-managed credentials, soft-deleted panel users, `route_source` provenance
 18. `022_channel_activated_at.sql` — the channel activation floor (no archive backfill)
 19. `023_isced_categories.sql` — **v2-combined**: `categories.deprecated/isc_code`, the 29 ISCED-F 2013 rows, `fields.category_id` NULLable, `main_category_matches` (score/rank CHECKs + indexes), seeded routes for the new vocabulary, and the active `v2-combined` prompt row
+20. `024_drop_legacy_categories.sql` — remaps the legacy rule categories' fields, records and deliveries onto the closest ISCED-F rows (uncategorizing only those with no honest equivalent) and deletes the retired rows; their routes and matches cascade
 
 Migrations are additive-only and never edited after applying — schema changes
 always add the next numbered file. Full ER diagram: `docs/erd.md`.

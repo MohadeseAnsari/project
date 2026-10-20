@@ -32,12 +32,14 @@ class Base(DeclarativeBase):
 class Category(Base):
     """A destination bucket for classification.
 
-    Two vocabularies live here side by side. The LLM classifies against the
-    29 ISCED-F 2013 intermediate fields (+ the ``other`` fallback); those rows
-    have ``deprecated = FALSE`` and are the only ones a NEW record references.
-    The old rule-based categories stay as ``deprecated = TRUE`` rows so every
-    historical ``fields``/``main``/``deliveries`` FK keeps resolving — nothing
-    is ever deleted.
+    Two vocabularies met here during the v2-combined migration. The LLM
+    classifies against the 29 ISCED-F 2013 intermediate fields (+ the ``other``
+    fallback); those rows have ``deprecated = FALSE`` and are the only ones a
+    NEW record references. The old rule-based categories were remapped onto
+    these rows and deleted by migration 024, so historical
+    ``fields``/``main``/``deliveries`` FKs point at live ISCED rows (or NULL
+    where no honest equivalent existed). The ``deprecated`` flag remains for
+    future retirement without breaking FKs.
 
     ``isc_code`` records the indicative ISCED-F 2013 reference code (metadata
     only; routing never reads it).
