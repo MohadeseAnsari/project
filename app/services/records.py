@@ -860,7 +860,6 @@ async def republish_record(session, record: Main, username: str) -> list[dict]:
                     channel.id,
                 )
             continue
-        # render check
         if not render_article(record.output_json or {}, channel.username):
             continue
         session.add(Delivery(

@@ -458,7 +458,7 @@ async def test_ensure_delivers_per_category_and_snapshots_top1(session: AsyncSes
 
 @pytest.mark.asyncio
 async def test_ensure_respects_the_human_gate(monkeypatch, session: AsyncSession):
-    """review + gate on + auto-publish off → awaiting_confirmation."""
+    """review + gate on → awaiting_confirmation; gate off → pending."""
     health = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
     channels = await _seed_worker_world(session)
     session.add(CategoryChannelRoute(
@@ -466,9 +466,9 @@ async def test_ensure_respects_the_human_gate(monkeypatch, session: AsyncSession
     ))
     await session.commit()
 
-    before = (settings.require_human_confirmation, settings.auto_publish_on_classification)
+    before = settings.require_human_confirmation
+    # Gate ON → awaiting_confirmation.
     monkeypatch.setattr(settings, "require_human_confirmation", True)
-    monkeypatch.setattr(settings, "auto_publish_on_classification", False)
     job = await _JobBuilder(session).run(
         categories=[{"category": "بهداشت", "score": 0.9, "reason": "r"}]
     )
@@ -476,16 +476,15 @@ async def test_ensure_respects_the_human_gate(monkeypatch, session: AsyncSession
     row = (await session.execute(select(Delivery))).scalar_one()
     assert row.status == "awaiting_confirmation"
 
-    # Flipping auto-publish on lifts the gate for qualifying records.
-    monkeypatch.setattr(settings, "auto_publish_on_classification", True)
+    # Gate OFF → pending directly.
+    monkeypatch.setattr(settings, "require_human_confirmation", False)
     job2 = await _JobBuilder(session).run(
         categories=[{"category": "بهداشت", "score": 0.9, "reason": "r"}]
     )
     assert await ensure_pending_deliveries(session) == 1
     rows = (await session.execute(select(Delivery))).scalars().all()
     assert {r.status for r in rows} == {"awaiting_confirmation", "pending"}
-    monkeypatch.setattr(settings, "require_human_confirmation", before[0])
-    monkeypatch.setattr(settings, "auto_publish_on_classification", before[1])
+    monkeypatch.setattr(settings, "require_human_confirmation", before)
 
 
 # ==========================================================================

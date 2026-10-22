@@ -336,17 +336,13 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
     as the queue drains. Keeping the exclusion inside the query means the
     ``LIMIT`` only ever counts articles that have real work to do.
 
-    Human gate: when ``settings.require_human_confirmation`` is True AND
-    ``settings.auto_publish_on_classification`` is False (both default),
+    Human gate: when ``settings.require_human_confirmation`` is True,
     rows for ``review`` articles are created as ``awaiting_confirmation`` so
     nothing publishes without explicit approval; approving the record moves it
     to ``approved`` and flips its gated deliveries to ``pending``. When the
-    gate is off OR auto-publish on classification is True, rows are created
-    as ``pending`` directly — EXCEPT for an article with no qualifying
-    categories, which queues nothing at all regardless of settings: the
-    ``other`` fallback always needs a reviewer (the gate holds even when
-    auto-publish is on). The gate only changes the initial status — the
-    anti-join/LIMIT selection above is unchanged.
+    gate is off, rows are created as ``pending`` directly — EXCEPT for an
+    article with no qualifying categories, which queues nothing at all
+    regardless of settings: the ``other`` fallback always needs a reviewer.
 
     The per-article ``already`` set below is kept as a race guard for a second
     sender replica inserting between the SELECT and the INSERT; the unique

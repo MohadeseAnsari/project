@@ -66,6 +66,10 @@ async def main(apply: bool) -> int:
             title_norm = normalize_field(title)
             user_norm = normalize_field(username)
 
+            # "other" is a fallback, never an auto-route target.
+            if title_norm == "other" or user_norm == "other":
+                continue
+
             target = cat_by_norm.get(title_norm) or cat_by_norm.get(user_norm)
             if target is None:
                 no_match = True
