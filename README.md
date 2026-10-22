@@ -190,7 +190,7 @@ nothing secret is ever baked into images or committed.
 | `SENDER_BACKOFF_BASE_SECONDS` | Base for exponential send backoff | No (default: 10) |
 | `SENDER_REQUEST_TIMEOUT_SECONDS` | Per-send HTTP timeout | No (default: 20) |
 | `SENDER_LEASE_MINUTES` | Abandoned-send recovery timeout | No (default: 5) |
-| `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as `awaiting_confirmation` until approval | No (default: true) |
+| `REQUIRE_HUMAN_CONFIRMATION` | Gate deliveries as `awaiting_confirmation` until approval | No (default: false) |
 | `PANEL_ADMIN_USERNAME` | Review panel first admin username | No (default: admin) |
 | `PANEL_ADMIN_PASSWORD` | Review panel first admin password (env only, argon2-hashed) | Yes for panel login |
 | `PANEL_SECRET_KEY` | Review panel cookie signing key | Yes for panel |
@@ -249,6 +249,28 @@ Panel: set `PANEL_ADMIN_PASSWORD` + `PANEL_SECRET_KEY`, `docker compose up -d
 web`, and open it through your HTTPS reverse proxy (it forwards to loopback
 `127.0.0.1:8081`; plain HTTP on `:8081` is never exposed). Log in, give the
 client their own account from the Users page — never share the admin login.
+
+## Auto-publish mode (no human review)
+
+Set `REQUIRE_HUMAN_CONFIRMATION=false` in `.env` to auto-publish news to the
+matched categories' channels without review:
+
+```bash
+# 1. Create channels in the panel (title = category name, e.g. "بهداشت")
+# 2. Auto-route them to categories
+docker compose exec api python scripts/auto_route_channels.py           # preview
+docker compose exec api python scripts/auto_route_channels.py --apply   # write
+# 3. Enable auto-publish
+echo "REQUIRE_HUMAN_CONFIRMATION=false" >> .env
+docker compose up -d
+```
+
+⚠️ Risk: mis-classification causes immediate wrong publication. Recovery:
+delete the message from the wrong channel, reassign the category in the
+"دسته‌بندی‌های خودکار" tab, then click "باز انتشار در کانال‌های درست".
+Re-publish never deletes messages.
+
+Setting `REQUIRES_HUMAN_CONFIRMATION=true` restores the manual gate.
 
 ## Machine API reference
 

@@ -197,3 +197,11 @@ this panel is the only place counts appear.
    (`message_id=174486`, audit `submit,approve`).
 10. **Machine API untouched.** `POST /submit`, `/health`, `GET /records/{id}`
     keep their exact contracts (covered by the existing suite).
+
+## Auto-publish mode (REQUIRE_HUMAN_CONFIRMATION=false)
+
+When the gate is off, the records list shows an info banner and two extra
+filters: `auto_published=yes` (published without approval) and
+`needs_classification=yes` (review records with no qualifying match). The
+"Re-publish to correct channels" button appears on the categories tab of
+published/approved records for recovery after a mis-classification.

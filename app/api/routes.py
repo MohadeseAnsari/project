@@ -352,6 +352,44 @@ async def override_category_matches(
     }
 
 
+@router.post(
+    "/records/{record_id}/republish",
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        409: {"model": ErrorResponse, "description": "Record not published/approved or no matches"},
+    },
+)
+async def republish_record_endpoint(
+    record_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent."""
+    _require_secret(payload)
+    body = payload or {}
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    try:
+        queued = await record_service.republish_record(
+            session, record, body.get("username", "api"),
+        )
+    except ValueError as e:
+        message = str(e)
+        if message == "not-published":
+            raise HTTPException(status_code=409, detail="Record is not published or approved")
+        if message == "no-matches":
+            raise HTTPException(status_code=409, detail="Record has no category matches")
+        raise HTTPException(status_code=422, detail=message)
+    await audit_service.record_event(
+        session, None, "republish", main_id=record_id,
+        detail=f"queued={len(queued)}",
+    )
+    return {"record_id": record_id, "queued": queued}
+
+
 @router.patch(
     "/records/{record_id}",
     response_model=RecordDetailResponse,

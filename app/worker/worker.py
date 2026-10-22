@@ -30,6 +30,7 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.db.connection import async_session
 from app.db.models import Field, Main, Model, Prompt
+from app.news.isced import OTHER_CATEGORY
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
 from app.services.records import store_generated_classification
@@ -252,11 +253,62 @@ async def process_job(session, job: Main) -> None:
     # ONE call did both: every qualifying ISCED category match is stored
     # here (old rows replaced), ``job.category_id`` becomes the display
     # primary; nothing qualifies → single ``other`` fallback row and the
-    # dispatcher will create NO deliveries.
-    await store_generated_classification(
+    # dispatcher will create NO deliveries (unless configured otherwise).
+    qualifying = await store_generated_classification(
         session, job, output, model_id=job.model_id, prompt_id=job.prompt_id,
     )
     await session.commit()
+
+    # Unmatched handling (settings.unmatched_category_behavior).
+    if not qualifying:
+        behavior = settings.unmatched_category_behavior
+        if behavior == "failed":
+            assert_record_transition(job.status, "failed")
+            job.status = "failed"
+            job.error_message = "No category matched above threshold"
+            job.updated_at = datetime.utcnow()
+            await session.commit()
+            logger.info("Completed job id=%s (failed: no category)", job.id)
+            return
+        elif behavior == "fallback_other":
+            from app.db.models import Category, Channel, CategoryChannelRoute, Delivery
+            from app.messaging.dispatcher import channels_for_article_multi
+
+            other = (
+                await session.execute(
+                    select(Category).where(Category.name == OTHER_CATEGORY)
+                )
+            ).scalar_one_or_none()
+            if other is not None:
+                # channels routed to "other" (if any)
+                ch_rows = await session.execute(
+                    select(Channel)
+                    .join(CategoryChannelRoute, CategoryChannelRoute.channel_id == Channel.id)
+                    .where(
+                        CategoryChannelRoute.category_id == other.id,
+                        Channel.is_active.is_(True),
+                    )
+                )
+                gated = settings.require_human_confirmation
+                for ch in ch_rows.scalars().all():
+                    if ch.activated_at is not None and ch.activated_at > job.created_at:
+                        continue
+                    session.add(Delivery(
+                        main_id=job.id,
+                        channel_id=ch.id,
+                        category_id=other.id,
+                        route_source="category",
+                        status="awaiting_confirmation" if gated else "pending",
+                        attempts=0,
+                    ))
+                await session.commit()
+                logger.info(
+                    "Completed job id=%s (fallback_other: %d deliveries)",
+                    job.id,
+                    len(ch_rows.scalars().all()),
+                )
+                # Note: counts above may be off due to consumed iterator; log is informational.
+                return
     logger.info("Completed job id=%s", job.id)
 
 

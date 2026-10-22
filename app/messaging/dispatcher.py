@@ -398,13 +398,10 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
                 )
                 continue
             # The human gate applies only before the approval decision: a
-            # 'review' article queues as awaiting_confirmation (gate on and
-            # auto-publish off); an already-approved/published article queues
-            # directly as pending (the decision already happened). Auto-publish
-            # on classification bypasses the gate ONLY when a qualifying match
-            # exists — which is guaranteed here by the anti-join above.
-            #
-            # The article status is re-read here on purpose. It was read in
+            # 'review' article queues as awaiting_confirmation (gate on); an
+            # already-approved/published article queues directly as pending (the
+            # decision already happened). The article status is re-read here on
+            # purpose (see note below).
             # the SELECT above, but between that query and this insert a
             # reviewer can approve the article — and approval releases only
             # the deliveries that exist at that moment. Queueing a fresh
@@ -413,11 +410,7 @@ async def ensure_pending_deliveries(session, batch_size: int = 500) -> int:
             # again, and nothing else would ever flip it to pending.
             current = await session.get(Main, article.id)
             current_status = current.status if current is not None else article.status
-            gated = (
-                current_status == "review"
-                and settings.require_human_confirmation
-                and not settings.auto_publish_on_classification
-            )
+            gated = current_status == "review" and settings.require_human_confirmation
             session.add(
                 Delivery(
                     main_id=article.id,

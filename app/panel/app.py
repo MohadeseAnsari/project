@@ -472,6 +472,7 @@ async def records_page(
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, approved: str = "",
     tab: str = "", platform: str = "", main_id: str = "",
+    auto_published: str = "", needs_classification: str = "",
 ):
     """Records/review and deliveries: one page, two bookmarkable tabs.
 
@@ -550,21 +551,27 @@ async def records_page(
     counts = await record_service.record_status_counts(session)
     options = await record_service.filter_options(session)
     approved_flag = {"yes": True, "no": False}.get(approved)
+    auto_pub_flag = True if auto_published == "yes" else None
+    needs_cls_flag = True if needs_classification == "yes" else None
     items, total = await record_service.list_records(
         session, page=page, page_size=page_size, status=status or None,
         field=field or None, university=university or None, q=q or None,
         order=order, approved=approved_flag,
+        auto_published=auto_pub_flag, needs_classification=needs_cls_flag,
     )
     needs_review = await record_service.needs_review_count(session)
     # Primary category + match-count badge per row (one grouped query).
     category_view = await record_service.primary_category_snapshot(
         session, [r.id for r in items]
     )
-    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
+    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved, "auto_published": auto_published, "needs_classification": needs_classification}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
             request, user, active="records", tab="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
+            auto_published=auto_published, needs_classification=needs_classification,
+            require_human_confirmation=settings.require_human_confirmation,
+            unmatched_category_behavior=settings.unmatched_category_behavior,
             # Record states only. The delivery counts that used to sit here
             # (kpi_sent) would answer a question this page is not asked, and
             # they are the first thing the operator scrolls past.
@@ -584,17 +591,20 @@ async def records_table(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, page_size: int = 20,
-    approved: str = "",
+    approved: str = "", auto_published: str = "", needs_classification: str = "",
 ):
     """HTMX partial: one page of filtered record rows (used by the list page)."""
     user = await require_login(request, session)
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     approved_flag = {"yes": True, "no": False}.get(approved)
+    auto_pub_flag = True if auto_published == "yes" else None
+    needs_cls_flag = True if needs_classification == "yes" else None
     items, total = await record_service.list_records(
         session, page=page, page_size=page_size, status=status or None,
         field=field or None, university=university or None, q=q or None,
         order=order, approved=approved_flag,
+        auto_published=auto_pub_flag, needs_classification=needs_cls_flag,
     )
     # Primary category + match-count badge per row (one grouped query).
     category_view = await record_service.primary_category_snapshot(
@@ -602,7 +612,7 @@ async def records_table(
     )
     from urllib.parse import urlencode
 
-    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
+    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved, "auto_published": auto_published, "needs_classification": needs_classification}.items() if v})
     return templates.TemplateResponse(request, "records_table.html",
         {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str, "category_view": category_view},
     )
@@ -751,6 +761,30 @@ async def record_regenerate(
         return RedirectResponse(url=f"/records/{record_id}", status_code=302)
     await audit_service.record_event(session, user.id, "regenerate", record.id, "تولید دوباره با مدل")
     return RedirectResponse(url=f"/records/{record_id}", status_code=302)
+
+
+@panel_app.post("/records/{record_id}/republish")
+async def record_republish(request: Request, record_id: int, session: AsyncSession = Depends(session_dep)):
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    try:
+        queued = await record_service.republish_record(session, record, user.username)
+    except ValueError as e:
+        message = str(e)
+        error = "رکورد منتشر یا تأیید نشده است." if message == "not-published" else (
+            "رکورد دسته‌بندی ندارد." if message == "no-matches" else message
+        )
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=error), status_code=422)
+    await audit_service.record_event(session, user.id, "republish", record_id, f"queued={len(queued)}")
+    return RedirectResponse(url=f"/records/{record_id}?tab=categories", status_code=303)
 
 
 @panel_app.post("/records/{record_id}/review")

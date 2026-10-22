@@ -49,6 +49,13 @@
           {% endfor %}
         </tbody>
       </table>
+      {% if record.status in ('published', 'approved') and category_matches %}
+      <form method="post" action="/records/{{ record.id }}/republish" style="display:flex;gap:9px;align-items:center;margin-top:10px" onsubmit="return confirm('باز انتشار در کانال‌های درست؟ پیام‌های قبلاً ارسال‌شده حذف نمی‌شوند.')">
+        {{ csrf_field(request) | safe }}
+        <button class="btn btn-primary btn-sm" type="submit">باز انتشار در کانال‌های درست</button>
+        <span class="hint">فقط برای کانال‌هایی که هنوز ارسال نشده‌اند صف ایجاد می‌شود.</span>
+      </form>
+      {% endif %}
       {% if classification_fallback %}
       <div class="note" style="margin-top:10px">دسته‌بندی خودکار ناموفق بود — لطفاً دستی تعیین کنید.
         <form method="post" action="/records/{{ record.id }}/category" style="display:flex;gap:9px;align-items:center;margin-top:9px">{{ csrf_field(request) | safe }}

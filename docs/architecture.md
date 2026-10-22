@@ -344,3 +344,44 @@ project/
 ├── .env.example
 └── README.md
 ```
+
+## Auto-publish mode
+
+When `REQUIRE_HUMAN_CONFIRMATION=false`, news is auto-published to the matched
+categories' channels without human review. The LLM's ISCED-F 2013 classification
+drives routing (multi-category union), so an article reaches every channel whose
+category was matched.
+
+### Auto-routing helper
+
+`scripts/auto_route_channels.py` maps existing channels to categories by matching
+the channel's title (or username as fallback) to `categories.name` (normalized).
+Run once after creating channels:
+
+    python scripts/auto_route_channels.py           # preview
+    python scripts/auto_route_channels.py --apply   # write
+
+It is idempotent (ON CONFLICT DO NOTHING) and exits 1 if any channel has no
+matching category, so CI can flag it. The "other" category is never auto-routed.
+
+### Unmatched articles
+
+`unmatched_category_behavior` (review | fallback_other | failed) controls what
+happens when no category reaches `MIN_CATEGORY_RELEVANCE`:
+- review (default): article stays in review, visible via the "needs-classification" filter.
+- fallback_other: enqueue deliveries for the "other" category's channels.
+- failed: move to failed with a clear error message.
+
+### Recovery (mis-classification)
+
+With auto-publish on, mis-classification causes immediate wrong publication.
+Recovery: delete the message from the wrong channel (explicit operator action),
+reassign the category in the panel (which replaces `main_category_matches`),
+then click "Re-publish to correct channels" to queue deliveries for the correct
+channels. Re-publish never deletes messages.
+
+### Trade-offs
+
+No pre-publish review; every article is either published, in review (visible
+via filter), or failed. Setting `REQUIRE_HUMAN_CONFIRMATION=true` fully restores
+the manual gate.

@@ -87,13 +87,12 @@ def record_filters(
     university: str | None = None,
     q: str | None = None,
     approved: bool | None = None,
+    auto_published: bool | None = None,
+    needs_classification: bool | None = None,
 ) -> list:
-    """Build the shared WHERE clauses for record listings (panel + API).
+    """Build the shared WHERE clauses for record listings (panel + API)."""
+    from sqlalchemy import exists
 
-    ``approved`` is now status-based (the lifecycle owns the truth):
-    True -> statuses ``approved``/``published``; False -> everything else
-    (still undecided or failed/rejected).
-    """
     filters = []
     if status:
         filters.append(Main.status == status)
@@ -117,6 +116,22 @@ def record_filters(
                 Main.supervisor.ilike(like),
             )
         )
+    if auto_published is True:
+        filters.append(Main.published_at.isnot(None))
+        filters.append(Main.approved_at.is_(None))
+    if needs_classification is True:
+        filters.append(Main.status == "review")
+        # no qualifying match: no main_category_matches row with score >= threshold
+        qualifying = (
+            select(MainCategoryMatch.id)
+            .where(
+                MainCategoryMatch.main_id == Main.id,
+                MainCategoryMatch.score >= settings.min_category_relevance,
+            )
+            .correlate(Main)
+            .exists()
+        )
+        filters.append(~qualifying)
     return filters
 
 
@@ -138,9 +153,11 @@ async def list_records(
     q: str | None = None,
     order: str = "newest",
     approved: bool | None = None,
+    auto_published: bool | None = None,
+    needs_classification: bool | None = None,
 ) -> tuple[list[Main], int]:
     """Return ``(page rows, filtered total)`` with SQL LIMIT/OFFSET + COUNT."""
-    filters = record_filters(status, field, university, q, approved)
+    filters = record_filters(status, field, university, q, approved, auto_published, needs_classification)
     count_query = select(func.count()).select_from(Main)
     if filters:
         count_query = count_query.where(*filters)
@@ -769,6 +786,99 @@ async def needs_review_count(session) -> int:
 
 
 async def reassign_category(session, record: Main, category_id: int) -> Main:
+    """Reclassify one record manually (operator correction).
+
+    Routing reads ``main_category_matches``, so the correction writes a
+    single definitive manual match (score 1.0, reason records the reviewer)
+    and replaces whatever the LLM had stored — otherwise the record would
+    keep routing to the old categories. ``main.category_id`` (the display
+    primary) is set to the same category.
+
+    Raises:
+        ValueError: ``unknown-category`` when the category does not exist.
+    """
+    from app.db.models import Category
+
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise ValueError("unknown-category")
+    await _delete_matches(session, record.id)
+    session.add(MainCategoryMatch(
+        main_id=record.id,
+        category_id=category_id,
+        score=1.0,
+        rank=1,
+        reason="تعیین دستی توسط بازبین",
+    ))
+    record.category_id = category_id
+    record.updated_at = datetime.utcnow()
+    await session.commit()
+    return record
+
+
+async def republish_record(session, record: Main, username: str) -> list[dict]:
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent.
+
+    Used after a manual category reassignment to push the article to the
+    correct channels. Already-sent deliveries are left alone (with a warning);
+    failed ones are retried; channels that have no delivery yet get a new
+    pending one.
+
+    Returns the list of channels newly queued (id, platform, title).
+    """
+    from app.db.models import Channel, Delivery
+    from app.messaging.dispatcher import channels_for_article_multi, qualifying_categories
+    from app.messaging.formatting import render_article
+
+    if record.status not in ("published", "approved"):
+        raise ValueError("not-published")
+    qualifying = await qualifying_categories(session, record)
+    if not qualifying:
+        raise ValueError("no-matches")
+
+    existing = await session.execute(
+        select(Delivery).where(Delivery.main_id == record.id)
+    )
+    existing_list = list(existing.scalars().all())
+    already_channels = {d.channel_id for d in existing_list}
+
+    # Reset failed deliveries to pending (retry).
+    for d in existing_list:
+        if d.status == "failed":
+            d.status = "pending"
+            d.attempts = 0
+            d.next_attempt_at = datetime.utcnow()
+            d.updated_at = datetime.utcnow()
+
+    newly_queued: list[dict] = []
+    for channel, _source in await channels_for_article_multi(session, record):
+        if channel.id in already_channels:
+            if any(d.channel_id == channel.id and d.status == "sent" for d in existing_list):
+                logger.warning(
+                    "republish: delivery already sent to channel %s, skipping",
+                    channel.id,
+                )
+            continue
+        # render check
+        if not render_article(record.output_json or {}, channel.username):
+            continue
+        session.add(Delivery(
+            main_id=record.id,
+            channel_id=channel.id,
+            category_id=qualifying[0][0] if qualifying else record.category_id,
+            route_source="category",
+            status="pending",
+            attempts=0,
+        ))
+        newly_queued.append({"id": channel.id, "platform": channel.platform, "title": channel.title})
+
+    await session.commit()
+    await session.refresh(record)
+    logger.info(
+        "republish: record=%s user=%s queued=%d", record.id, username, len(newly_queued)
+    )
+    return newly_queued
     """Reclassify one record manually (operator correction).
 
     Routing reads ``main_category_matches``, so the correction writes a

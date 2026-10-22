@@ -4,6 +4,8 @@ All secrets (shared secret, AvalAI API key, database credentials) come from
 environment configuration only — nothing is hard-coded as a real credential.
 """
 
+import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,17 +54,20 @@ class Settings(BaseSettings):
     top_n_categories: int = 3
     # A match only counts (for storage and routing) at or above this score.
     min_category_relevance: float = 0.5
-    # If True, deliveries for articles with at least one qualifying match skip
-    # the human gate (start as ``pending``). The default keeps the human gate:
-    # an article with no qualifying match NEVER auto-publishes, even when this
-    # is True — it goes to ``other`` and waits for a reviewer.
-    auto_publish_on_classification: bool = False
 
-    # Compact LLM output (v3-compact): reasons are optional for high-confidence
-    # matches. Set to 101 to always require a reason (stricter audit).
+    # Human gate for publishing. When True, newly queued deliveries start as
+    # `awaiting_confirmation`; when False, news is auto-published to matched
+    # channels. Default off (auto-publish mode) per the operator's request.
+    require_human_confirmation: bool = False
+
+    # What to do when an article has NO qualifying category match.
+    # "review" (default, safest): stays in review, visible via filter.
+    # "fallback_other": enqueue deliveries for the "other" category's channels.
+    # "failed": move to failed with a clear error message.
+    unmatched_category_behavior: str = "review"
+
+    # Compact LLM output (v3-compact).
     skip_reason_above_score: int = 90
-    # If True, store the FULL raw LLM response JSON in main.llm_raw_output
-    # (debugging aid, ~200 bytes/record). Default OFF.
     store_llm_raw_output: bool = False
 
     # Outbound delivery (sender Worker).
@@ -96,12 +101,6 @@ class Settings(BaseSettings):
     # A send attempt is normally seconds; a `sending` row older than this means
     # the Worker died mid-call, so it is returned to `pending`.
     sender_lease_minutes: int = 5
-
-    # Human gate for publishing. When True (default), newly queued deliveries
-    # start as `awaiting_confirmation` so an article is never published without
-    # explicit approval; approving flips them to `pending`. When False, queueing
-    # writes `pending` directly (the pre-gate behaviour).
-    require_human_confirmation: bool = True
 
     # Review panel (server-rendered Jinja2 + HTMX). Credentials come from env
     # only; the first admin is created at runtime, never seeded in migrations.
@@ -146,3 +145,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.require_human_confirmation:
+    logging.warning(
+        "REQUIRE_HUMAN_CONFIRMATION=false: news will be auto-published to "
+        "matched categories' channels without human review. "
+        "Ensure auto-routing is verified (scripts/auto_route_channels.py)."
+    )
