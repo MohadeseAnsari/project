@@ -257,31 +257,78 @@ def _dedupe_and_sort(matches: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda m: (-m["score"], m["category"]))
 
 
+async def _active_categories_by_code(session) -> dict[int, Category]:
+    """Live classification vocabulary: short_code -> Category (deprecated excluded)."""
+    rows = (
+        await session.execute(
+            select(Category).where(
+                Category.deprecated.is_(False),
+                Category.short_code.isnot(None),
+            )
+        )
+    ).scalars().all()
+    return {row.short_code: row for row in rows}
+
+
 async def normalize_llm_categories(session, output) -> list[dict]:
     """Post-process the LLM's ``categories`` list into trustworthy matches.
 
-    Defence layers, in order: exact-name validation against the live
+    Accepts BOTH the new compact form (``code``/``score`` 0-100/``reason``)
+    and the legacy name form (``category``/``score`` 0.0-1.0) for backward
+    compat. Defence layers, in order: code/name validation against the live
     (non-deprecated) ``categories`` rows rejects hallucinations; scores are
-    clamped to [0.0, 1.0]; duplicates collapse to the highest score; results
-    sort by score desc. Names/ids are resolved here so callers only insert.
+    clamped; duplicates collapse to the highest score; results sort by score
+    desc. Codes/ids are resolved here so callers only insert.
 
-    ``other`` is kept in the validated list (the LLM may say it) but it never
-    auto-qualifies — callers must treat it as the fallback, never as routing.
+    ``other`` (code 0) is kept in the validated list (the LLM may say it) but
+    it never auto-qualifies — callers must treat it as the fallback.
     """
-    vocabulary = await _active_categories(session)
+    code_to_category = await _active_categories_by_code(session)
+    name_to_category = await _active_categories(session)
+
     validated: list[dict] = []
     for match in getattr(output, "categories", None) or []:
-        name = (match.category or "").strip()
-        category = vocabulary.get(name)
+        # Compact form (v3-compact): code + int score + reason.
+        code = getattr(match, "code", None)
+        if code is not None:
+            category = code_to_category.get(code)
+            if category is None:
+                continue  # hallucinated / unknown code: always filtered
+            raw_score = getattr(match, "score", 0)
+            try:
+                score_int = int(raw_score)
+            except (TypeError, ValueError):
+                score_int = 0
+            score = max(0.0, min(1.0, score_int / 100.0))
+            validated.append({
+                "category": category.name,
+                "category_id": category.id,
+                "score": score,
+                "reason": (getattr(match, "reason", None) or "").strip() or None,
+                "code": code,
+            })
+            continue
+
+        # Legacy form (v2-combined): name + float score + reason.
+        name = (getattr(match, "category", None) or "").strip()
+        category = name_to_category.get(name)
         if category is None:
             continue  # hallucinated / deprecated: always filtered
         validated.append({
             "category": name,
             "category_id": category.id,
-            "score": _clamp_score(match.score),
-            "reason": (match.reason or "").strip() or None,
+            "score": _clamp_score(getattr(match, "score", 0)),
+            "reason": (getattr(match, "reason", None) or "").strip() or None,
+            "code": getattr(category, "short_code", None),
         })
-    return _dedupe_and_sort(validated)
+
+    # Dedupe by category_id keeping the highest score, then sort desc.
+    best: dict[int, dict] = {}
+    for match in validated:
+        cid = match["category_id"]
+        if cid not in best or match["score"] > best[cid]["score"]:
+            best[cid] = match
+    return sorted(best.values(), key=lambda m: (-m["score"], m["category"]))
 
 
 async def _delete_matches(session, record_id: int) -> None:
@@ -314,6 +361,12 @@ async def store_generated_classification(
     """
     await _delete_matches(session, record.id)
 
+    if settings.store_llm_raw_output:
+        try:
+            record.llm_raw_output = output.model_dump_json()
+        except Exception:  # pragma: no cover - audit only
+            pass
+
     validated = await normalize_llm_categories(session, output)
     qualifying = [
         m for m in validated
@@ -322,12 +375,18 @@ async def store_generated_classification(
 
     if qualifying:
         for rank, match in enumerate(qualifying, start=1):
+            # Skip the reason for high-confidence matches when configured
+            # (Optimization D + feature flag). Default threshold 90.
+            if match["score"] * 100 >= settings.skip_reason_above_score:
+                reason = None
+            else:
+                reason = match["reason"]
             session.add(MainCategoryMatch(
                 main_id=record.id,
                 category_id=match["category_id"],
                 score=match["score"],
                 rank=rank,
-                reason=match["reason"],
+                reason=reason,
                 model_id=model_id,
                 prompt_id=prompt_id,
             ))
@@ -336,6 +395,16 @@ async def store_generated_classification(
             f"{match['category']} ({match['score']:.2f})" for match in qualifying
         )
         logger.info("LLM classified as: %s", logger_classified)
+        codes_log = ", ".join(
+            f"code={match.get('code', '?')} score={int(round(match['score'] * 100))}"
+            for match in qualifying
+        )
+        logger.info("LLM classified: %s", codes_log)
+        if settings.store_llm_raw_output:
+            try:
+                record.llm_raw_output = output.model_dump_json()
+            except Exception:  # pragma: no cover - audit only
+                pass
         return qualifying
 
     other = (await _active_categories(session)).get(OTHER_CATEGORY)
@@ -418,16 +487,26 @@ async def replace_category_matches(session, record_id: int, matches) -> Main:
     validated: list[dict] = []
     for match in matches:
         if isinstance(match, dict):
+            category_id = match.get("category_id")
             name = (match.get("category") or "").strip()
             score = match.get("score")
             reason = match.get("reason")
         else:
-            name = (match.category or "").strip()
+            category_id = getattr(match, "category_id", None)
+            name = (getattr(match, "category", None) or "").strip()
             score = getattr(match, "score", None)
             reason = getattr(match, "reason", None)
-        category = vocabulary.get(name)
-        if category is None:
-            raise ValueError(f"unknown-category:{name}")
+
+        if category_id is not None:
+            category = await session.get(Category, category_id)
+            if category is None:
+                raise ValueError(f"unknown-category:{category_id}")
+            name = category.name
+        else:
+            category = vocabulary.get(name)
+            if category is None:
+                raise ValueError(f"unknown-category:{name}")
+
         validated.append({
             "category": name,
             "category_id": category.id,

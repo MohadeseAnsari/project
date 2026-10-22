@@ -79,8 +79,10 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 One call, one answer, one point of trust:
 
 - Classification of a thesis comes from the SAME LLM call that writes the news
-  (v2-combined): the model answers with up to 3
-  `{category, score 0.0–1.0, reason}` entries next to the article.
+  (v3-compact): the model answers with up to 3
+  `{code 0-29, score 0-100, reason}` entries next to the article; the worker
+  maps codes back to ISCED-F 2013 category rows (compact output, ~75 % fewer
+  classification tokens).
 - The vocabulary is the 29 ISCED-F 2013 intermediate fields + the `other`
   fallback, defined once in `app/news/isced.py` and pinned char-for-char
   (ZWNJ included) against the live `categories` rows.
@@ -136,9 +138,9 @@ One call, one answer, one point of trust:
   provider defaults for them — see the panel note where they are displayed.
 - **Required output shape**: strict JSON `{title, lead, body, categories}`
   validated by Pydantic (`GeneratedNews`), where `categories` is a list of
-  at most 3 `{category, score, reason}` with exact ISCED-F 2013 names from
-  the numbered list embedded in the system prompt (+`other` fallback);
-  anything else fails the job with the error.
+  at most 3 `{code, score, reason}` (code 0-29, score 0-100, reason <= 5
+  words); codes not present in the live `categories` table are dropped as
+  hallucinations and anything else fails the job with the error.
 - **Preview**: the record page's `پرامپت نهایی` tab renders the exact system
   prompt + user message + resolved model name for that record. No secret is
   ever included in either message or shown in the preview.
@@ -322,7 +324,7 @@ project/
 │   │   └── classification.py# RETIRED rule engine (reference only)
 │   ├── news/
 │   │   ├── generation.py    # Combined LLM call (news + classification)
-│   │   ├── prompts.py       # v2-combined prompt template
+│   │   ├── prompts.py       # v3-compact prompt template
 │   │   └── isced.py         # Canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/
 │   │   └── worker.py        # Sequential worker

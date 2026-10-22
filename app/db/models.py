@@ -52,6 +52,9 @@ class Category(Base):
     description = Column(Text, nullable=True)
     deprecated = Column(Boolean, nullable=False, default=False, server_default="false")
     isc_code = Column(String(10), nullable=True)
+    # Internal compact code for LLM output (0 = other, 1-29 = ISCED). NULL for
+    # deprecated/retired rows. NOT the official ISCED-F 2013 code (see isc_code).
+    short_code = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     fields = relationship("Field", back_populates="category")
@@ -231,6 +234,9 @@ class Main(Base):
     model_id = Column(Integer, ForeignKey("models.id"), nullable=True)
     prompt_id = Column(Integer, ForeignKey("prompts.id"), nullable=True)
     output_json = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    # Optional audit copy of the FULL raw LLM response JSON (feature flag
+    # ``store_llm_raw_output``). NULL by default to save ~200 bytes/record.
+    llm_raw_output = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
     heartbeat_at = Column(DateTime, nullable=True)

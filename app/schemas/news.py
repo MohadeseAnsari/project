@@ -245,12 +245,10 @@ class ErrorResponse(BaseModel):
 
 
 class CategoryMatch(BaseModel):
-    """One ISCED category matched for an article (returned by the LLM).
+    """One ISCED category matched for an article (legacy LLM form).
 
-    ``category`` must be one of the 29 EXACT ISCED-F 2013 Persian names (or
-    "other"); anything else is treated as a hallucination and filtered by the
-    worker. ``score`` is nominally 0.0–1.0 — values outside that range are
-    clamped during post-processing rather than failing the whole generation.
+    Kept for backward compatibility (API/panel display uses
+    ``CategoryMatchResponse``). New LLM output uses ``CategoryMatchCompact``.
     """
 
     category: str = Field(description="Exact ISCED-F 2013 category name (or \"other\").")
@@ -258,21 +256,43 @@ class CategoryMatch(BaseModel):
     reason: str = Field(description="Brief Persian explanation, one sentence max.")
 
 
+class CategoryMatchCompact(BaseModel):
+    """Compact LLM output: one ISCED category matched for an article.
+
+    Used by ``GeneratedNews.categories`` (the LLM-facing schema). The LLM
+    returns a code (0-29) + integer score (0-100) + short reason, which is
+    ~5x cheaper than the full name + float form. The worker maps codes back to
+    full category rows.
+    """
+
+    code: int = Field(ge=0, le=29, description="Internal category short_code. 0 = other.")
+    score: int = Field(ge=0, le=100, description="Relevancy 0-100 (integer, not float).")
+    reason: str = Field(default="", description="Max 5 words. Empty if score >= 90.")
+
+    @field_validator("reason")
+    @classmethod
+    def _truncate_reason(cls, v: str) -> str:
+        # Safety net: keep the whole job alive if the LLM went slightly over.
+        if len(v) > 80:
+            return v[:77] + "..."
+        return v.strip()
+
+
 class GeneratedNews(BaseModel):
     """Structured LLM output: news + classification in ONE response.
 
-    The single call per thesis (v2-combined) writes the article and the
-    ISCED-F 2013 classification together; ``categories`` defaults to [] so
+    The single call per thesis (v3-compact) writes the article and the
+    ISCED-F 2013 classification together. ``categories`` defaults to [] so
     older constructors (tests, saved drafts) keep working unchanged.
     """
 
     title: str
     lead: str
     body: str
-    categories: list[CategoryMatch] = Field(
+    categories: list[CategoryMatchCompact] = Field(
         default_factory=list,
         max_length=3,
-        description="Top ISCED-F 2013 categories, highest score first. Empty if none apply.",
+        description="Top ISCED-F 2013 categories as compact code/score/reason. Empty if none apply.",
     )
 
 

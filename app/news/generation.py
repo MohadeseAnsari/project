@@ -311,4 +311,20 @@ async def generate_news(
     user_message = build_user_message(thesis_data)
 
     result = await agent.run(user_message)
+
+    # Cache-verification logging: report token usage so the operator can see
+    # whether prompt caching is active (cache_read_tokens > 0). Never raises.
+    try:
+        usage = result.usage
+        logger.info(
+            "LLM call: model=%s input_tokens=%s output_tokens=%s cache_read=%s cache_write=%s",
+            effective_model,
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "cache_read_tokens", "n/a"),
+            getattr(usage, "cache_write_tokens", "n/a"),
+        )
+    except Exception as exc:  # pragma: no cover - logging must never break generation
+        logger.debug("could not read LLM usage: %s", exc)
+
     return result.output

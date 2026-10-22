@@ -178,7 +178,7 @@ async def test_the_deliveries_tab_still_lists_and_filters(session: AsyncSession)
     article = (await _records(session, 1))[0]
     # One delivery per (article, channel), so use both channels.
     session.add(Delivery(main_id=article.id, channel_id=first.id, status="sent",
-                         platform_message_id=777))
+                         platform_message_id=987654321))
     session.add(Delivery(main_id=article.id, channel_id=second.id, status="failed",
                          error_message="boom"))
     await session.commit()
@@ -191,8 +191,8 @@ async def test_the_deliveries_tab_still_lists_and_filters(session: AsyncSession)
     # The message id is shown only for a row in the result set, so it is what
     # the filter actually controls. (The "boom" text also appears via
     # last_error in the footer, which is not a row.)
-    assert "777" in everything.text
-    assert "777" not in only_failed.text, "the status filter actually filters"
+    assert "987654321" in everything.text
+    assert "987654321" not in only_failed.text, "the status filter actually filters"
     assert only_failed.status_code == 200
 
 

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Main, Field, Model, Prompt
-from app.schemas.news import CategoryMatch, GeneratedNews
+from app.schemas.news import CategoryMatchCompact, GeneratedNews
 from app.worker.worker import recover_stale_jobs, claim_next_job, _upsert_field, process_job, fail_job
 
 # NOTE (v2-combined): the old ``test_resolve_field_*`` tests are gone with the
@@ -240,9 +240,9 @@ async def test_process_job_stores_classification(session: AsyncSession):
     from app.db.models import Category, MainCategoryMatch
 
     session.add_all([
-        Category(name="بهداشت", deprecated=False, description="health"),
-        Category(name="فناوری اطلاعات و ارتباطات", deprecated=False, description="ict"),
-        Category(name="other", deprecated=False, description="fallback"),
+        Category(name="بهداشت", deprecated=False, description="health", short_code=24),
+        Category(name="فناوری اطلاعات و ارتباطات", deprecated=False, description="ict", short_code=16),
+        Category(name="other", deprecated=False, description="fallback", short_code=0),
     ])
     await session.commit()
 
@@ -262,8 +262,8 @@ async def test_process_job_stores_classification(session: AsyncSession):
     output = GeneratedNews(
         title="T", lead="L", body="B",
         categories=[
-            CategoryMatch(category="بهداشت", score=0.92, reason="پزشکی است"),
-            CategoryMatch(category="فناوری اطلاعات و ارتباطات", score=0.7, reason="ai"),
+            CategoryMatchCompact(code=24, score=92, reason="پزشکی است"),
+            CategoryMatchCompact(code=16, score=70, reason="ai"),
         ],
     )
     with patch("app.worker.worker.generate_news") as mock_gen:
@@ -286,7 +286,7 @@ async def test_process_job_no_qualifying_match_falls_back_to_other(session: Asyn
     """Empty categories → exactly one 'other' row, no qualifying match."""
     from app.db.models import Category, MainCategoryMatch
 
-    session.add(Category(name="other", deprecated=False, description="fallback"))
+    session.add(Category(name="other", deprecated=False, description="fallback", short_code=0))
     await session.commit()
 
     job = Main(

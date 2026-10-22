@@ -69,11 +69,18 @@ async def test_submit_process_review_flow(test_database, postgres_available, ses
     from app.db.models import Category, Model, Prompt
 
     if (await session.execute(select(Category).limit(1))).scalars().first() is None:
+        code_map = {
+            "بهداشت": 24,
+            "فناوری اطلاعات و ارتباطات": 16,
+            "علوم اجتماعی و رفتاری": 8,
+            "حقوق": 11,
+            "other": 0,
+        }
         for name in (
             "بهداشت", "فناوری اطلاعات و ارتباطات", "علوم اجتماعی و رفتاری",
             "حقوق", "other",
         ):
-            session.add(Category(name=name))
+            session.add(Category(name=name, short_code=code_map[name]))
         await session.commit()
     if (await session.execute(select(Model).where(Model.is_active.is_(True)).limit(1))).scalar_one_or_none() is None:
         session.add(Model(name="e2e-model", provider="openai", version="latest", is_active=True))
@@ -117,13 +124,13 @@ async def test_submit_process_review_flow(test_database, postgres_available, ses
             from app.db.models import Category, MainCategoryMatch
             from sqlalchemy import select as sa_select
 
-            from app.schemas.news import CategoryMatch, GeneratedNews
+            from app.schemas.news import CategoryMatchCompact, GeneratedNews
 
             output = GeneratedNews(
                 title="T", lead="L", body="B",
                 categories=[
-                    CategoryMatch(category="بهداشت", score=0.9, reason="پزشکی است"),
-                    CategoryMatch(category="فناوری اطلاعات و ارتباطات", score=0.6, reason="ai"),
+                    CategoryMatchCompact(code=24, score=90, reason="پزشکی است"),
+                    CategoryMatchCompact(code=16, score=60, reason="ai"),
                 ],
             )
             with patch("app.worker.worker.generate_news") as mock_gen:

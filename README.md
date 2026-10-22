@@ -338,6 +338,7 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 18. `022_channel_activated_at.sql` — the channel activation floor (no archive backfill)
 19. `023_isced_categories.sql` — **v2-combined**: `categories.deprecated/isc_code`, the 29 ISCED-F 2013 rows, `fields.category_id` NULLable, `main_category_matches` (score/rank CHECKs + indexes), seeded routes for the new vocabulary, and the active `v2-combined` prompt row
 20. `024_drop_legacy_categories.sql` — remaps the legacy rule categories' fields, records and deliveries onto the closest ISCED-F rows (uncategorizing only those with no honest equivalent) and deletes the retired rows; their routes and matches cascade
+21. `025_category_isc_code.sql` — **v3-compact**: adds `categories.short_code` (0 = other, 1-29 = ISCED), `main.llm_raw_output`, seeds and activates the compact prompt, verifies 30 codes
 
 Migrations are additive-only and never edited after applying — schema changes
 always add the next numbered file. Full ER diagram: `docs/erd.md`.

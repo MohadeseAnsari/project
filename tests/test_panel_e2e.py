@@ -48,7 +48,7 @@ async def _admin(session: AsyncSession) -> None:
                   role_id=role.id, is_active=True)
     )
     session.add(Category(name="other", description="Other"))
-    session.add(Category(name="بهداشت", description="health"))
+    session.add(Category(name="بهداشت", description="health", short_code=24))
     session.add(Channel(platform="bale", chat_id=98001, username="@c", is_active=True))
     await session.commit()
 
@@ -94,14 +94,14 @@ async def test_panel_to_channel_full_flow(session: AsyncSession, monkeypatch):
         claimed = await claim_next_job(session)
         assert claimed is not None and claimed.id == record_id
         from app.db.models import MainCategoryMatch
-        from app.schemas.news import CategoryMatch, GeneratedNews
+        from app.schemas.news import CategoryMatchCompact, GeneratedNews
 
         # A real qualifying match: a fallback-only record queues NO deliveries
         # by design, and this test verifies the delivery handoff, not the gate.
         with patch("app.worker.worker.generate_news") as mock_gen:
             mock_gen.return_value = GeneratedNews(
                 title="T", lead="L", body="B",
-                categories=[CategoryMatch(category="بهداشت", score=0.9, reason="پزشکی است")],
+                categories=[CategoryMatchCompact(code=24, score=90, reason="پزشکی است")],
             )
             await process_job(session, claimed)
         await session.refresh(row)

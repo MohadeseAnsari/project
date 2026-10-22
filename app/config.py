@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # is True — it goes to ``other`` and waits for a reviewer.
     auto_publish_on_classification: bool = False
 
+    # Compact LLM output (v3-compact): reasons are optional for high-confidence
+    # matches. Set to 101 to always require a reason (stricter audit).
+    skip_reason_above_score: int = 90
+    # If True, store the FULL raw LLM response JSON in main.llm_raw_output
+    # (debugging aid, ~200 bytes/record). Default OFF.
+    store_llm_raw_output: bool = False
+
     # Outbound delivery (sender Worker).
     #
     # One token per platform, not per channel: a deployment publishes through

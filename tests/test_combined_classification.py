@@ -36,16 +36,22 @@ from app.messaging.dispatcher import (
     ensure_pending_deliveries,
 )
 from app.news.isced import ISCED_CATEGORIES, ISCED_CATEGORY_NAMES, OTHER_CATEGORY
-from app.schemas.news import CategoryMatch, GeneratedNews
+from app.schemas.news import CategoryMatch, CategoryMatchCompact, GeneratedNews
 
 OUTPUT = {"title": "تیتر", "lead": "لید", "body": "متن کامل"}
 
 
 async def _seed_vocabulary(session: AsyncSession, *names: str) -> dict[str, Category]:
     """Create live category rows (worker tests truncate the seed)."""
+    from app.news.isced import ISCED_CATEGORIES
+
+    code_map = {name: i + 1 for i, (name, _) in enumerate(ISCED_CATEGORIES)}
+    code_map[OTHER_CATEGORY] = 0
     rows = {}
     for name in names:
-        rows[name] = Category(name=name, description=f"desc {name}")
+        rows[name] = Category(
+            name=name, description=f"desc {name}", short_code=code_map.get(name),
+        )
         session.add(rows[name])
     await session.commit()
     return rows
@@ -83,9 +89,32 @@ class _JobBuilder:
         self.session.add(job)
         await self.session.commit()
 
+        from app.news.isced import ISCED_CATEGORIES
+
+        code_map = {name: i + 1 for i, (name, _) in enumerate(ISCED_CATEGORIES)}
+        code_map[OTHER_CATEGORY] = 0
+
+        compact = []
+        for c in categories:
+            if "code" in c:
+                compact.append(CategoryMatchCompact(
+                    code=c["code"], score=c.get("score", 0), reason=c.get("reason", ""),
+                ))
+            else:
+                name = c.get("category")
+                code = code_map.get(name)
+                if code is None:
+                    continue  # hallucinated name → dropped, as the worker does
+                score = c.get("score", 0)
+                if isinstance(score, float):
+                    score = int(round(score * 100))
+                compact.append(CategoryMatchCompact(
+                    code=code, score=score, reason=c.get("reason", ""),
+                ))
+
         output = GeneratedNews(
             title="تیتر", lead="لید", body="متن",
-            categories=[CategoryMatch(**c) for c in categories],
+            categories=compact,
         )
         with patch("app.worker.worker.generate_news") as mock_gen:
             mock_gen.return_value = output
@@ -121,17 +150,57 @@ def test_generatednews_defaults_to_no_categories():
 
 
 def test_generatednews_caps_categories_at_three():
-    match = CategoryMatch(category="بهداشت", score=0.9, reason="r")
+    match = CategoryMatchCompact(code=24, score=90, reason="r")
     GeneratedNews(title="t", lead="l", body="b", categories=[match] * 3)  # ok
     with pytest.raises(ValidationError):
         GeneratedNews(title="t", lead="l", body="b", categories=[match] * 4)
+
+
+# ---------------------------------------------------------------------------
+# Compact schema (Optimization A/B/C)
+# ---------------------------------------------------------------------------
+
+
+def test_categorymatchcompact_valid():
+    from app.schemas.news import CategoryMatchCompact
+
+    m = CategoryMatchCompact(code=16, score=95, reason="")
+    assert m.code == 16 and m.score == 95 and m.reason == ""
+
+
+def test_categorymatchcompact_code_out_of_range():
+    from app.schemas.news import CategoryMatchCompact
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CategoryMatchCompact(code=99, score=95)
+    with pytest.raises(ValidationError):
+        CategoryMatchCompact(code=-1, score=95)
+
+
+def test_categorymatchcompact_score_out_of_range():
+    from app.schemas.news import CategoryMatchCompact
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CategoryMatchCompact(code=16, score=150)
+    with pytest.raises(ValidationError):
+        CategoryMatchCompact(code=16, score=-5)
+
+
+def test_categorymatchcompact_reason_truncated():
+    from app.schemas.news import CategoryMatchCompact
+
+    m = CategoryMatchCompact(code=16, score=95, reason="a" * 200)
+    assert len(m.reason) <= 80
+    assert m.reason.endswith("...")
 
 
 def test_prompts_embed_the_exact_vocabulary():
     """The system prompt must contain all 29 names + the fallback."""
     from app.news.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert PROMPT_VERSION == "v2-combined"
+    assert PROMPT_VERSION == "v3-compact"
     for name in ISCED_CATEGORY_NAMES:
         assert name in SYSTEM_PROMPT, f"{name} missing from the combined prompt"
     assert "score" in SYSTEM_PROMPT or "نمره" in SYSTEM_PROMPT
@@ -150,9 +219,9 @@ async def test_store_filters_hallucinations_clamps_and_dedupes(session: AsyncSes
     output = GeneratedNews(
         title="t", lead="l", body="b",
         categories=[
-            CategoryMatch(category="بهداشت", score=1.4, reason="too high"),   # clamp → 1.0
-            CategoryMatch(category="بهداشت", score=0.2, reason="dup"),        # dedupe keeps 1.0
-            CategoryMatch(category="حقوق", score=-0.5, reason="negative"),    # clamp → 0.0
+            CategoryMatchCompact(code=vocab["بهداشت"].short_code, score=100, reason="too high"),   # clamp → 1.0
+            CategoryMatchCompact(code=vocab["بهداشت"].short_code, score=20, reason="dup"),        # dedupe keeps 1.0
+            CategoryMatchCompact(code=vocab["حقوق"].short_code, score=0, reason="negative"),     # clamp → 0.0
         ],
     )
     validated = await normalize_llm_categories(session, output)
@@ -163,12 +232,12 @@ async def test_store_filters_hallucinations_clamps_and_dedupes(session: AsyncSes
     ids = {v["category_id"] for v in validated}
     assert ids == {vocab["بهداشت"].id, vocab["حقوق"].id}
 
-    # Hallucinated names (not live category rows) are dropped wholesale.
+    # Hallucinated codes (not live category rows) are dropped wholesale.
     output = GeneratedNews(
         title="t", lead="l", body="b",
         categories=[
-            CategoryMatch(category="علم موهوم", score=0.99, reason="invented"),
-            CategoryMatch(category="بهداشت", score=0.7, reason="real"),
+            CategoryMatchCompact(code=5, score=99, reason="invented"),  # not seeded
+            CategoryMatchCompact(code=vocab["بهداشت"].short_code, score=70, reason="real"),
         ],
     )
     validated = await normalize_llm_categories(session, output)
@@ -178,7 +247,7 @@ async def test_store_filters_hallucinations_clamps_and_dedupes(session: AsyncSes
 @pytest.mark.asyncio
 async def test_store_rejects_more_than_three_matches(session: AsyncSession):
     """The schema caps the LLM answer at 3 — validation, not silent trim."""
-    match = CategoryMatch(category="بهداشت", score=0.9, reason="r")
+    match = CategoryMatchCompact(code=24, score=90, reason="r")
     with pytest.raises(ValidationError):
         normalize = GeneratedNews(title="t", lead="l", body="b", categories=[match] * 4)
         del normalize
@@ -218,7 +287,7 @@ async def test_regeneration_replaces_the_stored_matches(session: AsyncSession):
 
     second = GeneratedNews(
         title="t", lead="l", body="b",
-        categories=[{"category": "حقوق", "score": 0.8, "reason": "second run"}],
+        categories=[{"code": 11, "score": 80, "reason": "second run"}],
     )
     await store_generated_classification(session, job, second, model_id=None, prompt_id=None)
     await session.commit()
@@ -253,6 +322,74 @@ async def test_threshold_and_top_n_apply(monkeypatch, session: AsyncSession):
     rows = await _matches(session, job.id)
     assert len(rows) == 2, "the 0.4 match must not be stored"
     assert [r[2] for r in sorted(rows, key=lambda r: r[2])] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_worker_maps_compact_codes(session: AsyncSession):
+    """Compact LLM output (codes 0-29) maps to full DB rows."""
+    from app.worker.worker import process_job
+
+    vocab = await _seed_vocabulary(session, "بهداشت", "فناوری اطلاعات و ارتباطات", OTHER_CATEGORY)
+    channels = await _seed_worker_world(session)
+    job = await _JobBuilder(session).run(categories=[
+        {"code": vocab["فناوری اطلاعات و ارتباطات"].short_code, "score": 80, "reason": "ML imaging"},
+        {"code": vocab["بهداشت"].short_code, "score": 70, "reason": "تشخیص پزشکی"},
+    ])
+    rows = await _matches(session, job.id)
+    assert len(rows) == 2
+    # scores converted to 0.0-1.0
+    scores = sorted(r[1] for r in rows)
+    assert scores == [0.70, 0.80]
+    # category ids mapped
+    ids = {r[0] for r in rows}
+    assert ids == {vocab["فناوری اطلاعات و ارتباطات"].id, vocab["بهداشت"].id}
+    top = next(r for r in rows if r[2] == 1)
+    assert top[1] == 0.80
+    assert top[3] == "ML imaging"
+
+
+@pytest.mark.asyncio
+async def test_worker_filters_invalid_compact_code(session: AsyncSession):
+    from app.worker.worker import process_job
+
+    await _seed_vocabulary(session, OTHER_CATEGORY)
+    await _seed_worker_world(session)
+    job = await _JobBuilder(session).run(categories=[
+        {"code": 5, "score": 90, "reason": "bad"},
+    ])
+    rows = await _matches(session, job.id)
+    assert len(rows) == 1
+    assert rows[0][1] == 0.0  # other fallback
+    assert rows[0][3] == "no auto-match"
+
+
+@pytest.mark.asyncio
+async def test_worker_filters_low_score_compact(session: AsyncSession):
+    from app.worker.worker import process_job
+
+    vocab = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
+    await _seed_worker_world(session)
+    job = await _JobBuilder(session).run(categories=[
+        {"code": vocab["بهداشت"].short_code, "score": 30, "reason": "low"},
+    ])
+    rows = await _matches(session, job.id)
+    assert len(rows) == 1
+    assert rows[0][1] == 0.0  # filtered → other fallback
+
+
+@pytest.mark.asyncio
+async def test_worker_dedupes_compact_code(session: AsyncSession):
+    from app.worker.worker import process_job
+
+    vocab = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
+    await _seed_worker_world(session)
+    job = await _JobBuilder(session).run(categories=[
+        {"code": vocab["بهداشت"].short_code, "score": 60, "reason": "low"},
+        {"code": vocab["بهداشت"].short_code, "score": 90, "reason": "high"},
+    ])
+    rows = await _matches(session, job.id)
+    assert len(rows) == 1
+    assert rows[0][1] == 0.9  # kept highest
 
 
 @pytest.mark.asyncio
@@ -576,6 +713,24 @@ async def test_migration_seeds_the_exact_isced_vocabulary(migrated_db):
 
 
 @pytest.mark.asyncio
+async def test_migration_populates_short_codes(migrated_db):
+    """Optimization A: every live category has a unique 0-29 short_code."""
+    async with async_session() as s:
+        rows = (await s.execute(
+            select(Category.name, Category.short_code).where(Category.short_code.isnot(None))
+        )).all()
+        assert len(rows) == 30
+        by_name = {name: code for name, code in rows}
+        assert by_name["other"] == 0
+        assert by_name["بهداشت"] == 24
+        assert by_name["برنامه‌ها و مدارک پایه"] == 1
+        assert by_name["خدمات حمل‌ونقل"] == 29
+        # uniqueness
+        codes = [code for _, code in rows]
+        assert len(set(codes)) == len(codes)
+
+
+@pytest.mark.asyncio
 async def test_migration_seeds_and_activates_the_v2_prompt(migrated_db):
     """The active prompt row IS v2-combined and equals the packaged prompt.
 
@@ -589,11 +744,11 @@ async def test_migration_seeds_and_activates_the_v2_prompt(migrated_db):
         prompts = (await s.execute(select(Prompt))).scalars().all()
         by_version = {p.version: p for p in prompts}
         assert PROMPT_VERSION in by_version
-        v2 = by_version[PROMPT_VERSION]
-        assert v2.is_active is True
-        assert v2.system_prompt == SYSTEM_PROMPT, "DB and packaged prompt must not drift"
-        assert "v1" in by_version, "the old prompt row stays for audit"
-        assert by_version["v1"].is_active is False
+        v3 = by_version[PROMPT_VERSION]
+        assert v3.is_active is True
+        assert v3.system_prompt == SYSTEM_PROMPT, "DB and packaged prompt must not drift"
+        assert "v2-combined" in by_version, "the old prompt row stays for audit"
+        assert by_version["v2-combined"].is_active is False
 
 
 @pytest.mark.asyncio
@@ -644,7 +799,7 @@ async def test_migrated_db_classifies_and_delivers_end_to_end(migrated_db):
 
         output = GeneratedNews(
             title="t", lead="l", body="b",
-            categories=[CategoryMatch(category="بهداشت", score=0.8, reason="medical")],
+            categories=[CategoryMatchCompact(code=24, score=80, reason="medical")],
         )
         with patch("app.worker.worker.generate_news") as mock_gen:
             mock_gen.return_value = output

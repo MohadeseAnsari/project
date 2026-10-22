@@ -26,6 +26,7 @@ erDiagram
         TEXT description
         BOOLEAN deprecated
         VARCHAR isc_code
+        INTEGER short_code
         TIMESTAMP created_at
     }
     # deprecated is retained for retiring a row without breaking its FKs, but
