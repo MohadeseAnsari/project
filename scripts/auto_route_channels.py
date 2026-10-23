@@ -3,6 +3,8 @@
 For each active, non-deprecated channel:
   1. Try to find a non-deprecated category whose normalized name matches
      the channel's normalized title (exact match, after NFC + trim + collapse).
+     ZWNJ (U+200C) is treated as a space separator so that channel titles
+     typed with regular spaces still match ISCED names that use ZWNJ.
   2. If no match on title, try matching on username (strip leading '@').
   3. If a match is found AND no route already exists -> insert into
      category_channel_routes.
@@ -34,10 +36,11 @@ from app.config import settings
 from app.fields.normalization import normalize_field
 
 
-def _norm(s: str | None) -> str:
+def _key(s: str | None) -> str:
+    """Normalization key for matching: ignore ZWNJ and all whitespace."""
     if not s:
         return ""
-    return normalize_field(s.lstrip("@")) if False else normalize_field(s)
+    return "".join(s.replace("\u200c", "").split())
 
 
 async def main(apply: bool) -> int:
@@ -49,28 +52,30 @@ async def main(apply: bool) -> int:
         cats = await conn.fetch(
             "SELECT id, name FROM categories WHERE deprecated = FALSE"
         )
-        # normalized name -> category id (skip "other")
-        cat_by_norm: dict[str, tuple[int, str]] = {}
+        # normalized key -> category id (skip "other")
+        cat_by_key: dict[str, tuple[int, str]] = {}
         for c in cats:
             if c["name"] == "other":
                 continue
-            cat_by_norm[normalize_field(c["name"])] = (c["id"], c["name"])
+            cat_by_key[_key(c["name"])] = (c["id"], c["name"])
 
         no_match = False
         matched = 0
         already = 0
+        skipped = 0
         for ch in channels:
             cid = ch["id"]
             title = ch["title"] or ""
             username = (ch["username"] or "").lstrip("@")
-            title_norm = normalize_field(title)
-            user_norm = normalize_field(username)
+            title_key = _key(title)
+            user_key = _key(username)
 
             # "other" is a fallback, never an auto-route target.
-            if title_norm == "other" or user_norm == "other":
+            if title_key == _key("other") or user_key == _key("other"):
+                skipped += 1
                 continue
 
-            target = cat_by_norm.get(title_norm) or cat_by_norm.get(user_norm)
+            target = cat_by_key.get(title_key) or cat_by_key.get(user_key)
             if target is None:
                 no_match = True
                 print(
@@ -99,7 +104,7 @@ async def main(apply: bool) -> int:
                 )
 
         print()
-        print(f"Summary: matched={matched}, already_routed={already}, no_match={no_match}")
+        print(f"Summary: matched={matched}, already_routed={already}, no_match={no_match}, skipped={skipped}")
         if apply:
             print("Applied.")
         else:
