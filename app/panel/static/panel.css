@@ -239,3 +239,9 @@ details.disclose[open]{box-shadow:0 4px 14px rgba(17,24,39,.06)}
 .chip:hover{background:var(--primary-soft);border-color:var(--primary)}
 .pick{transition:background .12s}
 .pick:has(input:checked){background:var(--primary-soft)}
+
+/* Categories page: a denser, more scannable grid of buckets. */
+.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;padding:14px 22px}
+.card[id^="cat-"]{transition:transform .15s,box-shadow .15s}
+.card[id^="cat-"]:hover{transform:translateY(-2px);box-shadow:0 4px 18px rgba(17,24,39,.08)}
+.card[id^="cat-"] .card-head{background:linear-gradient(180deg,#FAFBFF,#F5F6FA)}

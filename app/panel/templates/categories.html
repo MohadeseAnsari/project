@@ -65,7 +65,7 @@
     <span class="pill">{{ categories|length|fa }}{% if q %} از {{ category_total|fa }}{% endif %} دسته</span>
   </div>
 
-  <div class="two" style="padding:14px 22px">
+  <div class="cat-grid" style="padding:14px 22px">
     {% for c in categories %}
     <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}{% if c.deprecated %} <span class="badge s-off" title="منسوخ: ردهٔ قدیمیِ قاعده‌محور؛ دیگر به مدل پیشنهاد نمی‌شود ولی سابقهٔ رکوردها را نگه می‌دارد">منسوخ</span>{% endif %}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span>
       {# Delete is refused while the category holds fields or records, so the
