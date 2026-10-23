@@ -120,7 +120,7 @@ async def test_activate_never_sends_a_row_name_as_the_provider_model(session: As
             captured["id"] = name
 
     class _FakeAgent:
-        def __init__(self, model, output_type=None, system_prompt=None):
+        def __init__(self, model, output_type=None, system_prompt=None, model_settings=None):
             pass
 
         async def run(self, message):

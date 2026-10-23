@@ -115,12 +115,6 @@ def resolve_generation_config(
     ``Prompt`` ORM objects or ``None``; only names/texts are read out, so the
     caller keeps its own rows for audit FKs.
     """
-    # An inactive override (e.g. a model/prompt the operator later retired)
-    # must never shadow the active configuration — fall back to active.
-    if model_override is not None and not getattr(model_override, "is_active", True):
-        model_override = None
-    if prompt_override is not None and not getattr(prompt_override, "is_active", True):
-        prompt_override = None
     override_base = getattr(model_override, "base_url", None)
     active_base = getattr(active_model, "base_url", None)
     effective_base = override_base or active_base

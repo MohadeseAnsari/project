@@ -81,7 +81,7 @@ async def test_generate_news_uses_api_model_over_the_display_name(monkeypatch):
             captured["model"] = name
 
     class _FakeAgent:
-        def __init__(self, model, output_type=None, system_prompt=None):
+        def __init__(self, model, output_type=None, system_prompt=None, model_settings=None):
             self.model = model
 
         async def run(self, message):
@@ -121,7 +121,7 @@ async def test_generate_news_without_api_model_keeps_the_row_name(monkeypatch):
             captured["model"] = name
 
     class _FakeAgent:
-        def __init__(self, model, output_type=None, system_prompt=None):
+        def __init__(self, model, output_type=None, system_prompt=None, model_settings=None):
             self.model = model
 
         async def run(self, message):
