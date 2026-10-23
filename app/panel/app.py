@@ -433,7 +433,8 @@ _ACTION_FA = {
     "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
     "curate": "تأیید انسانی دسته",
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
-    "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
+    "prompt_activate": "فعال‌سازی پرامپت", "prompt_delete": "حذف پرامپت",
+    "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "category_channels": "تنظیم کانال‌های دسته",
     "field_create": "افزودن رشته", "field_delete": "حذف رشته",
@@ -2011,6 +2012,32 @@ async def panel_prompt_activate(request: Request, prompt_id: int, session: Async
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="پرامپت یافت نشد."), status_code=404)
     row = await prompt_service.activate_prompt(session, row)
     await audit_service.record_event(session, user.id, "prompt_activate", None, f"version={row.version}")
+    return RedirectResponse(url="/prompts", status_code=302)
+
+
+@panel_app.post("/prompts/{prompt_id}/delete")
+async def panel_prompt_delete(request: Request, prompt_id: int, session: AsyncSession = Depends(session_dep)):
+    """Delete an inactive prompt version that no record references."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+
+    row = await prompt_service.get_prompt(session, prompt_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="پرامپت یافت نشد."), status_code=404)
+    version = row.version
+    try:
+        await prompt_service.delete_prompt(session, row)
+    except ValueError as exc:
+        message = {
+            "prompt-active": "پرامپت فعال قابل حذف نیست؛ ابتدا نسخهٔ دیگری را فعال کنید.",
+            "prompt-in-use": "این نسخه در رکوردهای تولیدشده استفاده شده و برای حفظ تاریخچه حذف نمی‌شود.",
+        }.get(str(exc), "حذف پرامپت ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "prompt_delete", None, f"version={version}")
     return RedirectResponse(url="/prompts", status_code=302)
 
 
