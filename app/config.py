@@ -30,7 +30,11 @@ class Settings(BaseSettings):
     # would otherwise block the single sequential worker forever, because the
     # stale-job lease can only recover jobs after the worker process is gone.
     # A bounded timeout lets the worker fail the job and continue.
-    llm_timeout_seconds: float = 120.0
+    llm_timeout_seconds: float = 300.0
+    # Cap on generated output tokens (title/lead/body + compact categories).
+    # Prevents runaway generation on long inputs. Override per model row via
+    # max_output_tokens in the panel if needed.
+    llm_max_output_tokens: int = 1000
 
     worker_poll_interval_seconds: float = 1.0
     worker_heartbeat_interval_seconds: float = 30.0

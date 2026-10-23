@@ -750,8 +750,9 @@ async def regenerate(session, record_id: int) -> Main:
     try:
         output = await generate_news(thesis, **config)
     except Exception as e:
-        assert_record_transition(record.status, "failed")
-        record.status = "failed"
+        if record.status != "failed":
+            assert_record_transition(record.status, "failed")
+            record.status = "failed"
         record.error_message = str(e)[:2000]
         record.updated_at = datetime.utcnow()
         await session.commit()

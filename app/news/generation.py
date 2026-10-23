@@ -7,6 +7,7 @@ resolved system prompt carries the 29-category vocabulary, and the Worker
 post-processes the answer (validation, clamping, ranking) before storing it.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -223,7 +224,12 @@ def _get_agent() -> Agent:
             settings.llm_model,
             provider=OpenAIProvider(openai_client=_get_client()),
         )
-        _agent = Agent(model, output_type=GeneratedNews, system_prompt=SYSTEM_PROMPT)
+        _agent = Agent(
+            model,
+            output_type=GeneratedNews,
+            system_prompt=SYSTEM_PROMPT,
+            model_settings={"max_tokens": settings.llm_max_output_tokens},
+        )
     return _agent
 
 
@@ -234,15 +240,26 @@ def build_user_message(thesis_data: dict[str, Any]) -> str:
     reviewer sees is byte-identical to what the model received. Thesis values
     are data, never instructions (see the system prompt); missing values
     render empty rather than failing the job.
+
+    Long inputs are truncated so a very long abstract / table of contents
+    cannot push the prompt past the provider's request limit or make the
+    generation time out. The caps keep the *substance* (first N characters)
+    which is what the model needs.
     """
+    def _cap(value: Any, limit: int) -> str:
+        text = "" if value is None else str(value)
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "…"
+
     return f"""Thesis metadata:
-title: {thesis_data.get('title', '')}
-abstract: {thesis_data.get('abstract', '')}
-field: {thesis_data.get('field', '')}
-university: {thesis_data.get('university', '')}
-table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
-author: {thesis_data.get('author', '')}
-supervisor: {thesis_data.get('supervisor', '')}"""
+title: {_cap(thesis_data.get('title', ''), 200)}
+abstract: {_cap(thesis_data.get('abstract', ''), 600)}
+field: {_cap(thesis_data.get('field', ''), 100)}
+university: {_cap(thesis_data.get('university', ''), 100)}
+table_of_contents: {_cap(thesis_data.get('table_of_contents', '') or '', 400)}
+author: {_cap(thesis_data.get('author', ''), 100)}
+supervisor: {_cap(thesis_data.get('supervisor', ''), 100)}"""
 
 
 async def generate_news(
@@ -306,11 +323,38 @@ async def generate_news(
             effective_model,
             provider=OpenAIProvider(openai_client=client),
         )
-        agent = Agent(model, output_type=GeneratedNews, system_prompt=effective_prompt)
+        agent = Agent(
+            model,
+            output_type=GeneratedNews,
+            system_prompt=effective_prompt,
+            model_settings={"max_tokens": settings.llm_max_output_tokens},
+        )
 
     user_message = build_user_message(thesis_data)
 
-    result = await agent.run(user_message)
+    last_exc: Exception | None = None
+    for _attempt in range(2):
+        try:
+            result = await asyncio.wait_for(
+                agent.run(user_message), timeout=settings.llm_timeout_seconds
+            )
+            break
+        except asyncio.TimeoutError:
+            last_exc = TimeoutError(
+                f"LLM request timed out after {settings.llm_timeout_seconds}s"
+            )
+            logger.warning("LLM attempt %d timed out, retrying", _attempt + 1)
+            if _attempt == 1:
+                raise last_exc
+        except Exception as exc:
+            msg = str(exc).lower()
+            if _attempt == 0 and ("connection" in msg or "timeout" in msg):
+                logger.warning("LLM attempt %d failed (%s), retrying", _attempt + 1, exc)
+                continue
+            raise
+    else:
+        if last_exc is not None:
+            raise last_exc
 
     # Cache-verification logging: report token usage so the operator can see
     # whether prompt caching is active (cache_read_tokens > 0). Never raises.
