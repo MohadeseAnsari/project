@@ -225,3 +225,5 @@ input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{out
 select,input[type=text],input[type=password],input[type=number],textarea{border-radius:10px;transition:border-color .12s,box-shadow .12s}
 select:focus,input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
 .kpi .n{font-size:23px;letter-spacing:-.02em}
+
+.dash-channels{max-height:220px}
