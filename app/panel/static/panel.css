@@ -227,3 +227,15 @@ select:focus,input[type=text]:focus,input[type=password]:focus,input[type=number
 .kpi .n{font-size:23px;letter-spacing:-.02em}
 
 .dash-channels{max-height:220px}
+
+/* Categories page polish: a coloured top edge per category card makes the
+   grid read as a set of distinct buckets instead of identical boxes. */
+.card[id^="cat-"]{border-top:3px solid var(--primary)}
+.card[id^="cat-"]:nth-child(4n+2){border-top-color:var(--violet)}
+.card[id^="cat-"]:nth-child(4n+3){border-top-color:var(--teal)}
+.card[id^="cat-"]:nth-child(4n+4){border-top-color:var(--amber)}
+details.disclose[open]{box-shadow:0 4px 14px rgba(17,24,39,.06)}
+.chip{transition:background .12s,border-color .12s}
+.chip:hover{background:var(--primary-soft);border-color:var(--primary)}
+.pick{transition:background .12s}
+.pick:has(input:checked){background:var(--primary-soft)}
