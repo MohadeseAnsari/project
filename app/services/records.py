@@ -181,6 +181,14 @@ async def get_record(session, record_id: int) -> Main | None:
     return result.scalar_one_or_none()
 
 
+async def delete_record(session, record: Main) -> None:
+    """Permanently remove a record and all of its deliveries/matches."""
+    if record.status == "processing":
+        raise ValueError("record-processing")
+    await session.delete(record)
+    await session.commit()
+
+
 async def record_detail(session, record: Main) -> dict:
     """Build the extended record payload (API GET/PATCH share this)."""
     from app.db.models import Channel, Delivery

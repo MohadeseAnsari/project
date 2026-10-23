@@ -42,6 +42,7 @@
         {% else %}
         {{ icon_link('/records/' ~ r.id, 'eye', 'این خبر را مشاهده کن') }}
         {% endif %}
+        <form method="post" action="/records/{{ r.id }}/delete" style="display:inline" onsubmit="return confirm('رکورد {{ r.id|fa }} برای همیشه حذف شود؟ اگر خبر منتشر شده باشد، پیام‌ها روی کانال‌ها باقی می‌مانند (برای حذف آنها از کانال از «حذف از همهٔ کانال‌ها» استفاده کنید).')">{{ csrf_field(request) | safe }}{{ icon('trash', 'رکورد ' ~ r.id ~ ' را حذف کن', 'danger') }}</form>
       </td>
     </tr>
     {% endfor %}

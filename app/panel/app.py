@@ -442,7 +442,7 @@ _ACTION_FA = {
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
-    "regenerate": "تولید دوباره با مدل",
+    "regenerate": "تولید دوباره با مدل", "record_delete": "حذف رکورد",
 }
 
 
@@ -1066,6 +1066,28 @@ async def record_delete_everywhere(
     notice = _delete_notice(report)
     return RedirectResponse(url=f"/records/{record_id}?tab=delivery&deleted={notice}",
                             status_code=303)
+
+
+@panel_app.post("/records/{record_id}/delete")
+async def panel_record_delete(request: Request, record_id: int, session: AsyncSession = Depends(session_dep)):
+    """Permanently delete one record and its deliveries/matches."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    record = await record_service.get_record(session, record_id)
+    if record is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    try:
+        await record_service.delete_record(session, record)
+    except ValueError as exc:
+        message = {
+            "record-processing": "این رکورد در حال پردازش است؛ پس از اتمام یا شکست مجدد تلاش کنید.",
+        }.get(str(exc), "حذف رکورد ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "record_delete", None, f"record={record_id}")
+    return RedirectResponse(url="/records", status_code=302)
 
 
 def _delete_notice(report: dict) -> str:
@@ -2142,6 +2164,7 @@ GUARDED_ROUTES: dict[str, str] = {
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
     "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",
+    "/records/{record_id}/delete": "MANAGE_CONFIG",
 }
 
 #: Routes whose guard is ``require_login`` rather than a role check: a signed-in

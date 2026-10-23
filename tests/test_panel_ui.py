@@ -974,3 +974,65 @@ async def test_models_page_never_renders_a_credential_hint(session: AsyncSession
     assert "1234" not in page.text
     # The credential surface itself still exists, minus the value.
     assert "کلید API" in page.text
+
+
+@pytest.mark.asyncio
+async def test_record_delete_from_panel(session: AsyncSession):
+    """Admins can permanently delete a record from the records table."""
+    from sqlalchemy import select
+
+    from app.db.models import Main
+
+    await _user(session)
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="ready")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        response = await client.post(f"/records/{rid}/delete", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/records"
+    remaining = (await session.execute(select(Main.id).where(Main.id == rid))).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_record_delete_refuses_processing_record(session: AsyncSession):
+    from app.db.models import Main
+
+    await _user(session)
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="processing")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        response = await client.post(f"/records/{rid}/delete")
+
+    assert response.status_code == 422
+    assert "در حال پردازش" in response.text
+
+
+@pytest.mark.asyncio
+async def test_record_delete_is_admin_only(session: AsyncSession):
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="ready")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        response = await client.post(f"/records/{rid}/delete")
+
+    assert response.status_code == 403
