@@ -1,4 +1,5 @@
 {% from "icons.html" import icon, icon_link %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr>
@@ -48,6 +49,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="foot">
   نمایش {{ ((page - 1) * page_size + 1)|fa }} تا {{ ([page * page_size, total]|min)|fa }} از {{ total|fa }} رکورد
   <div class="pager">

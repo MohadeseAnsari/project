@@ -7,6 +7,7 @@
 <div class="two">
   <div class="card">
     <h3 class="card-head">کاربران کنسول<span class="grow"></span><span class="badge s-off">{{ users|length|fa }} کاربر</span></h3>
+    <div class="table-scroll">
     <table>
       <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:88px">عملیات</th></tr></thead>
       <tbody>
@@ -31,6 +32,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     <div class="body" style="border-top:1px solid var(--line2)">
       <div class="hint">توصیه: به‌جای حذف، غیرفعال کنید. حذف، حساب را از پنل برمی‌دارد و دیگر دیده یا وارد نمی‌شود، ولی نامش در تاریخچهٔ رویدادها می‌ماند.</div>
     </div>

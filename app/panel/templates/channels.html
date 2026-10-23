@@ -37,7 +37,7 @@
   {# ── the channels ─────────────────────────────────────────────── #}
   <div class="card">
     <h3 class="card-head">کانال‌ها</h3>
-    <div class="body" style="display:flex;flex-direction:column;gap:10px">
+    <div class="body chan-list" style="display:flex;flex-direction:column;gap:10px">
       {% for c in channels %}
       {% set is_selected = selected and selected.id == c.id %}
       <div class="chan-row{% if is_selected %} on{% endif %}">

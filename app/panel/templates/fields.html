@@ -99,6 +99,7 @@
      Ticking rows and applying is one plain form, no JS. Editing ONE field keeps
      its own form in the row: "move 300 rows" and "fix this one" are different
      jobs, and a bulk-only control answers only the first. #}
+  <div class="table-scroll">
   <table id="fields-table">
     <thead><tr>
       <th style="width:34px"><input type="checkbox" form="bulk-field-form" data-select-all-fields title="انتخاب همهٔ این صفحه" aria-label="انتخاب همهٔ رشته‌های این صفحه"></th>
@@ -140,6 +141,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 
   {# Count and pager. Both come from the SAME SQL predicate as the rows, and
      every active filter rides into the links, so paging never drops a search.

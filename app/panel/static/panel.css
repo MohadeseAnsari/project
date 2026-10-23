@@ -114,8 +114,8 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .card h3.card-head{padding:10px 14px;min-height:44px}
 .card h3 .grow{flex:1}
 .card .body{padding:14px}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
-.side3{display:grid;grid-template-columns:1.55fr 1fr;gap:14px;align-items:start}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start}
+.side3{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;align-items:start}
 .filters{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--line2);flex-wrap:wrap}
 select,input[type=text],input[type=password],input[type=number],textarea{font-family:inherit;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink2);width:100%}
 select{width:auto}
@@ -212,3 +212,16 @@ details.disclose .disclose-body>.hint:first-child{padding-top:10px}
 .login h2{font-size:17px;margin-bottom:4px}
 .login p.sub{color:var(--mut);font-size:12.5px;margin-bottom:18px}
 .login .btn-primary{width:100%;padding:11px}
+
+/* Long lists (channels, users) scroll inside their card instead of pushing the
+   page down; the header stays pinned so the operator never loses context. */
+.chan-list{max-height:62vh;overflow-y:auto;overflow-x:hidden;padding-right:2px}
+.table-scroll{max-height:68vh;overflow-y:auto;overflow-x:auto}
+th{position:sticky;top:0;z-index:2;background:#FBFBFE}
+input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.card{box-shadow:0 1px 2px rgba(17,24,39,.04),0 6px 16px rgba(17,24,39,.04)}
+.card:hover{box-shadow:0 1px 2px rgba(17,24,39,.05),0 8px 22px rgba(17,24,39,.06)}
+.icon-btn{width:30px;height:30px}
+select,input[type=text],input[type=password],input[type=number],textarea{border-radius:10px;transition:border-color .12s,box-shadow .12s}
+select:focus,input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+.kpi .n{font-size:23px;letter-spacing:-.02em}
