@@ -23,7 +23,7 @@
   </div>
 
   <div style="display:flex;flex-direction:column;gap:14px">
-    <div class="card"><h3>نسخه‌ها</h3><div class="body" style="display:flex;flex-direction:column;gap:9px">
+    <div class="card"><h3>نسخه‌ها</h3><div class="body chan-list" style="display:flex;flex-direction:column;gap:9px">
       {% for p in prompts %}
       {% if p.is_active %}
       <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><span class="badge s-sent">فعال</span><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
