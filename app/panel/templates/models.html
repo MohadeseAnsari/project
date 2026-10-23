@@ -7,19 +7,12 @@
 <div class="card">
   <h3>مدل‌های تعریف‌شده<span class="grow"></span><span class="badge s-off">یک مدل فعال در هر زمان</span></h3>
   <table>
-    <thead><tr><th style="width:60px">شناسه</th><th>نام</th><th style="width:170px">نقطهٔ اتصال</th><th style="width:150px">مدل ارائه‌دهنده</th><th style="width:190px">اعتبار</th><th style="width:190px">آخرین آزمون</th><th style="width:120px">وضعیت</th><th style="width:240px">عملیات</th></tr></thead>
+    <thead><tr><th style="width:60px">شناسه</th><th>نام</th><th style="width:170px">نقطهٔ اتصال</th><th style="width:150px">مدل ارائه‌دهنده</th><th style="width:190px">آخرین آزمون</th><th style="width:120px">وضعیت</th><th style="width:240px">عملیات</th></tr></thead>
     <tbody>
       {% for m in models %}
       <tr><td class="num">{{ m.id|fa }}</td><td class="title">{{ m.description or m.name }}{% if m.description %}<span class="sub"><span class="num">{{ m.name }}</span></span>{% endif %}</td>
         <td style="direction:ltr;text-align:left">{{ m.creds.base_url }}</td>
         <td style="direction:ltr;text-align:left">{{ m.api_model or m.name }}</td>
-        <td>
-          {% if m.creds.key_env %}<small class="num">{{ m.creds.key_env }}</small><br>{% endif %}
-          {% if m.creds.key_hint %}<small class="num">{{ m.creds.key_hint }}</small><br>{% endif %}
-          {% if m.creds.needs_own_key %}<span class="badge s-failed">! کلید خودش لازم است</span>
-          {% elif m.creds.key_present %}<span class="badge s-sent">✓ کلید موجود</span>
-          {% else %}<span class="badge s-failed">! کلید ناموجود</span>{% endif %}
-        </td>
         <td>
           {# Real recorded probe outcome, never a claim (last_tested_at/ok/error). #}
           {% if m.last_tested_at is none %}
@@ -59,13 +52,14 @@
       <div class="field"><label>شناسهٔ مدل در ارائه‌دهنده (api_model)</label><input type="text" name="api_model" value="{{ selected.api_model or '' }}" style="direction:ltr;text-align:left" placeholder="{{ selected.name }}">
         <div class="hint">اگر نام ارائه‌دهنده با نام نمایشی فرق دارد، شناسهٔ واقعی را اینجا بنویسید. خالی = همان نام مدل.</div></div>
       <div class="field"><label>کلید API</label>
-        <input type="password" name="api_key" value="" autocomplete="new-password" style="direction:ltr;text-align:left" placeholder="{{ selected.creds.key_hint or 'کلیدی وارد نشده' }}">
+        <input type="password" name="api_key" value="" autocomplete="new-password" style="direction:ltr;text-align:left" placeholder="کلید تازه (اختیاری)">
         <div class="hint">
-          {% if selected.creds.key_hint %}کلید ذخیره‌شده: <span class="num">{{ selected.creds.key_hint }}</span> — خالی گذاشتن آن را نگه می‌دارد و تغییر نمی‌دهد.
+          {% if selected.creds.uses_global_key %}این مدل از کلید سراسری استفاده می‌کند؛ برای کلید اختصاصی، آن را اینجا وارد کنید.
+          {% elif selected.creds.key_present %}کلید این مدل ثبت شده است؛ خالی گذاشتن آن را تغییر نمی‌دهد.
           {% else %}هنوز کلیدی برای این مدل ثبت نشده است.{% endif %}
           کلید به‌صورت رمزنگاری‌شده ذخیره می‌شود و هرگز دوباره نمایش داده نمی‌شود.
         </div></div>
-      {% if selected.creds.key_hint or selected.api_key_env %}
+      {% if selected.creds.key_source in ('row', 'unreadable') or selected.api_key_env %}
       {# This form was nested inside the settings form above, which HTML simply
          discards: a parser that meets a <form> start tag while one is open
          throws it away and submits the contents with the OUTER one. So

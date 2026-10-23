@@ -939,3 +939,38 @@ async def test_delete_last_admin_refused_at_service(session: AsyncSession):
     with pytest.raises(ValueError, match="last-admin"):
         await user_service.delete_user(session, admin, actor_id=editor.id)
     assert (await session.get(PanelUser, admin.id)).is_active is True
+
+
+@pytest.mark.asyncio
+async def test_models_page_never_renders_a_credential_hint(session: AsyncSession):
+    """The models page must not echo any part of an API key.
+
+    The old "اعتبار" column and the key field both printed masked hints such
+    as ``••••1234``; now only presence is described, never the value.
+    """
+    from app.credentials import encrypt
+    from app.db.models import Model
+
+    await _user(session)
+    session.add(
+        Model(
+            name="secret-model",
+            provider="openai",
+            version="v1",
+            is_active=True,
+            base_url="https://api.example/v1",
+            api_key_encrypted=encrypt("sk-super-secret-tail-1234"),
+        )
+    )
+    await session.commit()
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        page = await client.get("/models")
+
+    assert page.status_code == 200
+    assert "اعتبار" not in page.text
+    assert "••••" not in page.text
+    assert "1234" not in page.text
+    # The credential surface itself still exists, minus the value.
+    assert "کلید API" in page.text
