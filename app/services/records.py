@@ -758,8 +758,9 @@ async def regenerate(session, record_id: int) -> Main:
         await session.commit()
         raise
     record.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
-    assert_record_transition(record.status, "review")
-    record.status = "review"
+    if record.status != "review":
+        assert_record_transition(record.status, "review")
+        record.status = "review"
     record.error_message = None
     record.updated_at = datetime.utcnow()
     # Fresh generation = fresh classification: the old matches are replaced
