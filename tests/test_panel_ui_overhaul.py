@@ -362,3 +362,14 @@ def test_the_platform_badge_falls_back_for_a_new_platform():
     html = template.render()
     assert "platform-badge" in html
     assert ">eitaa</span>" in html
+
+
+def test_prompt_versions_scroll_inside_their_card():
+    """A growing prompt history scrolls inside its own card instead of pushing
+    the JSON reference card off the page."""
+    body = _text("prompts.html")
+    assert 'class="body version-list"' in body
+    css = CSS.read_text(encoding="utf-8")
+    rule = css.split(".version-list{", 1)[1].split("}", 1)[0]
+    assert "max-height" in rule
+    assert "overflow-y:auto" in rule

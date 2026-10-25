@@ -367,7 +367,10 @@ details.side-card .body{padding:14px}
 .danger-zone{margin-top:16px;padding-top:13px;border-top:1px solid var(--line2)}
 .danger-zone .hint{margin:5px 0 8px}
 
-.version-list{display:flex;flex-direction:column;gap:8px;max-height:62vh;overflow-y:auto}
+.version-list{display:flex;flex-direction:column;gap:8px;max-height:min(42vh,380px);overflow-y:auto;overscroll-behavior:contain;padding-inline-end:4px;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent;scrollbar-gutter:stable}
+.version-list::-webkit-scrollbar{width:6px}
+.version-list::-webkit-scrollbar-track{background:transparent}
+.version-list::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:999px}
 .version-row{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--surface)}
 .version-row b{font-size:12px;font-weight:500}
 .version-row small{color:var(--mut);font-size:10.5px}
