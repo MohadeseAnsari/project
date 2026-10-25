@@ -353,7 +353,19 @@ async def run_worker() -> None:
                 try:
                     await process_job(session, job)
                 except Exception as e:
-                    await fail_job(session, job, str(e))
+                    # A database error can leave the session's transaction
+                    # aborted. Marking the job failed on that same session then
+                    # throws too, leaving the row stuck in ``processing``. Roll
+                    # back and use a fresh session so the failure is recorded.
+                    logger.exception("Job id=%s failed", job.id)
+                    try:
+                        await session.rollback()
+                    except Exception:
+                        logger.exception("Rollback failed for job id=%s", job.id)
+                    async with async_session() as fail_session:
+                        stuck = await fail_session.get(Main, job.id)
+                        if stuck is not None:
+                            await fail_job(fail_session, stuck, str(e))
         except Exception as e:
             logger.error("Worker loop error: %s", e)
             try:
