@@ -19,7 +19,7 @@ async def _article(session: AsyncSession, status: str) -> int:
     category = Category(name="gate-race-cat", description="test")
     session.add(category)
     await session.commit()
-    field = Field(name="gate-race-field", normalized_name="gate-race-field", category_id=None)
+    field = Field(name="gate-race-field", normalized_name="gate-race-field")
     channel = Channel(platform="bale", chat_id=8877001, username="@race", is_active=True)
     session.add_all([field, channel])
     await session.commit()

@@ -210,7 +210,7 @@ async def test_delivery_uses_channel_token(session: AsyncSession, monkeypatch):
     cat = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(cat)
     await session.commit()
-    field = Field(name="tok-field", normalized_name="tok-field", category_id=cat.id)
+    field = Field(name="tok-field", normalized_name="tok-field")
     session.add(field)
     await session.commit()
     channel = Channel(platform="bale", chat_id=73001, username="@c", bot_token_env="CHAN_SEND_TOKEN")

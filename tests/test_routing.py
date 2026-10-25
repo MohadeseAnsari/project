@@ -16,9 +16,8 @@ Two consequences that are easy to get wrong, so they are pinned here explicitly:
 * a record with no qualifying match (nothing stored, or only ``other``) goes
   nowhere, for the same reason — and never auto-publishes.
 
-What this file deliberately does NOT assert is that routing is the *only*
-thing that decides delivery. ``main.field_channel_routes`` still exists and is
-still ignored; that is pinned in ``test_broadcast_routing.py``.
+There is no field-level routing fallback: the category -> channel matrix is
+the only path, pinned in ``test_broadcast_routing.py``.
 
 Single-category routing lives here; the multi-category union behaves in
 ``tests/test_combined_classification.py``.

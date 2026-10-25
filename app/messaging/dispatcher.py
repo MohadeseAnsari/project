@@ -51,86 +51,29 @@ def _backoff_delay(attempts: int) -> float:
     return settings.sender_backoff_base_seconds * (2 ** max(0, attempts - 1))
 
 
-async def preview_routing(
-    session, *, field: str | None = None, record_id: int | None = None
-) -> dict:
-    """Preview the routing chain for a raw field name or an existing record.
+async def preview_routing(session, *, record_id: int) -> dict:
+    """Preview the routing chain for an existing record.
 
-    Shared by the machine preview endpoint and the panel routing page, so
-    both show the same answer: the resolved category and the channels (with
-    the category name that reached each of them) the sender would use right
-    now. For records the category is the stored primary (what the Worker
-    stored / the reviewer chose); channels are resolved live because routes
-    may have changed since processing.
-
-    Classification now happens INSIDE the generation call (v2-combined), so
-    a bare field name no longer resolves to a category of its own: what can
-    be shown for it is the legacy stored field mapping (curated rows, if
-    any) — ``category``/``matched_keyword`` may be ``None``. There is no
-    fallback to rule-based matching: that classifier is retired.
-
-    Raises:
-        ValueError: exactly one of ``field``/``record_id`` must be given.
-        LookupError: unknown record id.
+    Read-only audit surface: shows the record's display primary category and
+    the channels the sender would use right now (with the category name that
+    reached each of them). Category classification is stored in
+    ``main_category_matches``; there is no field-name classification path.
     """
-    from app.db.models import Field
-    from app.fields.normalization import normalize_field
+    result = await session.execute(select(Main).where(Main.id == record_id))
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise LookupError(f"record {record_id} not found")
 
-    if (field is None) == (record_id is None):
-        raise ValueError("pass exactly one of field or record_id")
+    category_name = None
+    if record.category_id is not None:
+        category = await session.get(Category, record.category_id)
+        category_name = category.name if category else None
 
-    if record_id is not None:
-        result = await session.execute(select(Main).where(Main.id == record_id))
-        record = result.scalar_one_or_none()
-        if record is None:
-            raise LookupError(f"record {record_id} not found")
-        category_name = None
-        if record.category_id is not None:
-            category = await session.get(Category, record.category_id)
-            category_name = category.name if category else None
-        keyword = None
-        if record.field_id is not None:
-            field_row = await session.get(Field, record.field_id)
-            if field_row is not None:
-                keyword = field_row.matched_keyword  # legacy rule-based value
-        pairs = await channels_for_article_multi(session, record)
-        return {
-            "input": record.field,
-            "record_id": record.id,
-            "category": category_name,
-            "matched_keyword": keyword,
-            "channels": [
-                {
-                    "id": channel.id,
-                    "platform": channel.platform,
-                    "username": channel.username,
-                    "title": channel.title,
-                    "via": source,
-                }
-                for channel, source in pairs
-            ],
-        }
-
-    assert field is not None
-    norm = normalize_field(field)
-    result = await session.execute(
-        select(Field).where(Field.normalized_name == norm)
-    )
-    stored = result.scalar_one_or_none()
-    category_name = keyword = None
-    category_id = None
-    if stored is not None:
-        keyword = stored.matched_keyword  # legacy value; None for new rows
-        if stored.category_id is not None:
-            category = await session.get(Category, stored.category_id)
-            if category is not None:
-                category_id, category_name = category.id, category.name
-    pairs = await resolve_channels(session, None, category_id)
+    pairs = await channels_for_article_multi(session, record)
     return {
-        "input": field,
-        "record_id": None,
+        "input": record.field,
+        "record_id": record.id,
         "category": category_name,
-        "matched_keyword": keyword,
         "channels": [
             {
                 "id": channel.id,
@@ -142,6 +85,8 @@ async def preview_routing(
             for channel, source in pairs
         ],
     }
+
+
 async def qualifying_categories(session, article: Main) -> list[tuple[int, str]]:
     """The article's qualifying matches: ``(category_id, name)`` score-desc.
 
@@ -227,41 +172,6 @@ async def channels_for_article_multi(
         names = sources_by_channel[channel_id]
         pairs.append((channel_by_id[channel_id], names[0] if len(names) == 1 else "multi"))
     return pairs
-
-
-async def resolve_channels(
-    session, since: datetime | None, category_id: int | None
-) -> list[tuple[Channel, str]]:
-    """Resolve ``(channel, route_source)`` for ONE fixed category.
-
-    Legacy but still necessary: the raw-field routing preview shows what a
-    stored/curated field mapping would resolve to. Live delivery resolution
-    no longer goes through here — see
-    :func:`channels_for_article_multi`.
-
-    A channel only receives news from the moment it was switched on:
-    ``since`` is the article's ``created_at`` and a channel qualifies when
-    ``activated_at <= since``. ``None`` applies no floor ("where would news
-    generated right now go?").
-    """
-    if category_id is None:
-        return []
-    routes = list(
-        (
-            await session.execute(
-                select(CategoryChannelRoute.channel_id).where(
-                    CategoryChannelRoute.category_id == category_id
-                )
-            )
-        ).scalars().all()
-    )
-    if not routes:
-        return []
-    query = select(Channel).where(Channel.id.in_(routes), Channel.is_active.is_(True))
-    if since is not None:
-        query = query.where(Channel.activated_at <= since)
-    channels = list((await session.execute(query.order_by(Channel.id))).scalars().all())
-    return [(channel, "category") for channel in channels]
 
 
 def _has_undelivered_channel():

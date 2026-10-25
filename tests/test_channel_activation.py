@@ -34,14 +34,13 @@ from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
     channels_for_article_multi,
     ensure_pending_deliveries,
-    resolve_channels,
 )
 
 OUTPUT = {"title": "تیتر", "lead": "lead", "body": "body"}
 
 
 async def _field(session: AsyncSession) -> Field:
-    field = Field(name="test-field", normalized_name="test-field", category_id=None)
+    field = Field(name="test-field", normalized_name="test-field")
     session.add(field)
     await session.commit()
     return field
@@ -206,20 +205,6 @@ async def test_provenance_is_still_category_for_new_news(session: AsyncSession):
     assert all(source == "پزشکی و علوم سلامت" for _c, source in pairs), (
         "one match, one category name as provenance"
     )
-
-
-@pytest.mark.asyncio
-async def test_no_article_means_no_floor(session: AsyncSession):
-    """The preview endpoint asks 'where would news generated NOW go?'."""
-    field = await _field(session)
-    category = (await session.execute(select(Category).order_by(Category.id))).scalars().first()
-    if category is None:
-        category = Category(name="پزشکی و علوم سلامت", description="Medical")
-        session.add(category)
-        await session.commit()
-    await _route_to_all(session)
-    channel = await _channel(session, datetime(2099, 1, 1))
-    assert [c.id for c, _s in await resolve_channels(session, None, category.id)] == [channel.id]
 
 
 # --------------------------------------------------------------------------

@@ -42,17 +42,16 @@ Sender Worker ◀──claim── render ──▶ Bale / Telegram ──▶ st
   to three `{category, score, reason}` entries drawn from the 29 ISCED-F 2013
   intermediate fields (+ the `other` fallback). The Worker post-processes the
   answer into `main_category_matches` (hallucination filter against the live
-  categories, score clamp, dedupe keep-highest, threshold, top-N); no
-  rule-based classifier is in the live path (`app/fields/classification.py`
-  is retired reference code).
+  categories, score clamp, dedupe keep-highest, threshold, top-N). There is no
+  field-level classifier or field-level routing path; a reviewer can replace a
+  record's stored matches manually when needed.
 - **Multi-category routing.** Every qualifying match sends the article to that
   category's channels; a channel hit by two categories gets one delivery. A
   category with no channels publishes nothing (no broadcast fallback), and an
   `other`-only record queues no deliveries at all.
-- **Nothing publishes without a human.** Deliveries queue as
-  `awaiting_confirmation` and flip to `pending` only on approval
-  (`REQUIRE_HUMAN_CONFIRMATION` + `AUTO_PUBLISH_ON_CLASSIFICATION=false`,
-  both default).
+- **Auto-publish by default.** Deliveries queue directly as `pending` and the
+  sender publishes to the record's routed categories. Set
+  `REQUIRE_HUMAN_CONFIRMATION=true` to hold every delivery for approval.
 
 ## Contents
 
@@ -102,10 +101,9 @@ step, no CDN — see [Review panel](#review-panel)):
   with live HTMX tables (each row shows its primary category + count badge),
   tabbed review page (edit, raw JSON, metadata, **دسته‌بندی‌های خودکار** —
   every stored match with score/rank/reason/primary badge, fallback warning
-  and a manual category form — history, delivery preview of exactly what
-  approval will send), deliveries
-  with retry, submit form, models/prompts/channels/fields/categories
-  management, users + roles, and a global audit trail.
+  and a manual category form — history, delivery preview), deliveries with
+  retry, submit form, models/prompts/channels management, category and
+  channel routing, users + roles, and a global audit trail.
 - Three roles: **viewer** (read-only), **editor** (review), **admin** (full).
 
 ## Project structure
@@ -125,8 +123,7 @@ project/
 │   │   └── limits.py         # Rate limiter (10/min per client on /submit)
 │   ├── auth/secret.py        # Constant-time shared-secret check (machines only)
 │   ├── fields/
-│   │   ├── normalization.py  # NFC, zero-width removal, whitespace collapse
-│   │   └── classification.py # RETIRED keyword rules (reference only)
+│   │   └── normalization.py  # NFC, zero-width removal, whitespace collapse
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + shared resolve/probe helpers
 │   │   ├── prompts.py        # Packaged v2-combined prompt (injection-safe)
@@ -141,12 +138,12 @@ project/
 │       ├── app.py            # Panel routes (cookie auth, never the shared secret)
 │       ├── auth.py           # argon2, signed cookies, login lockout, proxy IP
 │       ├── templates/        # Jinja2 pages ported from the approved design
-│       └── static/           # panel.css (byte-identical design), HTMX, Vazirmatn
-├── migrations/               # SQL migrations 001–024 (authoritative schema)
+│       └── static/           # panel.css (Arc-inspired design), HTMX, Vazirmatn
+├── migrations/               # SQL migrations 001–026 (authoritative schema)
 ├── scripts/
 │   ├── apply_migrations.py   # Ordered, once-only runner (`_migrations` table)
-│   ├── seed_fields.py        # Loads data/fields.xlsx (idempotent)
-│   └── manage_channels.py    # Channels + field → channel routes CLI
+│   ├── seed_fields.py        # Loads data/fields.xlsx as dedup identities
+│   └── auto_route_channels.py # One-time category-channel title matching
 ├── tests/                    # pytest suite, PostgreSQL-backed (no SQLite)
 ├── data/fields.xlsx          # 533 source field names
 ├── docs/                     # architecture, codebase-guide, erd, demo, admin-panel
@@ -174,11 +171,10 @@ nothing secret is ever baked into images or committed.
 | `SHARED_SECRET` | Machine-API authentication secret | Yes |
 | `AVALAI_API_KEY` | AvalAI API key | Yes |
 | `AVALAI_BASE_URL` | AvalAI base URL | Yes |
-| `LLM_MODEL` | Model runtime identifier (`gpt-5.6-luna`) | Yes |
+| `LLM_MODEL` | Fallback model identifier; the active model in the panel wins | No |
 | `LLM_TIMEOUT_SECONDS` | Combined LLM call timeout | No (default: 120) |
 | `TOP_N_CATEGORIES` | Max category matches kept per record | No (default: 3) |
 | `MIN_CATEGORY_RELEVANCE` | Score threshold for routing a match to channels | No (default: 0.5) |
-| `AUTO_PUBLISH_ON_CLASSIFICATION` | Queue `pending` (skip the gate) when a real classification exists | No (default: false) |
 | `WORKER_POLL_INTERVAL_SECONDS` | Generation queue poll interval | No (default: 1) |
 | `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Heartbeat interval (must stay ≪ lease) | No (default: 30) |
 | `WORKER_LEASE_MINUTES` | Stale-job recovery timeout | No (default: 5) |
@@ -214,7 +210,7 @@ curl.exe http://localhost:8000/health
 # → {"status":"ok","database":"connected"}
 ```
 
-First run only — seed the 533 fields (idempotent):
+Optional: seed a starter list of discipline names (dedup identities only):
 
 ```bash
 docker compose exec api python scripts/seed_fields.py
@@ -344,7 +340,7 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 2. `002_seed_categories.sql` — the original 13 rule categories + `other`
 3. `003_seed_prompt.sql` — the v1 system prompt (deactivated by 023)
 4. `004_seed_model.sql` — the active model configuration
-5. `005_channel_delivery.sql` — `channels`, `field_channel_routes`, `deliveries` + initial Bale channel and routes
+5. `005_channel_delivery.sql` — `channels`, `deliveries` + initial Bale channel (the legacy field route table was removed by 026)
 6. `006_add_rejected_status.sql` — allow `rejected` on `main.status`
 7. `007_model_config_columns.sql` — `models.base_url/api_key_env/temperature/max_output_tokens/description`
 8. `008_panel_auth_audit.sql` — `roles`, `panel_users`, `audit_logs`
@@ -361,6 +357,8 @@ no-ops afterwards; `api`/`worker`/`sender`/`web` all wait on it):
 19. `023_isced_categories.sql` — **v2-combined**: `categories.deprecated/isc_code`, the 29 ISCED-F 2013 rows, `fields.category_id` NULLable, `main_category_matches` (score/rank CHECKs + indexes), seeded routes for the new vocabulary, and the active `v2-combined` prompt row
 20. `024_drop_legacy_categories.sql` — remaps the legacy rule categories' fields, records and deliveries onto the closest ISCED-F rows (uncategorizing only those with no honest equivalent) and deletes the retired rows; their routes and matches cascade
 21. `025_category_isc_code.sql` — **v3-compact**: adds `categories.short_code` (0 = other, 1-29 = ISCED), `main.llm_raw_output`, seeds and activates the compact prompt, verifies 30 codes
+22. `026_drop_field_categorization.sql` — removes the retired field-level classification columns and `field_channel_routes`; `fields` remains only as the dedup identity referenced by `main.field_id`
+23. `027_category_descriptions.sql` — translates the two remaining English category descriptions for the Persian panel
 
 Migrations are additive-only and never edited after applying — schema changes
 always add the next numbered file. Full ER diagram: `docs/erd.md`.
@@ -381,9 +379,9 @@ with the error text. Generation is *not* retried; crashes recover to `ready`
 **Sender Worker** (`sender`): turns `review` rows into one `deliveries` row
 per routed channel — resolved as the per-channel UNION over the record's
 qualifying `main_category_matches` (`route_source` names the category, or
-`multi`) — with `awaiting_confirmation` under the
-gate (`REQUIRE_HUMAN_CONFIRMATION` + `AUTO_PUBLISH_ON_CLASSIFICATION=false`
-defaults) or `pending` otherwise; `other`-only records queue nothing,
+`multi`) — with `awaiting_confirmation` when
+`REQUIRE_HUMAN_CONFIRMATION=true`, or `pending` otherwise; `other`-only
+records queue nothing,
 claims the oldest due
 delivery, renders the message, sends via the platform client, waits
 `SENDER_SEND_DELAY_SECONDS`, and retries retryable failures with exponential

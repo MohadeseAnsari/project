@@ -927,28 +927,19 @@ async def record_timeline(session, record: Main) -> list[dict]:
     timeline reflects what actually happened, including failures and the
     model/prompt used for generation.
     """
-    from app.db.models import Category, Channel, Delivery, Field, Model, Prompt
+    from app.db.models import Category, Channel, Delivery, Model, Prompt
 
     steps: list[dict] = [
         {"title": "ثبت درخواست", "sub": _tl_status(record.status), "at": record.created_at}
     ]
 
-    # field_row stays None when the record has no field link yet (a record can
-    # carry a category without one), so it is initialised before the branch.
-    field_row = None
-    field_name = None
-    if record.field_id is not None:
-        field_row = await session.get(Field, record.field_id)
-        field_name = field_row.name if field_row else None
     if record.category_id is not None:
         category = await session.get(Category, record.category_id)
         if category is not None:
-            detail = f"رشته: {field_name or record.field} · دسته: {category.name}"
-            if field_row is not None and field_row.matched_keyword:
-                detail += f" · کلیدواژه: {field_row.matched_keyword}"
-            steps.append({"title": "تعیین رشته و دسته", "sub": detail, "at": record.claimed_at})
-    elif field_row is not None:
-        steps.append({"title": "تعیین رشته و دسته", "sub": f"رشته: {field_name}", "at": record.claimed_at})
+            detail = f"رشته: {record.field} · دسته: {category.name}"
+            steps.append({"title": "تعیین دسته", "sub": detail, "at": record.claimed_at})
+    else:
+        steps.append({"title": "تعیین رشته", "sub": f"رشته: {record.field}", "at": record.claimed_at})
 
     model_name = prompt_version = None
     if record.model_id is not None:
@@ -1068,7 +1059,7 @@ async def record_overview(session, record: Main) -> dict:
     channel display names, and audit history with usernames. Timestamps stay
     raw datetimes — routes format them for display.
     """
-    from app.db.models import Category, Channel, Delivery, Field, Model, Prompt
+    from app.db.models import Category, Channel, Delivery, Model, Prompt
 
     deliveries_rows = (
         await session.execute(
@@ -1105,17 +1096,10 @@ async def record_overview(session, record: Main) -> dict:
         prompt = await session.get(Prompt, record.prompt_id)
         if prompt is not None:
             prompt_version, prompt_text = prompt.version, prompt.system_prompt
-    snapshot_category = current_category = field_keyword = None
+    snapshot_category = None
     if record.category_id is not None:
         snapshot = await session.get(Category, record.category_id)
         snapshot_category = snapshot.name if snapshot else None
-    if record.field_id is not None:
-        field_row = await session.get(Field, record.field_id)
-        if field_row is not None:
-            field_keyword = field_row.matched_keyword
-            if field_row.category_id is not None:
-                current = await session.get(Category, field_row.category_id)
-                current_category = current.name if current else None
 
     audits = (
         await session.execute(
@@ -1133,8 +1117,7 @@ async def record_overview(session, record: Main) -> dict:
         "deliveries": deliveries,
         "model_name": model_name, "model_base_url": model_base_url,
         "prompt_version": prompt_version, "prompt_text": prompt_text,
-        "snapshot_category": snapshot_category, "current_category": current_category,
-        "field_keyword": field_keyword, "history": history,
+        "snapshot_category": snapshot_category, "history": history,
         # The LLM's classification with per-match explanation + the flag for
         # the "unclassified" warning the categories tab shows.
         "category_matches": await record_category_matches(session, record.id),

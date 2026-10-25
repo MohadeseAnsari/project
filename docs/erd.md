@@ -2,15 +2,12 @@
 
 ```mermaid
 erDiagram
-    categories ||--o{ fields : "contains"
     categories ||--o{ main : "categorized_as"
     fields ||--o{ main : "selected_for"
     models ||--o{ main : "generated_by"
     prompts ||--o{ main : "generated_with"
     main ||--o{ main_category_matches : "classified_as"
     categories ||--o{ main_category_matches : "vocabulary"
-    fields ||--o{ field_channel_routes : "routed_by"
-    channels ||--o{ field_channel_routes : "receives"
     categories ||--o{ category_channel_routes : "routed_to"
     channels ||--o{ category_channel_routes : "receives"
     channels ||--o{ deliveries : "target_of"
@@ -39,17 +36,12 @@ erDiagram
         SERIAL id PK
         VARCHAR name UK
         VARCHAR normalized_name UK
-        INTEGER category_id FK
         VARCHAR source
-        VARCHAR matched_keyword
-        VARCHAR category_source
         TIMESTAMP created_at
     }
-    # fields.category_id is LEGACY metadata (v2-combined): classification of a
-    # thesis lives in main_category_matches. A new field row is inserted with
-    # category_id = NULL and matched_keyword = NULL — the row exists to give
-    # submissions a stable dedup identity (normalized_name). Historical rows
-    # keep their curated category and category_source ('manual' | 'rules');
+    # fields is only a dedup identity for a discipline name. It has no
+    # category, keyword, or channel route. main.field_id references it, but
+    # neither classification nor routing reads the field row.
 
     models {
         SERIAL id PK
@@ -178,15 +170,6 @@ erDiagram
     # switched ON, so neither a new channel nor a re-enabled one inherits the
     # archive that predates it.
 
-    field_channel_routes {
-        INTEGER field_id PK,FK
-        INTEGER channel_id PK,FK
-        TIMESTAMP created_at
-    }
-    # Retired from the delivery decision (item 6) and no longer written by the
-    # panel. Kept so existing rows are not lost; dropping the table would be a
-    # destructive migration for no gain.
-
     category_channel_routes {
         INTEGER category_id PK,FK
         INTEGER channel_id PK,FK
@@ -278,5 +261,4 @@ explainable after later edits. Excluded channels are `is_active = false` and
 that predates the moment it was switched on, which is what stops a newly
 routed channel from being flooded with the archive. A record whose only
 match is the `other` fallback reaches **no channel at all** and waits for a
-reviewer; `fields.matched_keyword` is legacy provenance for historical rows
-only.
+reviewer. There is no field-level routing fallback.

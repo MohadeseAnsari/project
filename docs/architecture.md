@@ -66,12 +66,10 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 - Retries retryable failures with exponential backoff up to `SENDER_MAX_ATTEMPTS`, then parks the delivery as `failed`; permanent errors (unknown chat, revoked token) fail immediately
 - Recovers abandoned `sending` deliveries after `SENDER_LEASE_MINUTES`
 - `awaiting_confirmation` is the gated initial status when
-  `REQUIRE_HUMAN_CONFIRMATION=true` AND `AUTO_PUBLISH_ON_CLASSIFICATION=false`
-  (both defaults): the sender never claims it, and approval flips it to
-  `pending`. With the flag off, or auto-publish on classification enabled,
-  queueing writes `pending` directly — except that a record whose only
-  classification is the `other` fallback never auto-publishes under any
-  setting, because nothing qualified.
+  `REQUIRE_HUMAN_CONFIRMATION=true`: the sender never claims it, and approval
+  flips it to `pending`. With the flag off (the default), queueing writes
+  `pending` directly — except that a record whose only classification is the
+  `other` fallback never auto-publishes, because nothing qualified.
 - Runs as its own compose service so channel rate limits and platform outages never affect generation
 
 ### Classification (LLM, combined with generation)
@@ -101,11 +99,12 @@ One call, one answer, one point of trust:
   answer is always exactly one generation or one human decision old.
 - Classification is queried per record via `GET /records/{id}/classification`
   and counted by primary category in `GET /stats` (`records_by_category`).
-- `fields.category_id` / `matched_keyword` are legacy metadata: new field rows
-  are inserted with NULLs (dedup identity only), and
-  `app/fields/classification.py` is retired to reference status (kept for
-  `scripts/reclassify_fields.py` audits of historical rows).
-- No deterministic rules anywhere in the live path.
+- `fields` is now only the dedup identity for a discipline name: id, name,
+  normalized_name, source, created_at. It has no category, keyword, or route.
+  `main.field_id` links a record to that identity; it is never used for
+  classification or routing.
+- No deterministic categorization rules and no field-level routing path exist
+  anywhere in the live system.
 
 ### LLM Generation (PydanticAI + AvalAI)
 - Receives thesis metadata as structured data
@@ -321,7 +320,6 @@ project/
 │   │   └── secret.py        # Secret verification
 │   ├── fields/
 │   │   ├── normalization.py # Field normalization (dedup identity)
-│   │   └── classification.py# RETIRED rule engine (reference only)
 │   ├── news/
 │   │   ├── generation.py    # Combined LLM call (news + classification)
 │   │   ├── prompts.py       # v3-compact prompt template

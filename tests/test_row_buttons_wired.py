@@ -65,7 +65,7 @@ async def _world(session: AsyncSession) -> Main:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="test-field", normalized_name="test-field", category_id=category.id)
+    field = Field(name="test-field", normalized_name="test-field")
     article = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
                    author="A", supervisor="S", status="review", field_id=field.id,
                    output_json=OUTPUT)

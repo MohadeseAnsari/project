@@ -35,7 +35,7 @@ async def _seed(session: AsyncSession) -> None:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    session.add(Field(name="f", normalized_name="f", category_id=category.id))
+    session.add(Field(name="f", normalized_name="f"))
     session.add(Channel(platform="bale", chat_id=91001, is_active=True))
     await session.commit()
 

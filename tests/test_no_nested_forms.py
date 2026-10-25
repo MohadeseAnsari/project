@@ -75,29 +75,6 @@ def test_every_form_closing_tag_is_accounted_for(path: Path):
     assert opens == closes, f"{path.name}: {opens} open vs {closes} close"
 
 
-def test_the_fields_page_keeps_both_a_row_form_and_a_bulk_form():
-    """The regression itself, pinned so it cannot come back.
-
-    Both controls are wanted -- "move 300 rows" and "fix this one" are
-    different jobs -- so the fix is NOT to drop either of them. It is to bind
-    the checkboxes to the bulk form by id, leaving the row forms top-level.
-    """
-    source = TEMPLATES.joinpath("fields.html").read_text(encoding="utf-8")
-    # The per-row forms must still exist...
-    assert 'action="/fields/{{ f.id }}/category"' in source
-    assert 'action="/fields/{{ f.id }}/confirm"' in source
-    assert 'action="/fields/{{ f.id }}/delete"' in source
-    # ...and the bulk form must be bound by id, not by wrapping the table.
-    assert 'id="bulk-field-form"' in source
-    assert source.count('form="bulk-field-form"') >= 3, (
-        "the checkboxes and the bar must bind to the bulk form by id"
-    )
-    # The bulk form element carries the CSRF token and nothing else.
-    bulk = re.search(r"<form[^>]*id=\"bulk-field-form\"[^>]*>(.*?)</form>", source, re.S)
-    assert bulk, "the bulk form must be a complete element"
-    assert "csrf_field" in bulk.group(1), "and must carry the CSRF token"
-
-
 def test_the_models_clear_key_form_is_a_sibling_of_the_settings_form():
     """It was nested, so "پاک کردن کلید" posted the settings form instead."""
     source = TEMPLATES.joinpath("models.html").read_text(encoding="utf-8")

@@ -212,22 +212,15 @@ class PreviewChannel(BaseModel):
     platform: str
     username: str | None = None
     title: str | None = None
-    via: str = Field(description="Which route level produced it: category, field, or fallback.")
+    via: str = Field(description="The category name that produced this destination, or multi.")
 
 
 class RoutingPreviewResponse(BaseModel):
     """``GET /routing/preview`` payload: the auditable routing chain."""
 
-    input: str = Field(description="The raw field name or record reference previewed.")
+    input: str = Field(description="The record's field text.")
     record_id: int | None = None
-    # None when nothing irreversible is known yet: classification now happens
-    # inside the generation call, so a bare field name has no category until a
-    # record carrying it has been generated (or a reviewer assigned one).
-    category: str | None = None
-    matched_keyword: str | None = Field(
-        default=None,
-        description="Legacy rule-based keyword. Always None for new records.",
-    )
+    category: str | None = Field(default=None, description="Display primary category.")
     channels: list[PreviewChannel]
 
 

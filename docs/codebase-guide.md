@@ -16,7 +16,7 @@ are no microservices, no Redis/Celery/Kafka, and exactly one Worker of each kind
 Client ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (main.status='ready')
                                                      │
 Worker ◀──claim (FOR UPDATE SKIP LOCKED, FIFO)──────┘
-  │  1. register field for dedup (fields, category_id = NULL — no classification)
+  │  1. register the field name as a dedup identity (no category, no keyword)
   │  2. ONE PydanticAI Agent call ──▶ AvalAI (OpenAI-compatible)
   │     → GeneratedNews{title, lead, body, categories[≤3]}  (news + ISCED-F 2013 together)
   │  3. post-process categories → main_category_matches (hallucination filter,
@@ -59,8 +59,7 @@ project/
 │   │   └── limits.py         # slowapi rate limiter (10/min per client)
 │   ├── auth/secret.py        # constant-time shared-secret verification
 │   ├── fields/
-│   │   ├── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
-│   │   └── classification.py # RETIRED rule engine (reference for scripts only)
+│   │   └── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + AvalAI client
 │   │   ├── prompts.py        # versioned v2-combined prompt (injection-safe)
@@ -75,8 +74,8 @@ project/
 ├── scripts/
 │   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table);
 │   │                          # run automatically by the one-shot `migrate` compose service
-│   ├── seed_fields.py        # loads data/fields.xlsx into the fields table
-│   └── manage_channels.py    # channels + field -> channel routes CLI
+│   ├── seed_fields.py        # loads data/fields.xlsx as dedup identities
+│   └── auto_route_channels.py # one-time category-channel title matching
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
 ├── docs/                     # this guide, architecture.md, erd.md, llm-prompt.md
@@ -150,11 +149,12 @@ changes and `docs/erd.md` for the full picture):
   vocabulary was remapped onto these rows and deleted by migration 024, so
   no dead vocabulary is left for the model or the router to trip over. The
   `deprecated` flag remains for retiring a category without breaking its FKs.
-- **fields** — 533 fields seeded from `data/fields.xlsx` (migration-free,
-  via `scripts/seed_fields.py`) plus runtime-discovered fields;
-  `normalized_name` is the unique stable identity, `source` distinguishes
-  `spreadsheet` vs `runtime`. New rows carry `category_id = NULL` /
-  `matched_keyword = NULL` (legacy metadata, no classifier).
+- **fields** — 533 field names seeded from `data/fields.xlsx` plus
+  runtime-discovered names; `normalized_name` is the unique stable identity and
+  `source` distinguishes `spreadsheet` vs `runtime`. The table has no category,
+  keyword, or channel route; it exists only so repeated discipline names share
+  one dedup identity. `main.field_id` points at it, and neither classification
+  nor routing reads it.
 - **models** — LLM model configuration; `is_active` selects the one in use.
 - **prompts** — versioned system prompts; `is_active` selects the one in use
   (migration 023 seeds and activates `v2-combined`).
@@ -191,11 +191,6 @@ changes and `docs/erd.md` for the full picture):
   from the per-category checkbox picker on `/categories`, which replaces the
   whole set rather than appending, and read by the sender, the preview
   endpoint and the panel so every surface agrees.
-- **field_channel_routes** — retired from the delivery decision and no longer
-  written by the panel. The table is kept so existing rows and the history they
-  explain are not lost. It must stay inert: a second table able to decide where
-  news goes would disagree with the matrix the moment an operator set them
-  differently, and the panel renders no way to see that.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
@@ -254,11 +249,9 @@ live `categories` rows are dropped as hallucinations, scores are clamped to
 and an empty answer becomes a single `other` row (`score=0.0`, reason
 `no auto-match`) that never auto-delivers.
 
-`app/fields/classification.py` is RETIRED — kept only so
-`scripts/reclassify_fields.py` can audit historical rows. `fields.category_id`
-/ `matched_keyword` are legacy metadata; the Worker inserts new field rows
-with NULLs. Fixtures and old reports referencing rules (e.g. `معماری داخلی`
-vs `معماری`) describe the retired engine.
+There is no field-level classifier and no field-level routing path. The
+`fields` table is only a dedup identity; classification is stored per record
+in `main_category_matches` and a reviewer can replace it manually.
 
 ## 9. LLM generation
 
@@ -358,6 +351,7 @@ ssh user@your-vps
 git clone <repo> && cd project
 cp .env.example .env          # edit with real credentials
 docker compose up -d
+# optional: preload the starter discipline names as dedup identities
 docker compose exec api python scripts/seed_fields.py
 ```
 
@@ -397,7 +391,7 @@ windows/panes instead of background shell jobs you cannot reattach to.
 | Container can't reach DB | use `postgres` (not `localhost`) as host inside containers |
 | Nothing sent to the channel | is the article `review`? `SELECT * FROM deliveries ORDER BY id DESC` — `pending` with a future `next_attempt_at` is waiting out backoff, `failed` has `error_message` |
 | Sends fail immediately | `deliveries.error_message`; a `failed` row with `no bot token configured` means `BALE_BOT_TOKEN` is missing from the `sender` service |
-| Article never delivered | `main.field_id IS NULL` → the field has no route and delivery fell back to active channels; check `manage_channels.py list` |
+| Article never delivered | check that the record has a qualifying `main_category_matches` row and that its category has channel routes on `/categories`; an `other`-only or unrouted record publishes nowhere by design |
 
 ## Engineering decisions (not explicitly required by the assignments)
 
@@ -453,11 +447,9 @@ windows/panes instead of background shell jobs you cannot reattach to.
   threshold, or no route), which is reversible where broadcast silence was
   not.
 - `awaiting_confirmation` is the gated initial delivery status when
-  `REQUIRE_HUMAN_CONFIRMATION=true` AND `AUTO_PUBLISH_ON_CLASSIFICATION=false`
-  (both defaults): queued by the sender but never
-  claimed until approval flips it to `pending`. With the gate off — or
-  auto-publish on classification enabled — queueing writes `pending`
-  directly; a record whose only classification is the `other` fallback never
-  auto-publishes under any setting.
+  `REQUIRE_HUMAN_CONFIRMATION=true`: queued by the sender but never claimed
+  until approval flips it to `pending`. With the gate off (the default), queueing
+  writes `pending` directly; a record whose only classification is the `other`
+  fallback never auto-publishes under any setting.
 - At-least-once sending on crash (possible duplicate post in the channel) —
   the same trade-off as generation, and for the same reason.

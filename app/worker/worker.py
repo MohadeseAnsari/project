@@ -94,17 +94,11 @@ async def claim_next_job(session) -> Main | None:
 
 
 async def _upsert_field(session, raw_field: str) -> Field | None:
-    """Register the thesis field name for dedup — WITHOUT classifying it.
+    """Register the thesis field name as a dedup identity.
 
-    Classification is no longer decided here: the generation call carries the
-    ISCED-F 2013 categories per record (``main_category_matches``). What the
-    field row still provides is the stable dedup identity (first sighting
-    wins): repeated submissions of the same discipline reuse one row.
-
-    A NEW field is inserted with ``category_id = NULL`` and
-    ``matched_keyword = NULL`` — the legacy rule-based columns stay NULL;
-    only the panel's manual curation can still attach a (deprecated) field
-    category later.
+    Classification is decided by the LLM during generation and stored per
+    record in ``main_category_matches``. This row only keeps a stable identity
+    for repeated field names; it has no category or keyword.
     """
     norm = normalize_field(raw_field)
     if not norm:
@@ -116,16 +110,10 @@ async def _upsert_field(session, raw_field: str) -> Field | None:
     if field:
         return field
 
-    field = Field(
-        name=raw_field,
-        normalized_name=norm,
-        category_id=None,
-        source="runtime",
-        matched_keyword=None,
-    )
+    field = Field(name=raw_field, normalized_name=norm, source="runtime")
     session.add(field)
     await session.flush()  # grab field.id for the FK without a full commit
-    logger.info("Registered new field id=%s name=%s (category: none — classified per record)", field.id, norm)
+    logger.info("Registered new field id=%s name=%s", field.id, norm)
     return field
 
 

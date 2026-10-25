@@ -31,7 +31,7 @@ from app.services.errors import PermissionDenied, from_value_error
 from app.services import channels as channel_service
 from app.services import deliveries as delivery_service
 from app.services import dispose_engine
-from app.services import fields as field_service
+from app.services import categories as category_service
 from app.services import models as model_service
 from app.services import prompts as prompt_service
 from app.services import records as record_service
@@ -437,7 +437,6 @@ _ACTION_FA = {
     "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "category_channels": "تنظیم کانال‌های دسته",
-    "field_create": "افزودن رشته", "field_delete": "حذف رشته",
     "category_create": "افزودن دسته", "category_delete": "حذف دسته",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
@@ -715,7 +714,7 @@ async def record_detail(
         {"title": step["title"], "sub": f"{step['sub']} · {_jalali(step['at'])}" if step["at"] else step["sub"]}
         for step in await record_service.record_timeline(session, record)
     ]
-    categories = await field_service.list_categories(session)
+    categories = await category_service.list_categories(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     # How many messages are really out there, for the bulk delete button.
     published_count = sum(1 for d in deliveries if d.status == "sent")
@@ -730,9 +729,7 @@ async def record_detail(
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
             approved_by=approved_by, timeline=timeline, categories=categories,
             routed_channels=routed_channels, message_preview=message_preview,
-            snapshot_category=overview["snapshot_category"],
-            current_category=overview["current_category"],
-            field_keyword=overview["field_keyword"], prompt_preview=prompt_preview,
+            snapshot_category=overview["snapshot_category"], prompt_preview=prompt_preview,
             published_count=published_count, delete_note=delete_note,
             category_matches=overview["category_matches"],
             classification_fallback=overview["classification_fallback"],
@@ -1144,151 +1141,73 @@ async def delivery_mark_deleted(
 
 
 @panel_app.get("/fields", response_class=HTMLResponse)
-async def fields_page(
+async def fields_page_removed(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "", page: int = 1, page_size: int = 50,
-    category_id: int | None = None, source: str = "", unconfirmed: str = "",
-    assigned: str = "", skipped: str = "",
 ):
-    """Fields — the known disciplines, their usage, and their archival category.
+    """The legacy field-categorization page is gone.
 
-    NOTE (v2-combined): a field's category is no longer how a thesis is
-    classified. The LLM assigns each record's ISCED-F 2013 categories during
-    generation (``main_category_matches``); ``fields.category_id`` is legacy
-    grouping kept for the panel. This page shows the field as the dedup
-    identity of a discipline, how many records use it, and lets an operator
-    tidy the archival grouping — which never affects routing.
-
-    ``?tab=categories`` still redirects to ``/categories`` so old links work.
+    Classification is LLM/manual per record now, so the old page has no job.
+    The address redirects for bookmarks instead of 404ing.
     """
-    user = await require_login(request, session)
-    if tab == "categories":
-        return RedirectResponse(url="/categories", status_code=301)
-
-    # SEARCH AND PAGINATE IN SQL. This page used to call list_fields(), which
-    # has a default limit of 100 and was called with no argument, so 449 of 549
-    # fields were never rendered — and the search box then filtered that
-    # already-truncated list in Python, so those 449 could not be found by
-    # searching either. 16 fields match "زیست"; the page could show 4.
-    page = max(1, page)
-    page_size = min(max(1, page_size), 200)
-    fields, total = await field_service.field_category_rows(
-        session, q=q, page=page, page_size=page_size, category_id=category_id,
-        source=source, unconfirmed_only=unconfirmed == "1",
-    )
-    top = await field_service.top_fields(session)
-    # The category NAMES are needed for the per-row select even though the
-    # categories page is separate — the select edits a field's category.
-    categories, _category_total = await field_service.category_cards(session)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    # Every active filter rides into the pager, so paging never silently
-    # drops the search the operator typed.
-    from urllib.parse import urlencode
-
-    query = urlencode(
-        {k: v for k, v in {
-            "q": q, "category_id": category_id, "source": source,
-            "unconfirmed": unconfirmed, "page_size": page_size,
-        }.items() if v not in (None, "")}
-    )
-    shown_from = (page - 1) * page_size + 1 if total else 0
-    shown_to = min(page * page_size, total)
-    return templates.TemplateResponse(request, "fields.html",
-        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
-             top=top, q=q, categories=categories, category_id=category_id,
-             source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
-             query=query, shown_from=shown_from, shown_to=shown_to,
-             # The bulk-assign outcome, so a batch that did nothing is visibly
-             # different from one that worked.
-             assigned=int(assigned) if assigned.isdigit() else None,
-             skipped=int(skipped) if skipped.isdigit() else None))
+    await require_login(request, session)
+    return RedirectResponse(url="/categories", status_code=301)
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
 async def categories_page(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "",
+    q: str = "",
 ):
-    """Categories and keywords, plus the category-to-channel mapping.
+    """Categories, their record usage, and the category-to-channel mapping.
 
-    A category is a destination you browse ("what buckets exist and what falls
-    into each"), which is a different job from editing one field's assignment,
-    so it keeps its own page.
-
-    The per-category channel picker is here because a CATEGORY is what gets
-    routed. Routing each of 500+ fields individually is not a configuration
-    screen anyone will ever fill in; routing the bucket is.
-
-    The dispatcher still broadcasts to every active channel. This mapping is
-    recorded and displayed, not yet acted on, which is why the note above the
-    matrix says so plainly -- a matrix an operator fills in and then watches be
-    ignored is worse than no matrix, so the panel never implies it is live.
+    A category is a destination: the LLM classifies each thesis during
+    generation, and every qualifying category routes the article to that
+    category's selected channels. There is no field-name classification layer,
+    so this page is the single place routing is configured.
     """
     user = await require_login(request, session)
-    if tab == "fields":
-        return RedirectResponse(url="/fields", status_code=301)
-    categories, category_total = await field_service.category_cards(session, q)
+    categories, category_total = await category_service.category_cards(session, q)
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    # One row per category with its channel ids, plus every channel so each
-    # picker can list them. Both come from the same tables the routes live in.
     matrix = await channel_service.category_channel_matrix(session)
     routes_by_category = {row["id"]: row["channel_ids"] for row in matrix}
     active_channels = [c for c in await channel_service.list_channels(session) if c.is_active]
 
-    # Routing is strict, so a category with no channels publishes NOTHING. That
-    # is invisible from the list itself -- every card looks the same -- so the
-    # page is told how much work is stranded, in fields, which is the unit the
-    # owner actually thinks in. Counting per category costs one grouped query
-    # rather than a lookup per card.
-    #
-    # Scoped to the categories actually being DISPLAYED, not to every category
-    # in the database. The warning names categories, so naming one the search
-    # filtered out would put a name on screen that the filter is meant to have
-    # removed -- and would make a search for one category appear to return all
-    # of them.
+    # A category with no channels publishes nothing. Show how many records are
+    # stranded, scoped to the categories currently on screen so the warning never
+    # contradicts the search filter.
     displayed = {row["id"] for row in categories}
+    # ``other`` is the explicit fallback, not a destination: it is expected to
+    # have no channels and must not turn the warning into permanent noise.
     unrouted = {
-        row["id"]
-        for row in matrix
-        if not row["channel_ids"] and row["id"] in displayed
+        row["id"] for row in matrix
+        if not row["channel_ids"] and row["id"] in displayed and row["name"] != "other"
     }
-    stranded_fields = await field_service.category_field_counts(session, unrouted)
-    total_stranded = sum(stranded_fields.values())
+    def _recs(row):
+        return max(row["record_count"], row["primary_count"])
+
+    unrouted_records = sum(_recs(row) for row in categories if row["id"] in unrouted)
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx,
              categories=categories, category_total=category_total, q=q,
              routes_by_category=routes_by_category, active_channels=active_channels,
-             # Only categories that actually hold fields are named in the
-             # warning: pointing at an empty category would send the operator
-             # to fix something that cannot affect any news.
-             unrouted_fields=total_stranded,
+             unrouted_records=unrouted_records,
              unrouted_categories=[
                  {"id": row["id"], "name": row["name"]}
-                 for row in matrix
-                 if row["id"] in unrouted and stranded_fields.get(row["id"], 0) > 0
-             ],
-             # Shown on each card so a delete that will be refused says why
-             # before the click rather than after it.
-             record_counts=await field_service.category_record_counts(
-                 session, [row["id"] for row in categories])))
+                 for row in categories
+                 if row["id"] in unrouted and _recs(row) > 0
+             ]))
 
 
 @panel_app.post("/categories/{category_id}/delete")
 async def categories_delete(
     request: Request, category_id: int, session: AsyncSession = Depends(session_dep),
 ):
-    """Delete a category (admins), refusing while it still holds fields or records.
+    """Delete a category (admins), refusing while any record references it.
 
-    Creating a category without a way to remove one is a trap: a category made
-    by mistake can only be emptied by hand. This closes that, but only for the
-    categories that can safely go.
-
-    The refusals are not obstruction. ``fields.category_id`` is NOT NULL and
-    ``main.category_id`` is a plain FK, so a category holding either cannot be
-    removed without deciding what happens to them -- and deciding that
-    automatically (sweeping its fields into a fallback bucket) would move news
-    to channels the operator never chose. The error text says the exact path:
-    filter the fields page by this category, bulk-assign them, come back.
+    Classification history is not disposable: `main_category_matches` and the
+    display primary (`main.category_id`) are how a generated record stays
+    explainable. A category that is still used therefore keeps its row and its
+    routes; the operator must reassign the records first.
     """
     user = await require_login(request, session)
     try:
@@ -1296,7 +1215,7 @@ async def categories_delete(
     except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     try:
-        await field_service.delete_category(session, category_id)
+        await category_service.delete_category(session, category_id)
     except ValueError as e:
         return templates.TemplateResponse(request, "base.html",
             _ctx(request, user, error=_service_error(e, "حذف دسته ممکن نشد.")),
@@ -1340,238 +1259,6 @@ async def category_channels_set(
     return RedirectResponse(url="/categories", status_code=303)
 
 
-@panel_app.post("/fields/{field_id}/confirm")
-async def field_confirm(request: Request, field_id: int, session: AsyncSession = Depends(session_dep)):
-    """Freeze a field's category as human-curated (reviewers and admins)."""
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.REVIEW_RECORD)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
-
-    field = await field_service.get_field(session, field_id)
-    if not field:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
-    field = await field_service.confirm_category(session, field)
-    await audit_service.record_event(session, user.id, "curate", None, f"field={field.name}")
-    return RedirectResponse(url="/fields", status_code=303)
-
-
-@panel_app.get("/channels", response_class=HTMLResponse)
-async def channels_page(
-    request: Request, channel_id: int | None = None, new: str = "",
-    session: AsyncSession = Depends(session_dep),
-):
-    """Destinations only: add, edit, switch on/off, delete.
-
-    The owner asked for exactly this page and nothing more. Every generated
-    article goes to every ACTIVE channel, so there is no routing to
-    configure — no "which field goes where" and no "which category maps to
-    which channel". Those two configuration screens had accumulated for a
-    behaviour that never actually filtered anything, and switching a channel
-    OFF is the only thing that decides where news does not go.
-
-    A channel that is on but failing says so on its row, because otherwise it
-    looks healthy while nothing reaches it.
-    """
-    user = await require_login(request, session)
-
-    channels = await channel_service.channels_with_counts(session)
-    selected = None
-    if channel_id is not None:
-        selected = await channel_service.get_channel(session, channel_id)
-    if selected is None:
-        selected = channels[0] if channels else None
-    # The field list is searched and paginated: a deployment has hundreds of
-    # fields, and rendering every one of them made the page unusable.
-    usage = await channel_service.channel_usage(session)
-    last_errors = await channel_service.last_errors(session)
-    for channel in channels:
-        channel.usage = usage.get(
-            channel.id,
-            {"deliveries": 0, "sent": 0, "failed": 0, "field_routes": 0,
-             "category_routes": 0},
-        )
-        channel.last_error = last_errors.get(channel.id)
-    # Read-only mirror of the category matrix: which categories currently name
-    # this channel. Shown as chips on the settings card so an operator editing a
-    # channel can see what points at it without opening /categories.
-    routed_names: dict[int, list[str]] = {}
-    for row in await channel_service.category_channel_matrix(session):
-        for channel_id in row["channel_ids"]:
-            routed_names.setdefault(channel_id, []).append(row["name"])
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    return templates.TemplateResponse(request, "channels.html",
-        _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
-             routed_names=routed_names,
-             active_count=sum(1 for c in channels if c.is_active),
-             total_sent=sum(c.usage.get("sent", 0) for c in channels),
-             total_failed=sum(c.usage.get("failed", 0) for c in channels),
-             # With no channels at all there is nothing to edit, so the empty
-             # state must offer the add form — otherwise the page has no form
-             # on it and a first-time operator is stuck.
-             show_new=bool(new) or not channels))
-
-
-
-@panel_app.get("/routing")
-async def routing_page_removed(request: Request):
-    """The routing-preview page is gone (item 5).
-
-    Its old address redirects to the channels page, which is where the
-    field/category/channel configuration lives now, so bookmarks and any link
-    typed earlier keep working instead of 404ing.
-    """
-    return RedirectResponse(url="/channels", status_code=301)
-
-
-@panel_app.post("/fields/{field_id}/category")
-async def field_set_category(
-    request: Request, field_id: int, category_id: str = Form(""),
-    session: AsyncSession = Depends(session_dep),
-):
-    """Set or clear a field's ARCHIVAL category.
-
-    v2-combined note: this does NOT influence the classification of theses or
-    their routing. The LLM chooses each record's ISCED-F 2013 categories at
-    generation time. This control only maintains the historical grouping of
-    field rows; an empty value detaches the grouping cleanly.
-
-    The assignment is marked ``manual`` so the page can show a human last
-    touched it.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.FIELD_CURATE)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
-    row = await field_service.get_field(session, field_id)
-    if not row:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
-    raw_category = (category_id or "").strip()
-    try:
-        parsed_category = int(raw_category) if raw_category else None
-    except ValueError:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error="دستهٔ انتخاب‌شده معتبر نیست."),
-            status_code=422)
-    try:
-        row = await field_service.assign_field_category(session, row, parsed_category)
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "تعیین دسته ممکن نشد.")),
-            status_code=422)
-    await audit_service.record_event(session, user.id, "route", None,
-                                     f"field={field_id} category={row.category_id} source=manual")
-    return RedirectResponse(url="/fields", status_code=303)
-
-
-@panel_app.post("/fields/bulk-category")
-async def fields_bulk_category(
-    request: Request, category_id: int = Form(...),
-    session: AsyncSession = Depends(session_dep),
-):
-    """Move every ticked field into one category (reviewers and admins).
-
-    The operation that makes curation possible at the scale the data is at:
-    hundreds of fields, and the classifier drops most of them into one
-    catch-all, so fixing them one dropdown at a time is a task nobody
-    finishes.
-
-    Fields already in the target are skipped rather than rewritten, so the
-    «دستی» badge keeps meaning "a person chose this" instead of appearing on
-    rows nobody looked at.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.FIELD_CURATE)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
-    form = await request.form()
-    try:
-        moved, skipped = await field_service.bulk_assign_category(
-            session, form.getlist("field_ids"), category_id
-        )
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "انتقال دسته ممکن نشد.")),
-            status_code=422)
-    await audit_service.record_event(
-        session, user.id, "route", None,
-        f"bulk fields={moved + skipped} category={category_id} moved={moved} skipped={skipped}",
-    )
-    # The outcome rides back in the query string so the field list can say how
-    # many actually moved. A batch that silently did nothing -- because every
-    # ticked field was already in the target -- is indistinguishable from one
-    # that worked, and "did my click do anything?" is the first question.
-    return RedirectResponse(
-        url=f"/fields?assigned={moved}&skipped={skipped}", status_code=303
-    )
-
-
-@panel_app.post("/fields")
-async def fields_create(
-    request: Request, name: str = Form(...), category_id: str = Form(""),
-    session: AsyncSession = Depends(session_dep),
-):
-    """Add a field by hand, with an optional ARCHIVAL category.
-
-    A field is the dedup identity of a discipline; the LLM classifies each
-    thesis from ISCED-F 2013, so a category here is legacy grouping only and
-    may be left empty. ``source='manual'`` still marks the row as an operator
-    addition rather than a spreadsheet import.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.FIELD_CURATE)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
-    raw_category = (category_id or "").strip()
-    try:
-        parsed_category = int(raw_category) if raw_category else None
-    except ValueError:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error="دستهٔ انتخاب‌شده معتبر نیست."),
-            status_code=422)
-    try:
-        field = await field_service.create_field(session, name, parsed_category)
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "افزودن رشته ممکن نشد.")),
-            status_code=422)
-    await audit_service.record_event(session, user.id, "field_create", None,
-                                     f"field={field.id} category={field.category_id}")
-    return RedirectResponse(url="/fields", status_code=303)
-
-
-@panel_app.post("/fields/{field_id}/delete")
-async def field_delete(request: Request, field_id: int, session: AsyncSession = Depends(session_dep)):
-    """Delete a field, refusing while records still point at it.
-
-    Deleting is refused rather than detaching the link: ``main.field_id`` is
-    nullable, so nulling it would be easy, but it would silently detach real
-    history from the discipline it was filed under while the record still
-    displays that discipline. Being told the field cannot go yet is the honest
-    answer.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.FIELD_CURATE)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
-    row = await field_service.get_field(session, field_id)
-    if not row:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
-    try:
-        await field_service.delete_field(session, row)
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "حذف رشته ممکن نشد.")),
-            status_code=409)
-    await audit_service.record_event(session, user.id, "field_delete", None, f"field={field_id}")
-    return RedirectResponse(url="/fields", status_code=303)
-
-
 @panel_app.post("/categories")
 async def categories_create(
     request: Request, name: str = Form(...), description: str = Form(""),
@@ -1581,7 +1268,7 @@ async def categories_create(
 
     There was no way to do this at all: buckets could only be deleted or
     reused. With routing decided per category, that made a missing bucket
-    unfixable -- its fields had nowhere to go.
+    unfixable -- its records would have nowhere to go.
     """
     user = await require_login(request, session)
     try:
@@ -1589,7 +1276,7 @@ async def categories_create(
     except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
     try:
-        category = await field_service.create_category(session, name, description)
+        category = await category_service.create_category(session, name, description)
     except ValueError as e:
         return templates.TemplateResponse(request, "base.html",
             _ctx(request, user, error=_service_error(e, "افزودن دسته ممکن نشد.")),
@@ -1597,6 +1284,52 @@ async def categories_create(
     await audit_service.record_event(session, user.id, "category_create", None,
                                      f"category={category.id}")
     return RedirectResponse(url="/categories", status_code=303)
+
+
+@panel_app.get("/channels", response_class=HTMLResponse)
+async def channels_page(
+    request: Request, channel_id: int | None = None, new: str = "",
+    session: AsyncSession = Depends(session_dep),
+):
+    """Destinations only: add, edit, switch on/off, delete.
+
+    Every article reaches a channel through its category matches; this page
+    manages the destinations themselves and shows which categories name the
+    selected channel. It does not classify theses.
+    """
+    user = await require_login(request, session)
+
+    channels = await channel_service.channels_with_counts(session)
+    selected = None
+    if channel_id is not None:
+        selected = await channel_service.get_channel(session, channel_id)
+    if selected is None:
+        selected = channels[0] if channels else None
+    usage = await channel_service.channel_usage(session)
+    last_errors = await channel_service.last_errors(session)
+    for channel in channels:
+        channel.usage = usage.get(
+            channel.id, {"deliveries": 0, "sent": 0, "failed": 0}
+        )
+        channel.last_error = last_errors.get(channel.id)
+    routed_names: dict[int, list[str]] = {}
+    for row in await channel_service.category_channel_matrix(session):
+        for cid in row["channel_ids"]:
+            routed_names.setdefault(cid, []).append(row["name"])
+    counts_ctx = await dashboard_service.sidebar_badges(session)
+    return templates.TemplateResponse(request, "channels.html",
+        _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
+             routed_names=routed_names,
+             active_count=sum(1 for c in channels if c.is_active),
+             total_sent=sum(c.usage.get("sent", 0) for c in channels),
+             total_failed=sum(c.usage.get("failed", 0) for c in channels),
+             show_new=bool(new) or not channels))
+
+
+@panel_app.get("/routing")
+async def routing_page_removed(request: Request):
+    """The old routing-preview page redirects to the channels page."""
+    return RedirectResponse(url="/channels", status_code=301)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
@@ -2158,12 +1891,7 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}": "MANAGE_CONFIG",
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
-    "/fields": "FIELD_CURATE",
-    "/fields/bulk-category": "FIELD_CURATE",
-    "/fields/{field_id}/delete": "FIELD_CURATE",
     "/categories": "MANAGE_CONFIG",
-    "/fields/{field_id}/category": "FIELD_CURATE",
-"/categories": "MANAGE_CONFIG",
     "/categories/{category_id}/delete": "MANAGE_CONFIG",
     "/categories/{category_id}/channels": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",

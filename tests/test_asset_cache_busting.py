@@ -85,7 +85,7 @@ async def test_every_page_carries_the_build_stamp(session):
                           follow_redirects=False)
         # Real pages in the CURRENT design: /deliveries and /categories are
         # 301 stubs onto a tab, so they are not pages to stamp.
-        for path in ("/", "/records", "/fields", "/channels", "/models", "/users", "/audit"):
+        for path in ("/", "/records", "/categories", "/channels", "/models", "/users", "/audit"):
             page = await client.get(path)
             assert page.status_code == 200, path
             assert re.search(r"نسخهٔ [0-9a-f]{10}", page.text), f"{path} has no build stamp"

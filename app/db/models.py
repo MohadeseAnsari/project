@@ -57,7 +57,6 @@ class Category(Base):
     short_code = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    fields = relationship("Field", back_populates="category")
     main_records = relationship("Main", back_populates="category")
     channel_routes = relationship(
         "CategoryChannelRoute", back_populates="category", cascade="all, delete-orphan"
@@ -68,16 +67,13 @@ class Category(Base):
 
 
 class Field(Base):
-    """A known thesis field.
+    """A normalized thesis-field name, kept only as a dedup identity.
 
-    ``normalized_name`` is the stable identity used for exact matching and
-    duplicate prevention; ``source`` distinguishes spreadsheet-seeded fields
-    from runtime-discovered ones. ``category_id`` is DEPRECATED for new rows —
-    it is kept (nullable now) for the historical, rule-based classification of
-    previously seen fields and for the panel's manual curation of that legacy
-    metadata; classification of a RECORD now lives in
-    ``main_category_matches``. ``matched_keyword`` is likewise legacy: new
-    runtime fields insert it as NULL.
+    Classification is not stored here. The LLM classifies each record during
+    generation and the result lives in ``main_category_matches``; a reviewer
+    can replace it manually. ``normalized_name`` is the stable identity used to
+    avoid duplicate field rows, and ``source`` records how the row was first
+    seen (spreadsheet, runtime, manual seed).
     """
 
     __tablename__ = "fields"
@@ -85,17 +81,10 @@ class Field(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(500), unique=True, nullable=False)
     normalized_name = Column(String(500), unique=True, nullable=False)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     source = Column(String(20), nullable=False, default="spreadsheet")
-    matched_keyword = Column(String(200), nullable=True)
-    category_source = Column(String(20), nullable=False, default="rules")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    category = relationship("Category", back_populates="fields")
     main_records = relationship("Main", back_populates="field_record")
-    channel_routes = relationship(
-        "FieldChannelRoute", back_populates="field_record", cascade="all, delete-orphan"
-    )
 
 
 class Model(Base):
@@ -337,38 +326,16 @@ class Channel(Base):
     #: channel added today never inherits the archive that predates it.
     activated_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    routes = relationship("FieldChannelRoute", back_populates="channel")
     category_routes = relationship("CategoryChannelRoute", back_populates="channel")
     deliveries = relationship("Delivery", back_populates="channel")
-
-
-class FieldChannelRoute(Base):
-    """The one-to-many field -> channel mapping.
-
-    Today every field routes to the single Bale channel, but the mapping is a
-    table rather than a constant so splitting fields across Bale/Telegram
-    channels later is a row insert and not a code change.
-    """
-
-    __tablename__ = "field_channel_routes"
-
-    field_id = Column(Integer, ForeignKey("fields.id", ondelete="CASCADE"), primary_key=True)
-    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-
-    field_record = relationship("Field", back_populates="channel_routes")
-    channel = relationship("Channel", back_populates="routes")
 
 
 class CategoryChannelRoute(Base):
     """The category -> channel mapping: the business routing chain.
 
-    An article reaches a channel through field -> category -> channels, so
-    the category (not each of the 500+ fields) is what the owner manages.
-    ``field_channel_routes`` stays as the field-level exception table and is
-    consulted when a category has no route; unmapped categories fall back to
-    all active channels. The permissive seed (every category to every active
-    channel) preserves pre-existing publishing behavior until refined.
+    An article reaches a channel through its category matches -> category
+    channels. There is no field-level routing fallback: a category with no
+    routes publishes nowhere, which keeps the panel's choice authoritative.
     """
 
     __tablename__ = "category_channel_routes"

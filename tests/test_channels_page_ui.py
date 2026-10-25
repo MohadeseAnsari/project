@@ -105,7 +105,7 @@ async def test_the_page_says_delivery_follows_the_category(session: AsyncSession
     assert "بر اساس" in page.text and "دستهٔ" in page.text, (
         "it says delivery is decided by the category"
     )
-    assert "دسته‌ها و کلیدواژه‌ها" in page.text, "and where to configure it"
+    assert "دسته‌بندی و مسیریابی" in page.text, "and where to configure it"
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ async def _setup(session: AsyncSession, platform: str = "bale", chat_id: int = 9
         cat = Category(name="پزشکی و علوم سلامت", description="Medical")
         session.add(cat)
         await session.commit()
-    field = Field(name=f"f-{chat_id}", normalized_name=f"f-{chat_id}", category_id=cat.id)
+    field = Field(name=f"f-{chat_id}", normalized_name=f"f-{chat_id}")
     session.add(field)
     await session.commit()
     article = Main(

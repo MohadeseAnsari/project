@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     shared_secret: str = "change-me-in-production"
     avalai_api_key: str = ""
     avalai_base_url: str = "https://api.avalai.ir/v1"
+    # Fallback only: the active model row in the database (panel /models) wins.
     llm_model: str = "gpt-5.6-luna"
 
     # Engineering decision (not required by the assignments): a hung LLM call

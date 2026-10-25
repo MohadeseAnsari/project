@@ -622,21 +622,19 @@ async def get_stats(
     responses={
         401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
         404: {"model": ErrorResponse, "description": "Record not found"},
-        422: {"model": ErrorResponse, "description": "Pass exactly one of field or record_id"},
+        422: {"model": ErrorResponse, "description": "Missing or invalid record_id"},
     },
 )
 async def routing_preview(
     shared_Secret: str = Query("", description="Authentication secret."),
-    field: str | None = Query(None, description="Raw field name to resolve."),
-    record_id: int | None = Query(None, description="Existing record to resolve."),
+    record_id: int = Query(..., description="Existing record to resolve."),
     session: AsyncSession = Depends(get_session),
 ):
-    """Preview the routing chain: category, matched keyword, destination channels.
+    """Preview the routing chain for one record.
 
-    Read-only audit surface for the client: given a raw field name (or an
-    existing record), show which category it resolves to, which keyword
-    decided it, and which channels the sender would use right now (with the
-    route level of each). Uses the same resolver as the sender and the panel.
+    Shows the record's display primary category and the channels the sender
+    would use right now (with the category name that reached each). There is no
+    field-name classification path; classification is stored per record.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -644,9 +642,7 @@ async def routing_preview(
     from app.messaging.dispatcher import preview_routing
 
     try:
-        return await preview_routing(session, field=field, record_id=record_id)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return await preview_routing(session, record_id=record_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

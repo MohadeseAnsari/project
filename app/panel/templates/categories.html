@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% from "icons.html" import glyph, icon %}
-{% block title %}دسته‌ها و کلیدواژه‌ها{% endblock %}
-{% block h1 %}دسته‌ها و کلیدواژه‌ها{% endblock %}
-{% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
+{% block title %}دسته‌بندی و مسیریابی{% endblock %}
+{% block h1 %}دسته‌بندی و مسیریابی{% endblock %}
+{% block crumb %}کنسول › تنظیمات › دسته‌بندی و مسیریابی{% endblock %}
 {% block content %}
 
 {# One channel row. Selected rows are rendered first so a long list opens on
@@ -16,40 +16,33 @@
 </label>
 {%- endmacro %}
 
-{# A category is a destination, not a field: this page answers "what buckets
-   exist and what falls into each", while /fields answers "what is each row and
-   which bucket is it in". The category of a FIELD is edited on /fields, because
-   that is a property of the row and editing it here would mean hunting for it.
-
-   This page is also where routing is configured, because a CATEGORY is what
-   gets routed: the checkbox list is the complete truth about where this
-   bucket's news goes, and nothing anywhere else decides it. #}
+{# Categories are both the classification vocabulary and the publishing
+   destination. The LLM classifies each thesis during generation; a reviewer
+   can replace the stored matches on the record. There is no field-level
+   classification or field-level routing path. #}
 <div class="note page-section">
-  دسته‌ها مقصد دسته‌بندی‌اند. از «v2-combined» مدلِ تولید، دسته‌بندی هر پایان‌نامه را
-  (چند دستهٔ ISCED-F 2013 با نمرهٔ ۰ تا ۱) در همان یک فراخوان کنار خبر برمی‌گرداند و
-  خبرها بر اساس همان دسته‌ها مسیریابی می‌شوند.
+  دسته‌ها هم واژگان دسته‌بندی‌اند و هم مقصد انتشار. مدل در همان فراخوان تولید خبر،
+  هر پایان‌نامه را بر پایهٔ عنوان و چکیده در چند دستهٔ ISCED-F 2013 دسته‌بندی می‌کند
+  و هر دستهٔ واجد شرایط، خبر را به کانال‌های انتخاب‌شدهٔ خودش می‌فرستد.
   <br>
-  خبرهای هر دسته <b>فقط</b> به کانال‌هایی می‌روند که اینجا انتخاب می‌کنید.
-  دسته‌ای که هیچ کانالی ندارد <b>هیچ خبری منتشر نمی‌کند</b>: خبرش تولید می‌شود ولی
-  به هیچ کانالی نمی‌رسد.
+  برای اصلاح دسته‌بندی یک رکورد، از تب <b>«دسته‌بندی‌های خودکار»</b> همان رکورد استفاده کنید.
+  خبرهای هر دسته <b>فقط</b> به کانال‌هایی می‌روند که اینجا انتخاب می‌کنید؛
+  دسته‌ای که هیچ کانالی ندارد <b>هیچ خبری منتشر نمی‌کند</b>.
 </div>
 
-{# The trap this box exists to close: the owner ticks channels for ten
-   categories, everything looks configured, and the eleventh -- usually the
-   catch-all -- silently sends nothing. That stays invisible until you notice
-   no news arriving, so it is counted here, in FIELDS, because the field is the
-   unit that actually strands work. #}
-{% if unrouted_fields %}
+{# A category with no route publishes nothing. Count the affected records, not
+   fields, so the warning is about work that can actually be stranded. #}
+{% if unrouted_records %}
 <div class="note danger page-section">
-  <b>{{ unrouted_fields|fa }} رشته</b> در دسته‌هایی هستند که هیچ کانالی ندارند؛ خبرِ این
-  رشته‌ها تولید می‌شود ولی به هیچ کانالی نمی‌رسد.
+  <b>{{ unrouted_records|fa }} رکورد</b> در دسته‌هایی هستند که هیچ کانالی ندارند؛ خبرشان
+  تولید می‌شود ولی به هیچ کانالی نمی‌رسد.
   {%- if unrouted_categories %} دسته‌های بدون مسیر: {% for c in unrouted_categories %}<a href="#cat-{{ c.id }}">{{ c.name }}</a>{% if not loop.last %}، {% endif %}{% endfor %}.{% endif %}
 </div>
 {% endif %}
 
 {# Creating a category used to be impossible: buckets could only be deleted or
    reused. With routing decided per category, a missing bucket is unfixable --
-   its fields had nowhere to go. #}
+   its records would have nowhere to go. #}
 <details class="disclose page-section">
   <summary>{{ icon('plus', '') }}افزودن دستهٔ تازه</summary>
   <div class="disclose-body">
@@ -78,28 +71,16 @@
 
   <div class="cat-grid" style="padding:14px 22px">
     {% for c in categories %}
-    <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}{% if c.deprecated %} <span class="badge s-off" title="منسوخ: ردهٔ قدیمیِ قاعده‌محور؛ دیگر به مدل پیشنهاد نمی‌شود ولی سابقهٔ رکوردها را نگه می‌دارد">منسوخ</span>{% endif %}<span class="grow"></span><span class="badge s-off">{{ c.field_count|fa }} رشته</span>
-      {# Delete is refused while the category holds fields or records, so the
-         card says which of the two is in the way BEFORE the click. A button
-         that only ever fails teaches the operator to ignore it. #}
+    {% set recs = [c.record_count, c.primary_count]|max %}
+    <div class="card" id="cat-{{ c.id }}" style="margin:0"><h3 class="card-head">{{ c.name }}{% if c.deprecated %} <span class="badge s-off" title="منسوخ: ردهٔ قدیمی؛ دیگر به مدل پیشنهاد نمی‌شود ولی سابقهٔ رکوردها را نگه می‌دارد">منسوخ</span>{% endif %}<span class="grow"></span><span class="badge s-off">{{ recs|fa }} رکورد</span>
+      {% if not recs %}
       <form method="post" action="/categories/{{ c.id }}/delete" style="display:inline"
-            onsubmit="return confirm('دستهٔ «{{ c.name }}» حذف شود؟{% if c.field_count %} این دسته {{ c.field_count|fa }} رشته دارد، پس حذف انجام نمی‌شود مگر رشته‌هایش را اول جابه‌جا کنید.{% endif %}')">{{ csrf_field(request) | safe }}{{ icon('trash', 'دستهٔ ' ~ c.name ~ ' را حذف کن', 'danger') }}</form>
+            onsubmit="return confirm('دستهٔ «{{ c.name }}» حذف شود؟')">{{ csrf_field(request) | safe }}{{ icon('trash', 'دستهٔ ' ~ c.name ~ ' را حذف کن', 'danger') }}</form>
+      {% endif %}
       </h3>
       <div class="body">
-        {% if c.field_names %}
-        <div class="chips">
-          {% for f in c.field_names %}<span class="chip">{{ f }}</span>{% endfor %}
-        </div>
-        {% if c.field_count > c.field_names|length %}
-        <div class="hint" style="margin-top:9px">و {{ (c.field_count - c.field_names|length)|fa }} رشتهٔ دیگر در همین دسته.</div>
-        {% endif %}
-        {% else %}
-        <div class="hint">هنوز رشته‌ای در این دسته نیست.</div>
-        {% endif %}
-        {% if c.description %}<div class="hint" style="margin-top:10px">{{ c.description }}</div>{% endif %}
-        {% set recs = record_counts.get(c.id, 0) if record_counts else 0 %}
-        {% if recs %}<div class="hint" style="margin-top:10px">{{ recs|fa }} رکورد با این دسته ثبت شده، پس تا وقتی آن رکوردها هستند حذف نمی‌شود.</div>{% endif %}
-        <div class="hint" style="margin-top:10px">تغییر دستهٔ یک رشته در صفحهٔ <a href="/fields">رشته‌ها</a> انجام می‌شود.</div>
+        {% if c.description %}<div class="hint" style="margin-top:0">{{ c.description }}</div>{% endif %}
+        {% if recs %}<div class="hint" style="margin-top:8px">{{ recs|fa }} رکورد با این دسته دسته‌بندی شده؛ برای حذف دسته، ابتدا دسته‌بندی آن رکوردها را اصلاح کنید.</div>{% endif %}
 
         {# The channel picker. <details> rather than a modal so it opens and
            closes with no JS, and so the page keeps working if the script never

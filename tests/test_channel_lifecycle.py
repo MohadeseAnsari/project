@@ -23,7 +23,6 @@ from app.db.models import (
     Channel,
     Delivery,
     Field,
-    FieldChannelRoute,
     Main,
     PanelUser,
     Role,
@@ -284,7 +283,7 @@ async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="off-field", normalized_name="off-field", category_id=None)
+    field = Field(name="off-field", normalized_name="off-field")
     session.add(field)
     async with panel_client() as client:
         await _login(client)
@@ -322,10 +321,9 @@ async def _route(session: AsyncSession, channel: Channel) -> None:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="routed-field", normalized_name="routed-field", category_id=category.id)
+    field = Field(name="routed-field", normalized_name="routed-field")
     session.add(field)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
     session.add(CategoryChannelRoute(category_id=category.id, channel_id=channel.id))
     await session.commit()
 
@@ -349,9 +347,6 @@ async def test_delete_removes_an_unused_channel_and_its_routes(
         )
         assert response.status_code == 303
     assert [r.id for r in await _channels(session)] == [keep.id], "the other channel survives"
-    assert (await session.execute(
-        select(FieldChannelRoute).where(FieldChannelRoute.channel_id == drop.id)
-    )).scalars().all() == []
     assert (await session.execute(
         select(CategoryChannelRoute).where(CategoryChannelRoute.channel_id == drop.id)
     )).scalars().all() == []

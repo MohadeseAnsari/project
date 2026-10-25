@@ -47,8 +47,7 @@ async def _full_article(session: AsyncSession, *, delivery_status: str = "sent")
     other = Category(name="timeline-other", description="other")
     session.add_all([category, other])
     await session.commit()
-    field = Field(name="timeline-field", normalized_name="timeline-field",
-                  category_id=category.id, matched_keyword="پزشکی")
+    field = Field(name="timeline-field", normalized_name="timeline-field")
     model = Model(name="timeline-model", provider="openai", version="v1", is_active=False)
     prompt = Prompt(version="timeline-v1", system_prompt="P", is_active=False)
     session.add_all([field, model, prompt])
@@ -84,13 +83,12 @@ async def test_timeline_covers_the_whole_flow(session: AsyncSession):
     steps = await record_service.record_timeline(session, row)
     titles = [s["title"] for s in steps]
     assert "ثبت درخواست" in titles
-    assert any("تعیین رشته و دسته" in t for t in titles)
+    assert any("تعیین دسته" in t for t in titles)
     assert any("تولید خروجی" in t for t in titles)
 
-    category_step = next(s for s in steps if "تعیین رشته و دسته" in s["title"])
+    category_step = next(s for s in steps if "تعیین دسته" in s["title"])
     assert "timeline-field" in category_step["sub"]
     assert "timeline-cat" in category_step["sub"]
-    assert "پزشکی" in category_step["sub"], "the matched keyword explains the WHY"
 
     generation = next(s for s in steps if "تولید خروجی" in s["title"])
     assert "timeline-model" in generation["sub"]

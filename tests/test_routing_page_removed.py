@@ -1,9 +1,9 @@
 """The routing-preview page is gone (item 5).
 
 Removed rather than deprecated: nothing else in the panel used it. The old
-address still redirects so a bookmarked link does not 404, and the machine
-API's ``/routing/preview`` is untouched — the owner asked for the PAGE to go,
-not the auditable endpoint the sender relies on.
+address still redirects so a bookmarked link does not 404. The machine API's
+``/routing/preview`` remains as a record-id audit surface; the raw field-name
+preview was removed with the field classification layer.
 """
 
 import pytest

@@ -492,8 +492,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
         "/": "داشبورد",
         "/records": "رکوردها و بازبینی",
         "/records?tab=deliveries": "ارسال‌ها و تحویل",
-        "/fields": "رشته‌ها",
-        "/categories": "دسته‌ها و کلیدواژه‌ها",
+        "/categories": "دسته‌بندی و مسیریابی",
         "/channels": "کانال‌ها",
         "/models": "مدل‌ها",
         "/prompts": "پرامپت‌ها",
@@ -521,8 +520,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
             assert (await client.get(new_path)).status_code == 200
         detail = await client.get(f"/records/{row.id}")
         assert detail.status_code == 200
-        assert "دستهٔ ثبت‌شده" in detail.text
-        assert "دستهٔ کنونی رشته" in detail.text
+        assert "دستهٔ اصلی" in detail.text
         delivery_tab = await client.get(f"/records/{row.id}", params={"tab": "delivery"})
         assert "پیش‌نمایش پیام" in delivery_tab.text
 

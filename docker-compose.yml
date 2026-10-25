@@ -59,7 +59,6 @@ services:
       # Combined generation + ISCED-F 2013 classification (v2-combined).
       TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
       MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
-      AUTO_PUBLISH_ON_CLASSIFICATION: ${AUTO_PUBLISH_ON_CLASSIFICATION:-false}
       # Compact LLM output (v3-compact).
       SKIP_REASON_ABOVE_SCORE: ${SKIP_REASON_ABOVE_SCORE:-90}
       STORE_LLM_RAW_OUTPUT: ${STORE_LLM_RAW_OUTPUT:-false}
@@ -107,7 +106,6 @@ services:
       # Combined generation + ISCED-F 2013 classification (v2-combined).
       TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
       MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
-      AUTO_PUBLISH_ON_CLASSIFICATION: ${AUTO_PUBLISH_ON_CLASSIFICATION:-false}
       # Compact LLM output (v3-compact).
       SKIP_REASON_ABOVE_SCORE: ${SKIP_REASON_ABOVE_SCORE:-90}
       STORE_LLM_RAW_OUTPUT: ${STORE_LLM_RAW_OUTPUT:-false}

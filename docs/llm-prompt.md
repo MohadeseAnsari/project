@@ -246,11 +246,10 @@ was generated with.
   function shared by the model call and the preview, which is the point:
   two copies would drift and the preview would stop being trustworthy.
 
-The old rule-based classifier (`app/fields/classification.py`,
-`USE_LLM_FOR_CATEGORIZATION`, `scripts/seed_fields.py` inserting categories)
-is retired: `app/fields/classification.py` is kept only so
-`scripts/reclassify_fields.py` can audit historical rows, and new `fields`
-rows are inserted with `category_id = NULL`.
+There is no rule-based field classifier and no field-level routing path. The
+`fields` table is only the dedup identity for a discipline name
+(`name`, `normalized_name`, `source`); classification is stored per record in
+`main_category_matches`, and a reviewer can replace it manually.
 
 If you want the user-message template editable without a deploy, that is a
 one-table change (a `prompts.user_template` column) and worth doing only if

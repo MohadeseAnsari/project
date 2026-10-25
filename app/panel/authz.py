@@ -7,7 +7,7 @@ re-implementing role checks, so "who may do what" has a single answer that
 | role | capabilities |
 |---|---|
 | `viewer` | read-only: every page, every mutation 403 |
-| `editor` | review: record text/approve/reject, delivery retry/cancel/release, submit, curate a field category |
+| `editor` | review: record text/approve/reject, delivery retry/cancel/release, submit |
 | `admin` | everything above, plus models/prompts/channels/routing/settings and users + the audit trail |
 
 Fail closed: an unknown role (``None``, a typo, a role row deleted by
@@ -24,7 +24,6 @@ class Action(str, Enum):
     REVIEW_RECORD = "review_record"
     RETRY_DELIVERY = "retry_delivery"
     SUBMIT_RECORD = "submit_record"
-    FIELD_CURATE = "field_curate"
     MANAGE_CONFIG = "manage_config"
     MANAGE_USERS = "manage_users"
     VIEW_AUDIT = "view_audit"
@@ -38,14 +37,12 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
         Action.REVIEW_RECORD,
         Action.RETRY_DELIVERY,
         Action.SUBMIT_RECORD,
-        Action.FIELD_CURATE,
     }),
     "admin": frozenset({
         Action.VIEW_RECORDS,
         Action.REVIEW_RECORD,
         Action.RETRY_DELIVERY,
         Action.SUBMIT_RECORD,
-        Action.FIELD_CURATE,
         Action.MANAGE_CONFIG,
         Action.MANAGE_USERS,
         Action.VIEW_AUDIT,

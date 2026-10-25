@@ -4,11 +4,9 @@ Each raw field name is normalized and inserted with
 ``ON CONFLICT (normalized_name) DO NOTHING`` so re-running the script is
 idempotent and duplicate normalized identities are never created.
 
-The inserted rows carry ``category_id = NULL`` and ``matched_keyword = NULL``:
-field-level classification is DEPRECATED (v2-combined classifies each record
-in the same LLM call that writes the news, stored per record in
-``main_category_matches``). The field table only provides the stable dedup
-identity now. Historical seeded rows keep their old category links.
+The field table is only the stable dedup identity for discipline names.
+Classification is done by the LLM per record during generation; no category or
+keyword is stored on a field.
 """
 
 import asyncio
@@ -39,8 +37,8 @@ async def seed_fields():
 
             status = await conn.execute(
                 """
-                INSERT INTO fields (name, normalized_name, category_id, matched_keyword, source)
-                VALUES ($1, $2, NULL, NULL, 'spreadsheet')
+                INSERT INTO fields (name, normalized_name, source)
+                VALUES ($1, $2, 'spreadsheet')
                 ON CONFLICT (normalized_name) DO NOTHING
                 """,
                 raw,

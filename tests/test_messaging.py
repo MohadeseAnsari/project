@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main, MainCategoryMatch
+from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from app.messaging import dispatcher
 from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
@@ -53,7 +53,7 @@ async def _field(session: AsyncSession) -> Field:
     a record's classification comes from its matches (see ``_article``).
     """
     unique = f"field-{next(_field_counter)}"
-    field = Field(name=unique, normalized_name=unique, category_id=None)
+    field = Field(name=unique, normalized_name=unique)
     session.add(field)
     await session.commit()
     return field
@@ -98,10 +98,7 @@ async def _article(session: AsyncSession, field: Field | None = None, status: st
     resolver reads ``main_category_matches``, so the helper writes one row —
     the same shape the Worker stores for a 0.9-score match.)
     """
-    if field is not None and field.category_id is not None:
-        category = await session.get(Category, field.category_id)
-    else:
-        category = await _classification_category(session)
+    category = await _classification_category(session)
     article = Main(
         username="tester",
         title="Thesis",
@@ -353,26 +350,6 @@ def test_configured_clients_skips_platforms_without_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_every_active_channel_is_a_target_even_with_a_legacy_field_route(
-    session: AsyncSession,
-):
-    """A field->channel row no longer narrows delivery (item 6).
-
-    It used to be the whole resolution: an article went only to the channels
-    its field was routed to. Both channels now receive it, because the rule is
-    "the news goes to all channels".
-    """
-    field = await _field(session)
-    bale = await _channel(session, "bale", 100)
-    telegram = await _channel(session, "telegram", 200)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=bale.id))
-    await session.commit()
-
-    article = await _article(session, field)
-    channels = await channels_for_article_multi(session, article)
-    assert [c.id for c, _s in channels] == [bale.id, telegram.id]
-
-
 @pytest.mark.asyncio
 async def test_channels_for_article_covers_every_active_channel(session: AsyncSession):
     field = await _field(session)
@@ -418,8 +395,6 @@ async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession, m
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
     article = await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -436,13 +411,6 @@ async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
     field = await _field(session)
     first = await _channel(session, "bale", 100)
     second = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
-    )
-    await session.commit()
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 2
@@ -452,8 +420,6 @@ async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
 async def test_ensure_is_idempotent(session: AsyncSession):
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -465,8 +431,6 @@ async def test_ensure_is_idempotent(session: AsyncSession):
 async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
 
     await _article(session, field, status="processing")  # not generated yet
     empty = await _article(session, field)
@@ -480,8 +444,6 @@ async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
 async def test_ensure_picks_up_articles_processed_later(session: AsyncSession):
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
 
     article = await _article(session, field, status="processing")
     assert await ensure_pending_deliveries(session) == 0
@@ -504,8 +466,6 @@ async def test_ensure_reaches_articles_beyond_a_saturated_batch(session: AsyncSe
     """
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
 
     for _ in range(5):
         await _article(session, field)
@@ -538,13 +498,6 @@ async def test_ensure_returns_article_delivered_to_one_channel_but_not_another(
     field = await _field(session)
     first = await _channel(session, "bale", 100)
     second = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
-    )
-    await session.commit()
 
     article = await _article(session, field)
     session.add(
@@ -578,8 +531,6 @@ async def _pending(session: AsyncSession, **kwargs) -> Delivery:
         channel = (await session.execute(select(Channel).order_by(Channel.id))).scalars().first()
     if channel is None:
         channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
     article = await _article(session, field)
     delivery = Delivery(main_id=article.id, channel_id=channel.id, **kwargs)
     session.add(delivery)
@@ -811,8 +762,6 @@ async def test_telegram_channel_uses_telegram_client(session: AsyncSession, monk
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     telegram = await _channel(session, "telegram", 987)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=telegram.id))
-    await session.commit()
     await _article(session, field)
 
     await ensure_pending_deliveries(session)
@@ -835,13 +784,6 @@ async def test_processed_article_reaches_every_routed_channel(session: AsyncSess
     field = await _field(session)
     bale = await _channel(session, "bale", 100)
     telegram = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=bale.id),
-            FieldChannelRoute(field_id=field.id, channel_id=telegram.id),
-        ]
-    )
-    await session.commit()
     article = await _article(session, field)
 
     clients = {"bale": StubClient(), "telegram": StubClient()}

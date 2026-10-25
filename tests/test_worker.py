@@ -64,13 +64,13 @@ async def test_claim_next_job(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_upsert_field_inserts_without_category(session: AsyncSession):
-    """A new field row is a dedup identity: NO category, NO keyword."""
+async def test_upsert_field_inserts_only_the_dedup_identity(session: AsyncSession):
+    """A field row is only a dedup identity now: no category or keyword."""
     field = await _upsert_field(session, "پزشکی")
     await session.commit()
     assert field is not None
-    assert field.category_id is None
-    assert field.matched_keyword is None
+    assert not hasattr(field, "category_id")
+    assert not hasattr(field, "matched_keyword")
     assert field.source == "runtime"
 
 
