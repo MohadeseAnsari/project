@@ -40,7 +40,7 @@
    no news arriving, so it is counted here, in FIELDS, because the field is the
    unit that actually strands work. #}
 {% if unrouted_fields %}
-<div class="note page-section" style="border-right-color:var(--red);background:var(--red-soft);color:#9F1239">
+<div class="note danger page-section">
   <b>{{ unrouted_fields|fa }} رشته</b> در دسته‌هایی هستند که هیچ کانالی ندارند؛ خبرِ این
   رشته‌ها تولید می‌شود ولی به هیچ کانالی نمی‌رسد.
   {%- if unrouted_categories %} دسته‌های بدون مسیر: {% for c in unrouted_categories %}<a href="#cat-{{ c.id }}">{{ c.name }}</a>{% if not loop.last %}، {% endif %}{% endfor %}.{% endif %}

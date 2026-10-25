@@ -4,7 +4,7 @@
    layout of its own, so it can only appear inside the tabbed page. #}
 
 {% if not require_human_confirmation %}
-<div class="note page-section" style="border-color:var(--warn,#b45309);background:rgba(180,83,9,.08)">
+<div class="note page-section">
   ⚠️ انتشار خودکار روشن است. خبرها بدون بازبینی انسانی به کانال‌های دسته‌های منطبق ارسال می‌شوند.
   <a href="/records?auto_published=yes">مشاهدهٔ منتشرشده‌های خودکار</a> ·
   {% if unmatched_category_behavior == 'review' %}<a href="/records?needs_classification=yes">نیازمند دسته‌بندی دستی</a> ·{% endif %}

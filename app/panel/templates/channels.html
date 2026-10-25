@@ -155,10 +155,10 @@
   </div>
 </div>
 {% else %}
-<div class="card" style="border:1px dashed var(--line)">
-  <div class="body" style="display:flex;align-items:center;gap:13px">
-    <div style="width:36px;height:36px;border-radius:10px;background:#F3F4F6;display:grid;place-items:center;color:var(--mut)">{{ glyph('plus') }}</div>
-    <div class="grow"><b style="font-size:13.5px">افزودن کانال تازه</b><div class="hint">کانال تازه کنار کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div></div>
+<div class="card add-channel">
+  <div class="body">
+    <div class="add-channel-plus">{{ glyph('plus') }}</div>
+    <div class="grow"><b>افزودن کانال تازه</b><div class="hint">کانال تازه کنار کانال‌های موجود اضافه می‌شود؛ هیچ‌کدام تغییر نمی‌کنند.</div></div>
     <a class="btn btn-ghost btn-sm" href="/channels?new=1">{{ glyph('plus') }}افزودن کانال</a>
   </div>
 </div>

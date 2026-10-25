@@ -3,30 +3,39 @@
 {% block h1 %}ثبت پایان‌نامهٔ تازه{% endblock %}
 {% block crumb %}کنسول › ثبت ورودی{% endblock %}
 {% block content %}
-<div class="side3 compact">
-  <div class="card">
+<div class="detail-layout compact">
+  <div class="card detail-main">
     <h3>متادیتای پایان‌نامه</h3>
     <div class="body">
       <form method="post" action="/submit">{{ csrf_field(request) | safe }}
-        <div class="two">
-          <div class="field"><label>عنوان پایان‌نامه</label><input type="text" name="title" required></div>
-          <div class="field"><label>نویسنده</label><input type="text" name="author" required></div>
-          <div class="field"><label>استاد راهنما</label><input type="text" name="supervisor" required></div>
-          <div class="field"><label>دانشگاه</label><input type="text" name="university" required></div>
-          <div class="field"><label>رشته</label><input type="text" name="field" required><div class="hint">نام رشته به‌صورت خودکار نرمال و دسته‌بندی می‌شود.</div></div>
-          <div class="field"><label>نام کاربری ثبت‌کننده</label><input type="text" name="username" required></div>
-          <div class="field"><label>مدل (اختیاری)</label><select name="model_id"><option value="">پیش‌فرض فعال</option>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}{% if m.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
-          <div class="field"><label>پرامپت (اختیاری)</label><select name="prompt_id"><option value="">پیش‌فرض فعال</option>{% for p in prompts %}<option value="{{ p.id }}">{{ p.version }}{% if p.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
+        <div class="form-section">
+          <div class="two">
+            <div class="field"><label>عنوان پایان‌نامه</label><input type="text" name="title" required></div>
+            <div class="field"><label>نویسنده</label><input type="text" name="author" required></div>
+            <div class="field"><label>استاد راهنما</label><input type="text" name="supervisor" required></div>
+            <div class="field"><label>دانشگاه</label><input type="text" name="university" required></div>
+            <div class="field"><label>رشته</label><input type="text" name="field" required><div class="hint">نام رشته به‌صورت خودکار نرمال و دسته‌بندی می‌شود.</div></div>
+            <div class="field"><label>نام کاربری ثبت‌کننده</label><input type="text" name="username" required></div>
+          </div>
         </div>
-        <div class="field"><label>چکیده</label><textarea name="abstract" rows="4" required></textarea></div>
-        <div class="field"><label>فهرست مطالب (اختیاری)</label><textarea name="table_of_contents" rows="2" placeholder="فصل‌ها، هر خط یک عنوان…"></textarea></div>
-        <div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn btn-primary" type="submit">ثبت و تولید خبر</button></div>
-        <div class="hint">متن خروجی پیش از انتشار به کانال، در صفحهٔ بازبینی برای تأیید انسانی نمایش داده می‌شود.</div>
+        <div class="form-section">
+          <div class="form-section-head">تنظیمات تولید <span class="hint" style="display:inline;margin:0">اختیاری</span></div>
+          <div class="two">
+            <div class="field"><label>مدل</label><select name="model_id"><option value="">پیش‌فرض فعال</option>{% for m in models %}<option value="{{ m.id }}">{{ m.name }}{% if m.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
+            <div class="field"><label>پرامپت</label><select name="prompt_id"><option value="">پیش‌فرض فعال</option>{% for p in prompts %}<option value="{{ p.id }}">{{ p.version }}{% if p.is_active %} (فعال){% endif %}</option>{% endfor %}</select></div>
+          </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-head">متن پایان‌نامه</div>
+          <div class="field"><label>چکیده</label><textarea name="abstract" rows="4" required></textarea></div>
+          <div class="field"><label>فهرست مطالب (اختیاری)</label><textarea name="table_of_contents" rows="2" placeholder="فصل‌ها، هر خط یک عنوان…"></textarea></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px"><button class="btn btn-primary" type="submit">ثبت و تولید خبر</button><span class="hint" style="margin:0">متن خروجی پیش از انتشار به کانال، در صفحهٔ بازبینی برای تأیید انسانی نمایش داده می‌شود.</span></div>
       </form>
     </div>
   </div>
 
-  <div class="stack">
+  <div class="stack detail-side">
     <div class="card"><h3>پیش‌نمایش خروجی</h3><div class="body">
       <div class="preview">
         <h4>پیش‌نمایش پس از تولید نمایش داده می‌شود</h4>

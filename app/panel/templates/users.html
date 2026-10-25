@@ -4,12 +4,11 @@
 {% block h1 %}کاربران و نقش‌ها{% endblock %}
 {% block crumb %}کنسول › مدیریت › کاربران{% endblock %}
 {% block content %}
-<div class="two">
-  <div class="card">
+<div class="card page-section">
     <h3 class="card-head">کاربران کنسول<span class="grow"></span><span class="badge s-off">{{ users|length|fa }} کاربر</span></h3>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:88px">عملیات</th></tr></thead>
+      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:110px">عملیات</th></tr></thead>
       <tbody>
         {% for u in users %}
         <tr class="table-row"><td class="title">{{ u.username }}</td>
@@ -38,6 +37,7 @@
     </div>
   </div>
 
+  <div class="two">
   {# ONE settings block for every user: pick someone, then act. Previously this
      looped a role form and a password form per user, so the page grew a pair
      of sections for each account added. #}

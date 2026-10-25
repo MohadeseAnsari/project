@@ -26,8 +26,8 @@
    broken. #}
 <div class="page-section tight">
   <div class="tabs">
-    <a href="/records"><span class="{% if tab != 'deliveries' %}on{% endif %}">رکوردها و بازبینی</span></a>
-    <a href="/records?tab=deliveries"><span class="{% if tab == 'deliveries' %}on{% endif %}">ارسال‌ها و تحویل{% if gated_count %} ({{ gated_count|fa }}){% endif %}</span></a>
+    <a class="{% if tab != 'deliveries' %}on{% endif %}" href="/records">رکوردها و بازبینی</a>
+    <a class="{% if tab == 'deliveries' %}on{% endif %}" href="/records?tab=deliveries">ارسال‌ها و تحویل{% if gated_count %} ({{ gated_count|fa }}){% endif %}</a>
   </div>
 </div>
 

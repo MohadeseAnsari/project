@@ -6,8 +6,8 @@
 <a class="btn btn-ghost btn-sm" href="/records">بازگشت به فهرست</a>
 {% endblock %}
 {% block content %}
-<div class="side3 compact">
-  <div class="card">
+<div class="detail-layout compact">
+  <div class="card detail-main">
     <h3>خبر تولیدشده توسط مدل — قابل ویرایش<span class="grow"></span>
       {% if record.status == 'review' %}<span class="badge s-review">★ نیازمند تأیید</span>
       {% elif record.status == 'approved' %}<span class="badge s-ready">✓ تأیید شده{% if approved_by %} · {{ approved_by }}{% endif %}</span>
@@ -19,13 +19,13 @@
       {% else %}<span class="badge s-off">{{ record.status }}</span>{% endif %}
     </h3>
     <div class="tabs">
-      <a href="/records/{{ record.id }}?tab=text" style="text-decoration:none;color:inherit"><span class="{% if tab=='text' %}on{% endif %}">متن خبر</span></a>
-      <a href="/records/{{ record.id }}?tab=categories" style="text-decoration:none;color:inherit"><span class="{% if tab=='categories' %}on{% endif %}">دسته‌بندی‌های خودکار</span></a>
-      <a href="/records/{{ record.id }}?tab=raw" style="text-decoration:none;color:inherit"><span class="{% if tab=='raw' %}on{% endif %}">خروجی خام مدل</span></a>
-      <a href="/records/{{ record.id }}?tab=meta" style="text-decoration:none;color:inherit"><span class="{% if tab=='meta' %}on{% endif %}">متادیتای ورودی</span></a>
-      <a href="/records/{{ record.id }}?tab=history" style="text-decoration:none;color:inherit"><span class="{% if tab=='history' %}on{% endif %}">تاریخچهٔ تغییرات</span></a>
-      <a href="/records/{{ record.id }}?tab=delivery" style="text-decoration:none;color:inherit"><span class="{% if tab=='delivery' %}on{% endif %}">تحویل</span></a>
-      <a href="/records/{{ record.id }}?tab=final" style="text-decoration:none;color:inherit"><span class="{% if tab=='final' %}on{% endif %}">پرامپت نهایی</span></a>
+      <a class="{% if tab=='text' %}on{% endif %}" href="/records/{{ record.id }}?tab=text">متن خبر</a>
+      <a class="{% if tab=='categories' %}on{% endif %}" href="/records/{{ record.id }}?tab=categories">دسته‌بندی‌های خودکار</a>
+      <a class="{% if tab=='raw' %}on{% endif %}" href="/records/{{ record.id }}?tab=raw">خروجی خام مدل</a>
+      <a class="{% if tab=='meta' %}on{% endif %}" href="/records/{{ record.id }}?tab=meta">متادیتای ورودی</a>
+      <a class="{% if tab=='history' %}on{% endif %}" href="/records/{{ record.id }}?tab=history">تاریخچهٔ تغییرات</a>
+      <a class="{% if tab=='delivery' %}on{% endif %}" href="/records/{{ record.id }}?tab=delivery">تحویل</a>
+      <a class="{% if tab=='final' %}on{% endif %}" href="/records/{{ record.id }}?tab=final">پرامپت نهایی</a>
     </div>
     {% if tab == 'categories' %}
     <div class="body">
@@ -198,7 +198,7 @@
     {% endif %}
   </div>
 
-  <div class="stack">
+  <div class="stack detail-side">
     <div class="card">
       <h3>متادیتای پایان‌نامه</h3>
       <div class="body">

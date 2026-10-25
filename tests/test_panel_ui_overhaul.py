@@ -282,8 +282,9 @@ def test_panel_css_defines_the_layout_and_icon_classes():
                  ".table-row", ".icon-btn", ".icon-btn.danger", ".icon-btn.ok",
                  ".icon-btn.mut"):
         assert rule in css, f"panel.css is missing {rule}"
-    # No media queries were introduced: this work is not responsive.
-    assert "@media" not in css, "the overhaul must not add a breakpoint"
+    # The redesign is responsive: narrow screens collapse the shell, grids,
+    # and detail sidebars instead of pushing content sideways.
+    assert "@media" in css, "the redesigned panel must include responsive rules"
 
 
 def test_no_template_reaches_for_an_icon_library():
