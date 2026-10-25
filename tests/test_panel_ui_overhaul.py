@@ -329,3 +329,35 @@ def test_the_kpi_row_class_replaced_the_ad_hoc_one():
         assert 'class="kpis"' not in body, f"{path.name} still uses .kpis"
     css = CSS.read_text(encoding="utf-8")
     assert ".kpis{" in css, "keep .kpis only while something still references it"
+
+
+def test_the_category_channel_picker_is_bounded_and_searchable():
+    """A category can route to dozens of channels; the picker must not stretch
+    the card to the height of the channel table. The summary names the current
+    routes, and the expanded list scrolls inside a fixed bound."""
+    body = _text("categories.html")
+    for marker in ('class="disclose channel-picker"',
+                   'class="picker-list" data-picker-list',
+                   'type="search" data-picker-search',
+                   'class="picker-preview"', 'class="picker-foot"'):
+        assert marker in body, f"categories.html is missing {marker}"
+    css = CSS.read_text(encoding="utf-8")
+    assert ".picker-list{" in css, "the channel list has no bounded container"
+    assert "max-height:220px" in css and "overflow-y:auto" in css, (
+        "a long channel list must scroll instead of growing the category card"
+    )
+
+
+def test_the_platform_badge_falls_back_for_a_new_platform():
+    """Bale and Telegram get friendly labels; any other stored platform name
+    must still render instead of leaving a blank cell."""
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=True)
+    template = env.from_string(
+        '{% from "platforms.html" import platform_badge %}'
+        '{{ platform_badge("eitaa") }}'
+    )
+    html = template.render()
+    assert "platform-badge" in html
+    assert ">eitaa</span>" in html

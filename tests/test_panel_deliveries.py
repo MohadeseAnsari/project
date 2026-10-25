@@ -167,3 +167,26 @@ async def test_release_rejects_other_states(session: AsyncSession):
         assert (await client.post(
             "/deliveries/999999/release", json={"shared_Secret": settings.shared_secret}
         )).status_code == 404
+
+
+def test_delivery_rows_carry_the_channel_platform():
+    """The panel column reads the stored platform, not a bale/telegram guess.
+
+    ``eitaa`` stands in for a platform added later: the row builder must pass
+    its value through unchanged, and the template's fallback renders it.
+    """
+    from types import SimpleNamespace
+
+    from app.services.deliveries import delivery_rows
+
+    delivery = SimpleNamespace(
+        id=1, main_id=2, status="sent", attempts=1, platform_message_id="9",
+        category_id=None, route_source=None,
+    )
+    channel = SimpleNamespace(username="@future", title=None, platform="eitaa")
+    article = SimpleNamespace(title="T", field="F")
+
+    row = delivery_rows([(delivery, channel, article)])[0]
+
+    assert row["platform"] == "eitaa"
+    assert row["channel_name"] == "@future"

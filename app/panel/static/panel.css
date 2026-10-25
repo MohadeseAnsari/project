@@ -116,6 +116,7 @@ header.top .crumb{color:var(--mut2);font-size:11.5px;margin-top:2px}
 .card .body{padding:14px}
 .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start}
 .side3{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px}
 .filters{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--line2);flex-wrap:wrap}
 select,input[type=text],input[type=password],input[type=number],textarea{font-family:inherit;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink2);width:100%}
 select{width:auto}
@@ -245,3 +246,86 @@ details.disclose[open]{box-shadow:0 4px 14px rgba(17,24,39,.06)}
 .card[id^="cat-"]{transition:transform .15s,box-shadow .15s}
 .card[id^="cat-"]:hover{transform:translateY(-2px);box-shadow:0 4px 18px rgba(17,24,39,.08)}
 .card[id^="cat-"] .card-head{background:linear-gradient(180deg,#FAFBFF,#F5F6FA)}
+
+/* ── category channel picker ─────────────────────────────────────────
+   A category can route to dozens of channels. Showing every checkbox at full
+   height made one card taller than the viewport, so the summary names the
+   current routes and the expanded list scrolls inside a fixed bound. The
+   selected rows are rendered first, which keeps the common edit at the top. */
+.channel-picker>summary{flex-wrap:nowrap}
+.channel-picker .picker-chev{display:inline-flex;flex:0 0 auto;color:var(--mut2);transition:transform .15s}
+.channel-picker[open] .picker-chev{transform:rotate(-90deg)}
+.channel-picker .picker-label{flex:0 0 auto}
+.channel-picker .picker-preview{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;font-size:11.5px;color:var(--mut)}
+.channel-picker>summary .badge{flex:0 0 auto}
+.picker-tools{display:flex;align-items:center;gap:8px;padding-top:10px}
+.picker-tools[hidden]{display:none}
+.picker-tools input[type=search]{flex:1;min-width:0;font-family:inherit;font-size:12.5px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink2)}
+.picker-tools .hint{margin:0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.picker-list{max-height:220px;overflow-y:auto;overflow-x:hidden;margin-top:8px;padding:4px;border:1px solid var(--line2);border-radius:9px;background:#fff}
+.picker-list .pick{padding:6px 8px}
+.picker-list .pick.is-hidden{display:none}
+.picker-empty{padding:12px 8px;text-align:center}
+.picker-foot{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}
+.picker-foot .hint{margin:0;font-variant-numeric:tabular-nums}
+.picker-foot .btn{margin-inline-start:auto}
+/* The badge already sets display:inline-flex, so the UA [hidden] rule needs
+   the extra specificity to keep an unchanged selection marker out of view. */
+.picker-dirty[hidden]{display:none}
+
+/* Deliveries table: the channel platform. Known platforms get a colour;
+   anything else keeps the neutral badge and the stored platform name from
+   platforms.html, so a new platform still shows up without a CSS change. */
+.platform-badge{background:#F3F4F6;color:var(--mut)}
+.platform-bale{background:var(--green-soft);color:var(--green)}
+.platform-telegram{background:var(--blue-soft);color:var(--blue)}
+
+/* Compact density for the two thesis screens (submit and review). Scoped to
+   .compact so every other panel page keeps its existing spacing. The point is
+   to fit the same content on one screen without hiding any field. */
+.side3.compact{gap:10px}
+.compact .stack{gap:10px}
+.compact .card h3{padding:9px 12px;font-size:13px}
+.compact .card .body{padding:11px 12px}
+.compact .two{gap:10px}
+.compact .field{margin-bottom:7px}
+.compact label{font-size:11.5px;margin-bottom:4px}
+.compact select,.compact input[type=text],.compact input[type=password],.compact input[type=number],.compact textarea{padding:6px 8px;font-size:12.5px}
+.compact textarea{line-height:1.55}
+.compact .hint{font-size:10.5px;margin-top:3px}
+.compact .btn{padding:6px 10px;font-size:12px}
+.compact .btn-sm{padding:5px 8px;font-size:11.5px}
+.compact .badge{padding:3px 7px;font-size:10.5px}
+.compact .tabs{flex-wrap:wrap;gap:2px;padding:0 12px}
+.compact .tabs span{padding:6px 8px;font-size:11px}
+.compact .kv{grid-template-columns:98px 1fr;gap:6px 8px;font-size:11.5px}
+.meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px}
+.meta-item{display:flex;flex-direction:column;gap:2px;min-width:0}
+.meta-label{font-size:10.5px;color:var(--mut2)}
+.meta-value{font-size:11.5px;font-weight:500;color:var(--ink);overflow-wrap:anywhere}
+.compact .meta-grid{gap:7px 12px}
+.compact .note{padding:8px 10px;font-size:11.5px}
+.compact .preview{padding:10px 12px}
+.compact .preview h4{font-size:13px;margin-bottom:6px;line-height:1.6}
+.compact .preview p{font-size:12px;line-height:1.8}
+.compact .tl{padding:6px 0;grid-template-columns:22px 1fr;gap:8px}
+.compact .tl .bullet{width:22px;height:22px;font-size:11px}
+.compact .tl .line:before{right:10px;top:22px;bottom:-6px}
+.compact .tl b{font-size:12.5px}
+.compact .tl small{font-size:10.5px}
+.compact .chip{padding:3px 8px;font-size:11px}
+
+/* Secondary sidebar cards collapse by default: metadata stays visible, while
+   history, flow, category correction, and the submit-page explainer only take
+   vertical space when the operator opens them. */
+details.side-card>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:12.5px;font-weight:700;color:var(--ink);min-height:40px}
+details.side-card>summary::-webkit-details-marker{display:none}
+details.side-card>summary:hover{background:#F8FAFC}
+details.side-card>summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+details.side-card>summary::after{content:"+";margin-inline-start:auto;color:var(--mut2);font-size:15px;font-weight:600;line-height:1}
+details.side-card[open]>summary::after{content:"−"}
+details.side-card[open]>summary{border-bottom:1px solid var(--line2)}
+details.side-card .body{padding:11px 12px}
+.side-divider{border-top:1px solid var(--line2);margin:8px 0}
+.compact details.side-card>summary{padding:8px 11px;font-size:12px;min-height:36px}
+.compact details.side-card .body{padding:10px 11px}

@@ -6,7 +6,7 @@
 <a class="btn btn-ghost btn-sm" href="/records">بازگشت به فهرست</a>
 {% endblock %}
 {% block content %}
-<div class="side3">
+<div class="side3 compact">
   <div class="card">
     <h3>خبر تولیدشده توسط مدل — قابل ویرایش<span class="grow"></span>
       {% if record.status == 'review' %}<span class="badge s-review">★ نیازمند تأیید</span>
@@ -150,7 +150,7 @@
       <div class="body">
         <div class="field"><label>عنوان</label><input type="text" name="title" value="{{ record.output_json.get('title','') }}"></div>
         <div class="field"><label>لید</label><textarea name="lead" rows="2">{{ record.output_json.get('lead','') }}</textarea></div>
-        <div class="field"><label>متن خبر</label><textarea name="body" rows="5">{{ record.output_json.get('body','') }}</textarea></div>
+        <div class="field"><label>متن خبر</label><textarea name="body" rows="4">{{ record.output_json.get('body','') }}</textarea></div>
         <div class="chips" style="margin-top:4px"><span class="chip">طول عنوان: {{ (record.output_json.get('title','')|length)|fa }} نویسه</span><span class="chip">لید: {{ (record.output_json.get('lead','')|length)|fa }} نویسه</span><span class="chip">متن: {{ (record.output_json.get('body','')|length)|fa }} نویسه</span></div>
       </div>
       {% if record.status == 'review' %}
@@ -198,21 +198,21 @@
     {% endif %}
   </div>
 
-  <div style="display:flex;flex-direction:column;gap:14px">
+  <div class="stack">
     <div class="card">
       <h3>متادیتای پایان‌نامه</h3>
       <div class="body">
-        <dl class="kv">
-          <dt>رشته</dt><dd>{{ record.field }}{% if field_keyword %} <span class="chip">کلیدواژه: {{ field_keyword }}</span>{% endif %}</dd>
-          <dt>دستهٔ ثبت‌شده</dt><dd>{{ snapshot_category or '—' }}</dd>
-          <dt>دستهٔ کنونی رشته</dt><dd>{{ current_category or '—' }}</dd>
-          <dt>دانشگاه</dt><dd>{{ record.university }}</dd>
-          <dt>نویسنده</dt><dd>{{ record.author }}</dd>
-          <dt>استاد راهنما</dt><dd>{{ record.supervisor }}</dd>
-          <dt>نام کاربری ثبت‌کننده</dt><dd>{{ record.username }}</dd>
-          <dt>تاریخ ثبت</dt><dd>{{ record.created_at|jalali }}</dd>
-          <dt>کانال مسیرشده</dt><dd>{{ routed_channels or '—' }}</dd>
-        </dl>
+        <div class="meta-grid">
+          <div class="meta-item"><span class="meta-label">رشته</span><span class="meta-value">{{ record.field }}{% if field_keyword %} <span class="chip">کلیدواژه: {{ field_keyword }}</span>{% endif %}</span></div>
+          <div class="meta-item"><span class="meta-label">دستهٔ ثبت‌شده</span><span class="meta-value">{{ snapshot_category or '—' }}</span></div>
+          <div class="meta-item"><span class="meta-label">دستهٔ کنونی رشته</span><span class="meta-value">{{ current_category or '—' }}</span></div>
+          <div class="meta-item"><span class="meta-label">دانشگاه</span><span class="meta-value">{{ record.university }}</span></div>
+          <div class="meta-item"><span class="meta-label">نویسنده</span><span class="meta-value">{{ record.author }}</span></div>
+          <div class="meta-item"><span class="meta-label">استاد راهنما</span><span class="meta-value">{{ record.supervisor }}</span></div>
+          <div class="meta-item"><span class="meta-label">نام کاربری ثبت‌کننده</span><span class="meta-value">{{ record.username }}</span></div>
+          <div class="meta-item"><span class="meta-label">تاریخ ثبت</span><span class="meta-value">{{ record.created_at|jalali }}</span></div>
+          <div class="meta-item"><span class="meta-label">کانال مسیرشده</span><span class="meta-value">{{ routed_channels or '—' }}</span></div>
+        </div>
         {% if snapshot_category and current_category and snapshot_category != current_category %}
         <div class="note" style="margin-top:10px">دستهٔ رشته از زمان پردازش تغییر کرده است؛ رکورد، دستهٔ ثبت‌شده را نگه می‌دارد.</div>
         {% endif %}
@@ -220,24 +220,36 @@
       </div>
     </div>
 
-    <div class="card">
-      <h3>جریان این رکورد</h3>
+    {# Secondary information is kept, but collapsed: the metadata stays visible
+       and the long timelines only take space when the operator asks for them. #}
+    <details class="card side-card">
+      <summary>
+        <span>جریان این رکورد و تاریخچه</span>
+        <span class="hint" style="margin:0">{{ timeline|length|fa }} مرحله · {{ history|length|fa }} رویداد</span>
+      </summary>
       <div class="body">
         <div class="timeline">
           {% for t in timeline %}
           <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ t.title }}</b><small>{{ t.sub }}</small></div></div>
           {% endfor %}
         </div>
-        <div class="hint" style="margin-top:9px">ثبت درخواست ← تعیین رشته و دسته ← تولید با مدل/پرامپت ← بازبینی ← ارسال به کانال (با شناسهٔ پیام).</div>
+        <div class="side-divider"></div>
+        <div class="hint" style="margin:0 0 2px">تاریخچهٔ ثبت‌شده</div>
+        <div class="timeline">
+          {% for h in history %}
+          <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ h.title }}</b><small>{{ h.sub }}</small></div></div>
+          {% endfor %}
+        </div>
+        <div class="hint" style="margin-top:8px">ثبت درخواست ← تعیین رشته و دسته ← تولید با مدل/پرامپت ← بازبینی ← ارسال به کانال (با شناسهٔ پیام).</div>
       </div>
-    </div>
+    </details>
 
     {# Recovery: a record filed under the wrong category publishes to the
        wrong channel until an operator re-points it. Routing reads the stored
        matches, so this correction ALSO replaces them with one definitive
        manual match. #}
-    <div class="card">
-      <h3>اصلاح دستهٔ رکورد</h3>
+    <details class="card side-card">
+      <summary>اصلاح دستهٔ رکورد</summary>
       <div class="body">
         <form method="post" action="/records/{{ record.id }}/category">{{ csrf_field(request) | safe }}
           <div class="field" style="margin:0"><label>دسته</label>
@@ -251,18 +263,7 @@
           </div>
         </form>
       </div>
-    </div>
-
-    <div class="card">
-      <h3>تاریخچهٔ این رکورد</h3>
-      <div class="body">
-        <div class="timeline">
-          {% for h in history %}
-          <div class="tl"><div class="bullet" style="background:var(--blue-soft);color:var(--blue)">•</div><div class="line"><b>{{ h.title }}</b><small>{{ h.sub }}</small></div></div>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
+    </details>
   </div>
 </div>
 {% endblock %}

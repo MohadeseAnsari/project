@@ -5,6 +5,7 @@
    These filters link to ?tab=deliveries&... rather than to /deliveries, which
    now 301s here. Following the redirect would work but would cost an extra
    round trip on every click. #}
+{% from "platforms.html" import platform_name %}
 
 <div class="kpi-row">
   <div class="kpi"><div class="b b-green">✓</div><div><div class="n">{{ kpi_sent|fa }}</div><div class="t">تحویل‌شده</div></div></div>
@@ -22,7 +23,7 @@
         <a href="/records?tab=deliveries&status=failed" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='failed' %}on{% endif %}">ناموفق</span></a>
         <a href="/records?tab=deliveries&status=awaiting_confirmation" style="text-decoration:none;color:inherit"><span class="{% if dstatus=='awaiting_confirmation' %}on{% endif %}">در انتظار</span></a>
       </div>
-      <select name="platform"><option value="">همهٔ کانال‌ها</option><option value="bale" {% if dplatform=='bale' %}selected{% endif %}>بله</option><option value="telegram" {% if dplatform=='telegram' %}selected{% endif %}>تلگرام</option></select>
+      <select name="platform"><option value="">همهٔ کانال‌ها</option>{% for p in platforms %}<option value="{{ p }}" {% if dplatform==p %}selected{% endif %}>{{ platform_name(p) }}</option>{% endfor %}{% if dplatform and dplatform not in platforms %}<option value="{{ dplatform }}" selected>{{ platform_name(dplatform) }}</option>{% endif %}</select>
       <input type="text" name="main_id" placeholder="شناسهٔ رکورد…" value="{{ dmain_id or '' }}">
       <input type="hidden" name="status" value="{{ dstatus or '' }}">
       <button class="btn btn-primary btn-sm" type="submit">اعمال فیلتر</button>

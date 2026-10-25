@@ -22,6 +22,20 @@ async def list_channels(session) -> list[Channel]:
     return list((await session.execute(select(Channel).order_by(Channel.id))).scalars().all())
 
 
+async def list_platforms(session) -> list[str]:
+    """Distinct platform values present on channels, sorted.
+
+    The deliveries filter is built from this list rather than from the
+    hardcoded bale/telegram pair, so a channel added on another platform
+    becomes filterable without editing the template. The display side has the
+    same fallback in ``platforms.html``.
+    """
+    rows = await session.execute(
+        select(Channel.platform).distinct().order_by(Channel.platform)
+    )
+    return [row[0] for row in rows]
+
+
 async def get_channel(session, channel_id: int) -> Channel | None:
     """Fetch one channel by id (routes 404 the same way)."""
     return await session.get(Channel, channel_id)

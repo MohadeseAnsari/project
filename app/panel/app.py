@@ -525,6 +525,10 @@ async def records_page(
             if newest_failure and newest_failure.error_message else None
         )
         delivery_counts = await delivery_service.delivery_status_counts(session)
+        # The filter's options come from the channels table, not from a
+        # hardcoded bale/telegram pair, so a new platform appears here as soon
+        # as it has a channel.
+        platforms = await channel_service.list_platforms(session)
         dquery = urlencode(
             {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
         )
@@ -532,6 +536,7 @@ async def records_page(
             _ctx(
                 request, user, active="records", tab="deliveries", **counts_ctx,
                 dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
+                platforms=platforms,
                 total=dtotal, items=items, page=page, page_size=page_size, last_error=last_error,
                 max_attempts=settings.sender_max_attempts,
                 backoff_base=settings.sender_backoff_base_seconds,

@@ -5,6 +5,17 @@
 {% block crumb %}کنسول › تنظیمات › دسته‌ها و کلیدواژه‌ها{% endblock %}
 {% block content %}
 
+{# One channel row. Selected rows are rendered first so a long list opens on
+   the routes that already exist, and every row carries data-picker-row for
+   the optional search filter. #}
+{% macro channel_pick(ch, checked) -%}
+<label class="pick" data-picker-row>
+  <input type="checkbox" name="channel_ids" value="{{ ch.id }}" {% if checked %}checked{% endif %}>
+  <span class="grow">{{ ch.title or ch.username or ch.platform }}</span>
+  <small class="hint" style="margin:0">{{ ch.platform }}</small>
+</label>
+{%- endmacro %}
+
 {# A category is a destination, not a field: this page answers "what buckets
    exist and what falls into each", while /fields answers "what is each row and
    which bucket is it in". The category of a FIELD is edited on /fields, because
@@ -95,29 +106,50 @@
            loads. The form posts the WHOLE list, because the checkbox set is the
            complete truth about this category: a ticked box must start routing
            and an unticked one must stop, which a "add" or "remove one" form
-           cannot express. #}
+           cannot express.
+
+           A category can route to dozens of channels. Listing all of them at
+           full height stretched the card and pushed the next category off the
+           screen, so the summary names the current routes and the expanded
+           list is bounded and searchable. Selected rows come first: the routes
+           that already exist are the ones an operator is most likely to edit. #}
         {% set routed = routes_by_category.get(c.id, []) if routes_by_category else [] %}
-        <details class="disclose" style="margin-top:11px">
+        {% set routed_channels = active_channels|selectattr('id', 'in', routed)|list %}
+        <details class="disclose channel-picker" style="margin-top:11px" data-channel-picker>
           <summary>
-            {{ glyph('chevron') }}
-            کانال‌ها
-            {% if routed %}<span class="badge s-off">{{ routed|length|fa }} مسیر</span>
-            {% else %}<span class="badge s-failed" title="این دسته به هیچ کانالی مسیر ندارد؛ خبرهایش منتشر نمی‌شوند">بدون مسیر — منتشر نمی‌شود</span>{% endif %}
+            <span class="picker-chev">{{ glyph('chevron') }}</span>
+            <span class="picker-label">کانال‌ها</span>
+            {% if routed_channels %}
+            <span class="picker-preview" title="{% for ch in routed_channels %}{{ ch.title or ch.username or ch.platform }}{% if not loop.last %}، {% endif %}{% endfor %}">
+              {%- for ch in routed_channels[:2] %}{{ ch.title or ch.username or ch.platform }}{% if not loop.last %}، {% endif %}{% endfor %}
+              {%- if routed_channels|length > 2 %} +{{ (routed_channels|length - 2)|fa }}{% endif %}
+            </span>
+            <span class="badge s-sent">{{ routed_channels|length|fa }} کانال</span>
+            {% else %}
+            <span class="badge s-failed" title="این دسته به هیچ کانالی مسیر ندارد؛ خبرهایش منتشر نمی‌شوند">بدون مسیر — منتشر نمی‌شود</span>
+            {% endif %}
           </summary>
           <div class="disclose-body">
             {% if not active_channels %}
             <div class="hint" style="padding-top:10px">هیچ کانال فعالی وجود ندارد. ابتدا در صفحهٔ <a href="/channels">کانال‌ها</a> یک کانال فعال بسازید.</div>
             {% else %}
+            {% if active_channels|length > 5 %}
+            <div class="picker-tools" data-picker-tools hidden>
+              <input type="search" data-picker-search placeholder="جست‌وجوی کانال…" aria-label="جست‌وجوی کانال" autocomplete="off">
+              <span class="hint" data-picker-visible aria-live="polite">{{ active_channels|length|fa }} کانال</span>
+            </div>
+            {% endif %}
             <form method="post" action="/categories/{{ c.id }}/channels">{{ csrf_field(request) | safe }}
-              <div class="hint" style="padding-top:10px">کانال‌هایی که برای این دسته انتخاب می‌شوند. تا وقتی دست‌کم یک کانال انتخاب نشود، خبرهای این دسته به هیچ کانالی نمی‌رود.</div>
-              {% for ch in active_channels %}
-              <label class="pick">
-                <input type="checkbox" name="channel_ids" value="{{ ch.id }}" {% if ch.id in routed %}checked{% endif %}>
-                <span class="grow">{{ ch.title or ch.username or ch.platform }}</span>
-                <small class="hint" style="margin:0">{{ ch.platform }}</small>
-              </label>
-              {% endfor %}
-              <div style="margin-top:9px">
+              <div class="picker-list" data-picker-list>
+                {% for ch in routed_channels %}{{ channel_pick(ch, true) }}{% endfor %}
+                {% for ch in active_channels if ch.id not in routed %}{{ channel_pick(ch, false) }}{% endfor %}
+                <div class="hint picker-empty" data-picker-empty hidden>کانالی با این نام پیدا نشد.</div>
+              </div>
+              {# The count and the unsaved marker are live (when the script runs),
+                 so closing the picker never looks like a save that happened. #}
+              <div class="picker-foot">
+                <span class="hint"><b data-picker-count>{{ routed_channels|length|fa }}</b> از {{ active_channels|length|fa }} انتخاب شده</span>
+                <span class="badge s-ready picker-dirty" data-picker-dirty hidden>تغییر ذخیره‌نشده</span>
                 <button class="btn btn-primary btn-sm" type="submit">ذخیرهٔ کانال‌های این دسته</button>
               </div>
             </form>
@@ -133,4 +165,76 @@
     {% endfor %}
   </div>
 </div>
+
+<script>
+/* Progressive enhancement for the category channel picker.
+   Without this script every control still works: <details> opens, the list is
+   bounded by CSS, and the form submits the complete checkbox set. The script
+   only adds search, a live selection count, and an unsaved marker, so losing
+   it can never change where news is routed. */
+(function () {
+  var faDigits = "۰۱۲۳۴۵۶۷۸۹";
+  function fa(number) {
+    return String(number).replace(/\d/g, function (digit) { return faDigits[+digit]; });
+  }
+  /* Persian and Arabic forms of the same letter are typed interchangeably;
+     folding them means "ک" finds "ك" instead of requiring the exact key. */
+  function normalize(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[يى]/g, "ی")
+      .replace(/ك/g, "ک")
+      .replace(/[\u200c\u200e\u200f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-channel-picker]"), function (picker) {
+    var search = picker.querySelector("[data-picker-search]");
+    var tools = picker.querySelector("[data-picker-tools]");
+    var list = picker.querySelector("[data-picker-list]");
+    var empty = picker.querySelector("[data-picker-empty]");
+    var count = picker.querySelector("[data-picker-count]");
+    var visible = picker.querySelector("[data-picker-visible]");
+    var dirty = picker.querySelector("[data-picker-dirty]");
+    var boxes = Array.prototype.slice.call(picker.querySelectorAll('input[name="channel_ids"]'));
+    var rows = Array.prototype.slice.call(picker.querySelectorAll("[data-picker-row]"));
+    if (!list || !rows.length) return;
+    /* The search box is hidden in the markup and revealed only here: a visible
+       search that silently does nothing is worse than no search at all. */
+    if (tools) tools.hidden = false;
+    var initial = boxes.map(function (box) { return box.checked ? "1" : "0"; }).join("");
+    function refresh() {
+      var checked = boxes.filter(function (box) { return box.checked; }).length;
+      if (count) count.textContent = fa(checked);
+      if (dirty) {
+        dirty.hidden = boxes.map(function (box) { return box.checked ? "1" : "0"; }).join("") === initial;
+      }
+    }
+    function filter() {
+      var query = normalize(search && search.value);
+      var shown = 0;
+      rows.forEach(function (row) {
+        var match = !query || normalize(row.textContent).indexOf(query) !== -1;
+        row.classList.toggle("is-hidden", !match);
+        if (match) shown += 1;
+      });
+      if (empty) empty.hidden = shown !== 0;
+      if (visible) visible.textContent = query ? fa(shown) + " نتیجه" : fa(rows.length) + " کانال";
+    }
+    if (search) {
+      search.addEventListener("input", filter);
+      /* Enter in a search box must filter, not submit the routing form. */
+      search.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") event.preventDefault();
+      });
+    }
+    boxes.forEach(function (box) { box.addEventListener("change", refresh); });
+    picker.addEventListener("toggle", function () {
+      if (picker.open && search) search.focus({ preventScroll: true });
+    });
+    refresh();
+    filter();
+  });
+})();
+</script>
 {% endblock %}
