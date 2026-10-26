@@ -13,12 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
-from tests.routing_setup import route_category
 from app.messaging.dispatcher import (
     claim_next_delivery,
     confirm_deliveries_for_article,
     ensure_pending_deliveries,
 )
+from tests.routing_setup import route_category
 
 OUTPUT = {"title": "عنوان", "lead": "لید", "body": "متن کامل"}
 

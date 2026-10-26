@@ -16,7 +16,6 @@ behaviours survive the reduction:
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.routing_setup import route_all_active
 
 from app.db.models import (
     Category,
@@ -28,6 +27,7 @@ from app.db.models import (
 )
 from app.panel.auth import hash_password
 from tests.panel_test_client import panel_client
+from tests.routing_setup import route_all_active
 
 
 async def _admin(session: AsyncSession) -> None:

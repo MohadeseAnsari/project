@@ -303,9 +303,9 @@ async def override_category_matches(
     categories (the 29 ISCED-F 2013 names or ``other``); scores are clamped
     to [0, 1]. Audited.
     """
+    from app.schemas.news import CategoryMatchesOverrideRequest
     from app.services import audit as audit_service
     from app.services import records as record_service
-    from app.schemas.news import CategoryMatchesOverrideRequest
 
     _require_secret(payload)
     try:
@@ -367,6 +367,9 @@ async def republish_record_endpoint(
 ):
     """Re-queue deliveries for the (possibly corrected) categories of a
     published/approved record, without deleting anything already sent."""
+    from app.services import audit as audit_service
+    from app.services import records as record_service
+
     _require_secret(payload)
     body = payload or {}
     record = await record_service.get_record(session, record_id)
@@ -415,9 +418,7 @@ async def review_record(
     sent); ``save_draft`` only edits the stored ``output_json``. Optional
     ``title``/``lead``/``body`` edit the output before the transition.
     """
-    from datetime import datetime
 
-    from sqlalchemy import select
 
     from app.schemas.news import ReviewActionRequest
     from app.services import records as record_service
@@ -685,7 +686,6 @@ async def list_models(
     session: AsyncSession = Depends(get_session),
 ):
     """List model configurations (key values never included)."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
@@ -699,7 +699,7 @@ async def create_model(
     payload: dict | None = None, session: AsyncSession = Depends(get_session)
 ):
     """Create a model row (inactive by default; use activate for single-active)."""
-    from app.schemas.news import ModelCreateRequest, ModelResponse
+    from app.schemas.news import ModelCreateRequest
     from app.services import models as model_service
 
     _require_secret(payload)
@@ -727,7 +727,6 @@ async def get_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Retrieve one model configuration."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
@@ -745,7 +744,7 @@ async def update_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Update a model row (is_active only via activate, never here)."""
-    from app.schemas.news import ModelResponse, ModelUpdateRequest
+    from app.schemas.news import ModelUpdateRequest
     from app.services import models as model_service
 
     _require_secret(payload)
@@ -779,7 +778,6 @@ async def activate_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Activate one model atomically (exactly one active row afterwards)."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     _require_secret(payload)

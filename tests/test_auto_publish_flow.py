@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,15 +15,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.db.models import (
-    Category, CategoryChannelRoute, Channel, Delivery, Main,
-    MainCategoryMatch, PanelUser, Role,
+    Category,
+    CategoryChannelRoute,
+    Channel,
+    Delivery,
+    Main,
+    MainCategoryMatch,
+    PanelUser,
+    Role,
 )
 from app.messaging.dispatcher import ensure_pending_deliveries
+from app.news.isced import ISCED_CATEGORIES, OTHER_CATEGORY
+from app.panel.auth import hash_password
+from app.schemas.news import CategoryMatchCompact, GeneratedNews
 from app.services import records as record_service
 from tests.panel_test_client import panel_client
-from app.panel.auth import hash_password
-from app.news.isced import ISCED_CATEGORIES, OTHER_CATEGORY
-from app.schemas.news import CategoryMatchCompact, GeneratedNews
 
 _spec = importlib.util.spec_from_file_location(
     "auto_route_channels", Path(__file__).resolve().parents[1] / "scripts" / "auto_route_channels.py"
@@ -143,6 +148,7 @@ async def test_auto_publish_creates_pending_deliveries(session: AsyncSession, mo
     await session.commit()
 
     from unittest.mock import patch
+
     from app.worker.worker import process_job
 
     output = GeneratedNews(
@@ -178,6 +184,7 @@ async def test_unmatched_review_stays_review_no_deliveries(session: AsyncSession
     await session.commit()
 
     from unittest.mock import patch
+
     from app.worker.worker import process_job
 
     output = GeneratedNews(title="T", lead="L", body="B", categories=[])
@@ -207,6 +214,7 @@ async def test_unmatched_failed_moves_to_failed(session: AsyncSession, monkeypat
     await session.commit()
 
     from unittest.mock import patch
+
     from app.worker.worker import process_job
 
     output = GeneratedNews(title="T", lead="L", body="B", categories=[])

@@ -130,7 +130,7 @@ async def test_the_most_dangerous_delivery_buttons_are_all_exercised(session: As
                           follow_redirects=False)
         html = await _rows(client, ROW_PARTIALS["deliveries"])
     for action in ("retry", "release", "cancel", "delete-from-channel", "mark-deleted"):
-        assert f"/deliveries/" in html and f"/{action}\"" in html, (
+        assert "/deliveries/" in html and f"/{action}\"" in html, (
             f"the {action} button must render for the status that offers it"
         )
 

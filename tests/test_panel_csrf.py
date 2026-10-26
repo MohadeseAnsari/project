@@ -19,8 +19,9 @@ def _raw() -> AsyncClient:
 
 
 async def _admin(session: AsyncSession, username: str = "csrf-admin") -> None:
-    from app.db.models import PanelUser, Role
     from sqlalchemy import select
+
+    from app.db.models import PanelUser, Role
 
     role = (await session.execute(select(Role).where(Role.name == "admin"))).scalar_one_or_none()
     if role is None:
@@ -80,8 +81,9 @@ async def test_invalid_token_rejected(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_valid_token_accepted(session: AsyncSession):
     """The session-bound token lets a compliant browser through."""
-    from app.db.models import Main
     from sqlalchemy import select
+
+    from app.db.models import Main
 
     await _admin(session)
     async with _raw() as client:

@@ -130,7 +130,7 @@ async def _article(
 async def test_only_the_category_channels_are_targets(session: AsyncSession):
     cat = await _category(session)
     routed = await _channel(session)
-    unrouted = await _channel(session)
+    await _channel(session)
     await _route(session, cat, routed)
     article = await _article(session, cat)
     assert [c.id for c, _source in await channels_for_article_multi(session, article)] == [routed.id]

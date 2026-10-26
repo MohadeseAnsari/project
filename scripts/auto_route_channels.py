@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import asyncpg
 
 from app.config import settings
-from app.fields.normalization import normalize_field
 
 
 def _key(s: str | None) -> str:

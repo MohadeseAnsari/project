@@ -12,9 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.credentials import CredentialError, decrypt, encrypt, mask
-from app.credentials_resolve import MissingModelKeyError, describe_credentials, resolve_model_credentials
+from app.credentials_resolve import (
+    MissingModelKeyError,
+    describe_credentials,
+    resolve_model_credentials,
+)
 from app.db.models import AuditLog, Channel, Main, Model, PanelUser, Role
-from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from tests.panel_test_client import panel_client
 

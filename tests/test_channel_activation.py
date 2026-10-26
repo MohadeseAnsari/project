@@ -30,11 +30,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
-from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
     channels_for_article_multi,
     ensure_pending_deliveries,
 )
+from tests.routing_setup import route_all_active
 
 OUTPUT = {"title": "تیتر", "lead": "lead", "body": "body"}
 
@@ -109,7 +109,7 @@ NOW = datetime(2026, 3, 1, 12, 0, 0)
 async def test_a_channel_does_not_receive_news_that_predates_it(session: AsyncSession):
     field = await _field(session)
     old = await _article(session, field, NOW)
-    new_channel = await _channel(session, NOW + timedelta(days=1))
+    await _channel(session, NOW + timedelta(days=1))
     assert [c.id for c, _s in await channels_for_article_multi(session, old)] == [], (
         "the archive must not be delivered to a channel added afterwards"
     )
@@ -219,7 +219,7 @@ async def test_the_queue_does_not_backfill_a_new_channel(session: AsyncSession):
 
     field = await _field(session)
     old = await _article(session, field, NOW - timedelta(days=10), status="published")
-    fresh_channel = await _channel(session, NOW)
+    await _channel(session, NOW)
     before = settings.require_human_confirmation
     settings.require_human_confirmation = False
     try:

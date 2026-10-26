@@ -22,3 +22,11 @@ data/*.xlsx
 # undecryptable. Set CREDENTIALS_KEY in the environment instead.
 data/.credentials_key
 data/credentials_key*
+
+# Local/internal artifacts (never part of the delivered repository)
+backups/
+VERIFICATION-RUN-*.md
+panel-redesign-prompt.md
+.coverage
+htmlcov/
+*.log

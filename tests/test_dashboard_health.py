@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Category, Channel, Field, Main, PanelUser, Role
-from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from app.services import models as model_service
 from tests.panel_test_client import panel_client
@@ -105,8 +104,8 @@ async def test_only_the_active_model_is_reported(session: AsyncSession, monkeypa
 @pytest.mark.asyncio
 async def test_health_never_exposes_the_key(session: AsyncSession, monkeypatch):
     """Whatever the state, no credential value comes back."""
-    from app.credentials import encrypt
     from app.config import settings
+    from app.credentials import encrypt
 
     monkeypatch.setattr(settings, "avalai_api_key", "")
     _model(session, api_key_encrypted=encrypt("sk-SUPER-SECRET-KEY"))

@@ -6,7 +6,6 @@ placeholders, the resolution order or the injection guard change. A doc that
 cannot go stale is worth more than a paragraph nobody checks.
 """
 
-import pytest
 
 from app.news.generation import (
     build_user_message,

@@ -30,9 +30,9 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.db.connection import async_session
 from app.db.models import Field, Main, Model, Prompt
-from app.news.isced import OTHER_CATEGORY
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
+from app.news.isced import OTHER_CATEGORY
 from app.services.records import store_generated_classification
 from app.services.transitions import assert_record_transition
 
@@ -120,7 +120,7 @@ async def _upsert_field(session, raw_field: str) -> Field | None:
 async def get_active_model(session) -> Model | None:
     """Return the active LLM model configuration (for auditability)."""
     result = await session.execute(
-        select(Model).where(Model.is_active == True).limit(1)
+        select(Model).where(Model.is_active.is_(True)).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -128,7 +128,7 @@ async def get_active_model(session) -> Model | None:
 async def get_active_prompt(session) -> Prompt | None:
     """Return the active prompt version (for auditability)."""
     result = await session.execute(
-        select(Prompt).where(Prompt.is_active == True).limit(1)
+        select(Prompt).where(Prompt.is_active.is_(True)).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -259,8 +259,7 @@ async def process_job(session, job: Main) -> None:
             logger.info("Completed job id=%s (failed: no category)", job.id)
             return
         elif behavior == "fallback_other":
-            from app.db.models import Category, Channel, CategoryChannelRoute, Delivery
-            from app.messaging.dispatcher import channels_for_article_multi
+            from app.db.models import Category, CategoryChannelRoute, Channel, Delivery
 
             other = (
                 await session.execute(

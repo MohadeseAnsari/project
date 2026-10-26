@@ -10,14 +10,17 @@ transition, query, and audit row is real.
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import AuditLog, Category, Channel, Delivery, Main
-from app.messaging.dispatcher import claim_next_delivery, deliver_one, ensure_pending_deliveries
-from app.panel.app import panel_app
+from app.messaging.dispatcher import (
+    claim_next_delivery,
+    deliver_one,
+    ensure_pending_deliveries,
+)
 from app.panel.auth import hash_password
 from app.worker.worker import claim_next_job, process_job
 from tests.panel_test_client import panel_client

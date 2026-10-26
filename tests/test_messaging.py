@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from app.messaging import dispatcher
-from tests.routing_setup import route_all_active
 from app.messaging.dispatcher import (
     channels_for_article_multi,
     claim_next_delivery,
@@ -34,6 +33,7 @@ from app.messaging.platforms import (
     build_client,
     configured_clients,
 )
+from tests.routing_setup import route_all_active
 
 OUTPUT = {"title": "عنوان", "lead": "لید", "body": "متن کامل"}
 
@@ -353,8 +353,8 @@ def test_configured_clients_skips_platforms_without_token(monkeypatch):
 @pytest.mark.asyncio
 async def test_channels_for_article_covers_every_active_channel(session: AsyncSession):
     field = await _field(session)
-    first = await _channel(session, "bale", 100)
-    second = await _channel(session, "telegram", 200)
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
     await session.commit()
 
     article = await _article(session, field)
@@ -409,8 +409,8 @@ async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession, m
 @pytest.mark.asyncio
 async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
     field = await _field(session)
-    first = await _channel(session, "bale", 100)
-    second = await _channel(session, "telegram", 200)
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 2
@@ -419,7 +419,7 @@ async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_is_idempotent(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
+    await _channel(session)
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -430,7 +430,7 @@ async def test_ensure_is_idempotent(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
+    await _channel(session)
 
     await _article(session, field, status="processing")  # not generated yet
     empty = await _article(session, field)
@@ -443,7 +443,7 @@ async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_picks_up_articles_processed_later(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
+    await _channel(session)
 
     article = await _article(session, field, status="processing")
     assert await ensure_pending_deliveries(session) == 0
@@ -465,7 +465,7 @@ async def test_ensure_reaches_articles_beyond_a_saturated_batch(session: AsyncSe
     and never recovers as the queue drains.
     """
     field = await _field(session)
-    channel = await _channel(session)
+    await _channel(session)
 
     for _ in range(5):
         await _article(session, field)
@@ -611,7 +611,7 @@ async def test_recover_stale_deliveries(session: AsyncSession):
 
 
 async def _claimed(session: AsyncSession) -> Delivery:
-    delivery = await _pending(session)
+    await _pending(session)
     return await claim_next_delivery(session)
 
 
@@ -761,7 +761,7 @@ async def test_telegram_channel_uses_telegram_client(session: AsyncSession, monk
     # Send-path test: opt out of the human gate so the queued row is claimable.
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
-    telegram = await _channel(session, "telegram", 987)
+    await _channel(session, "telegram", 987)
     await _article(session, field)
 
     await ensure_pending_deliveries(session)
@@ -782,9 +782,9 @@ async def test_processed_article_reaches_every_routed_channel(session: AsyncSess
     # Send-path test: opt out of the human gate so queued rows are claimable.
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
-    bale = await _channel(session, "bale", 100)
-    telegram = await _channel(session, "telegram", 200)
-    article = await _article(session, field)
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
+    await _article(session, field)
 
     clients = {"bale": StubClient(), "telegram": StubClient()}
     for _ in range(2):

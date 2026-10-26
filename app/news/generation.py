@@ -12,12 +12,19 @@ import logging
 import os
 from typing import Any
 
+from openai import AsyncOpenAI
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from openai import AsyncOpenAI
 
 from app.config import settings
+from app.credentials_resolve import (
+    MissingModelKeyError,
+    resolve_model_credentials,
+)
+from app.credentials_resolve import (
+    describe_credentials as _describe_credentials,
+)
 from app.news.prompts import SYSTEM_PROMPT
 from app.schemas.news import GeneratedNews
 
@@ -52,16 +59,6 @@ def resolve_system_prompt(override_prompt: str | None, active_prompt: str | None
 def resolve_base_url(model_base_url: str | None) -> str:
     """Resolve the provider endpoint: per-model override else config."""
     return model_base_url or settings.avalai_base_url
-
-
-#: Credential resolution lives in one place and is shared by the Worker, the
-#: panel regenerate action, the connection probe and the machine API. Re-exported
-#: here because callers already import from this module.
-from app.credentials_resolve import (  # noqa: E402
-    MissingModelKeyError,
-    describe_credentials as _describe_credentials,
-    resolve_model_credentials,
-)
 
 
 def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str:
@@ -117,7 +114,6 @@ def resolve_generation_config(
     """
     override_base = getattr(model_override, "base_url", None)
     active_base = getattr(active_model, "base_url", None)
-    effective_base = override_base or active_base
 
     # The row that owns the endpoint also owns the key (PART D3). A row with its
     # own base_url and no usable key raises MissingModelKeyError instead of

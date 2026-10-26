@@ -3,11 +3,10 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from tests.panel_test_client import panel_client
 
@@ -457,8 +456,9 @@ async def test_templates_have_balanced_jinja_comments():
 
 def test_every_template_still_parses():
     """Catch a broken block/if/endif at import time rather than on a request."""
-    from jinja2 import Environment, FileSystemLoader
     from pathlib import Path
+
+    from jinja2 import Environment, FileSystemLoader
 
     env = Environment(loader=FileSystemLoader("app/panel/templates"))
     for template in Path("app/panel/templates").glob("*.html"):
@@ -704,7 +704,7 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
     """Bulk approve stamps, releases, and audits each eligible record; skips the rest."""
     from sqlalchemy import select
 
-    from app.db.models import AuditLog, Delivery, Main
+    from app.db.models import AuditLog, Main
 
     await _user(session, "panel-admin")
     rows = []
@@ -756,7 +756,6 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_panel_release_is_audited(session: AsyncSession):
     """Panel release flips the row and records who released it."""
-    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -851,7 +850,7 @@ async def test_user_delete_safeguards(session: AsyncSession):
     """Self-delete and last-admin delete are refused; every delete tombstones."""
     from sqlalchemy import select
 
-    from app.db.models import AuditLog, PanelUser
+    from app.db.models import PanelUser
 
     await _user(session, "panel-admin")
     await _user_with_role(session, "panel-editor", "editor")
@@ -924,7 +923,6 @@ async def test_a_deleted_user_disappears_from_the_panel(session: AsyncSession):
 async def test_delete_last_admin_refused_at_service(session: AsyncSession):
     """The sole active admin survives even a privileged delete call."""
     import pytest
-
     from sqlalchemy import select
 
     from app.db.models import PanelUser

@@ -9,9 +9,9 @@ every review/retry/config change is written to ``audit_logs`` for history.
 import hashlib
 import logging
 import time
-from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 import jdatetime
@@ -26,18 +26,17 @@ from app.panel.auth import ensure_admin_user, session_user_id, verify_password
 from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
-from app.services import dashboard as dashboard_service
-from app.services.errors import PermissionDenied, from_value_error
+from app.services import categories as category_service
 from app.services import channels as channel_service
+from app.services import dashboard as dashboard_service
 from app.services import deliveries as delivery_service
 from app.services import dispose_engine
-from app.services import categories as category_service
 from app.services import models as model_service
 from app.services import prompts as prompt_service
 from app.services import records as record_service
 from app.services import session_dep as service_session_dep
 from app.services import users as user_service
-from app.services.transitions import STATUS_FA
+from app.services.errors import PermissionDenied, from_value_error
 
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
@@ -355,7 +354,6 @@ async def logout():
 @panel_app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, session: AsyncSession = Depends(session_dep)):
     """Show KPIs, a 7-day chart, health, recent events, and channel state."""
-    from datetime import timedelta
 
     user = await require_login(request, session)
 
@@ -363,8 +361,6 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
     refresh_seconds = settings.panel_dashboard_refresh_seconds
 
     # Real 7-day series: records created per day, heights normalized.
-    today = datetime.utcnow().date()
-    days = [today - timedelta(days=i) for i in range(6, -1, -1)]
     per_day = await record_service.records_per_day(session, 7)
     peak = max((n for _, n in per_day), default=0)
     chart = [
@@ -1515,7 +1511,7 @@ async def panel_model_create(
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
-        row = await model_service.create_model(
+        await model_service.create_model(
             session, name=name.strip(), provider=provider.strip(), version=version.strip(),
             base_url=base_url.strip() or None, api_key_env=api_key_env.strip() or None,
             temperature=float(temperature) if temperature.strip() else None,
@@ -1744,7 +1740,7 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
-        row = await prompt_service.create_prompt(
+        await prompt_service.create_prompt(
             session, version=version.strip(), system_prompt=system_prompt, is_active=False
         )
     except ValueError:
@@ -1952,7 +1948,7 @@ async def user_create(
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
 
     try:
-        row = await user_service.create_user_with_password(
+        await user_service.create_user_with_password(
             session, username=username.strip(), password=password, role=role,
         )
     except ValueError as e:

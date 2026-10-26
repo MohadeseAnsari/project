@@ -20,7 +20,6 @@ from app.db.models import (
     PanelUser,
     Prompt,
 )
-from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from app.services import records as record_service
 from tests.panel_test_client import panel_client

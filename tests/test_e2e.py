@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.config import settings
@@ -121,9 +121,9 @@ async def test_submit_process_review_flow(test_database, postgres_available, ses
             await session.commit()
 
         if job is not None:
-            from app.db.models import Category, MainCategoryMatch
             from sqlalchemy import select as sa_select
 
+            from app.db.models import Category, MainCategoryMatch
             from app.schemas.news import CategoryMatchCompact, GeneratedNews
 
             output = GeneratedNews(

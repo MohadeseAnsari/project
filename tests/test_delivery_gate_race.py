@@ -9,7 +9,10 @@ again — the delivery was stuck forever even though the record said "approved".
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.messaging.dispatcher import confirm_deliveries_for_article, ensure_pending_deliveries
+from app.messaging.dispatcher import (
+    confirm_deliveries_for_article,
+    ensure_pending_deliveries,
+)
 from tests.routing_setup import route_all_active
 
 
@@ -61,9 +64,9 @@ async def test_gate_on_review_queues_gated(session: AsyncSession, monkeypatch):
 @pytest.mark.asyncio
 async def test_approved_article_queues_pending_directly(session: AsyncSession, monkeypatch):
     """Approved article -> pending: the decision already happened."""
-    from app.config import settings
     from sqlalchemy import select
 
+    from app.config import settings
     from app.db.models import Delivery
 
     monkeypatch.setattr(settings, "require_human_confirmation", True)
@@ -78,9 +81,9 @@ async def test_published_article_queues_pending_for_a_late_channel(
     session: AsyncSession, monkeypatch
 ):
     """A channel routed after publication still gets its delivery."""
-    from app.config import settings
     from sqlalchemy import select
 
+    from app.config import settings
     from app.db.models import Delivery
 
     monkeypatch.setattr(settings, "require_human_confirmation", True)
@@ -98,9 +101,9 @@ async def test_race_approval_between_select_and_insert(session: AsyncSession, mo
     article at exactly that moment (by patching the reader). The delivery the
     sender then inserts must be ``pending``, not a permanently-gated row.
     """
-    from app.config import settings
     from sqlalchemy import select
 
+    from app.config import settings
     from app.db.models import Delivery, Main
     from app.messaging import dispatcher
 

@@ -6,7 +6,6 @@ that the panel, the API and the Workers all honour them.
 """
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.transitions import (

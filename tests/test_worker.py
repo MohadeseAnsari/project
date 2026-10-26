@@ -1,14 +1,20 @@
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Main, Field, Model, Prompt
+from app.db.models import Field, Main, Model, Prompt
 from app.schemas.news import CategoryMatchCompact, GeneratedNews
-from app.worker.worker import recover_stale_jobs, claim_next_job, _upsert_field, process_job, fail_job
+from app.worker.worker import (
+    _upsert_field,
+    claim_next_job,
+    fail_job,
+    process_job,
+    recover_stale_jobs,
+)
 
 # NOTE (v2-combined): the old ``test_resolve_field_*`` tests are gone with the
 # rule-based resolver itself — the field row is now only a dedup identity

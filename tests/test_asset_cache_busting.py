@@ -89,7 +89,7 @@ async def test_every_page_carries_the_build_stamp(session):
             page = await client.get(path)
             assert page.status_code == 200, path
             assert re.search(r"نسخهٔ [0-9a-f]{10}", page.text), f"{path} has no build stamp"
-            assert f"/static/panel.css?v=" in page.text, f"{path} loads an unversioned stylesheet"
+            assert "/static/panel.css?v=" in page.text, f"{path} loads an unversioned stylesheet"
 
 
 def test_the_whole_suite_of_templates_compiles():

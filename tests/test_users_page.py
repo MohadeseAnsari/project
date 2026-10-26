@@ -141,7 +141,7 @@ async def test_unknown_user_id_falls_back_without_error(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_deleted_user_is_gone_from_the_list_and_cannot_log_in(session: AsyncSession):
     """The owner's requirement, end to end through the panel."""
-    admin = await _user(session, "u-admin")
+    await _user(session, "u-admin")
     victim = await _user(session, "u-victim", "editor")
     async with panel_client() as client:
         await _login(client)

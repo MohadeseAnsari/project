@@ -23,15 +23,25 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, select, update
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import Category, CategoryChannelRoute, Channel, Delivery, Main, MainCategoryMatch
+from app.db.models import (
+    Category,
+    CategoryChannelRoute,
+    Channel,
+    Delivery,
+    Main,
+    MainCategoryMatch,
+)
 from app.messaging.formatting import render_article
 from app.messaging.platforms import DeliveryError, PlatformClient, client_for_channel
 from app.news.isced import OTHER_CATEGORY
-from app.services.transitions import assert_delivery_transition, assert_record_transition
+from app.services.transitions import (
+    assert_delivery_transition,
+    assert_record_transition,
+)
 
 logger = logging.getLogger(__name__)
 

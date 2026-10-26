@@ -121,7 +121,11 @@ async def test_delete_message_not_found_is_reported_as_gone(stub_post):
 @pytest.mark.asyncio
 async def test_a_real_refusal_is_not_confused_with_a_gone_message(stub_post):
     """No rights is a genuine refusal: the message is still there."""
-    from app.messaging.platforms import MessageGoneError, PermanentDeliveryError, build_client
+    from app.messaging.platforms import (
+        MessageGoneError,
+        PermanentDeliveryError,
+        build_client,
+    )
 
     stub_post.status = 403
     stub_post.text = "Forbidden: bot was blocked by the user"

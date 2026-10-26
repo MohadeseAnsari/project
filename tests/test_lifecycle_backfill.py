@@ -120,7 +120,6 @@ async def test_017_publishes_fully_delivered_articles(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_017_uses_the_earliest_send_time(session: AsyncSession):
     """The backfilled published_at is the real send time, not 'now'."""
-    from datetime import datetime
 
     stale_id = await _make_article(session, title="t017-time", delivery_status="sent")
     await _apply("017_backfill_published_from_deliveries.sql")

@@ -14,7 +14,6 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditLog, Model, PanelUser, Role
-from app.panel.app import panel_app
 from app.panel.auth import hash_password
 from tests.panel_test_client import panel_client
 
@@ -103,7 +102,6 @@ async def test_activate_never_sends_a_row_name_as_the_provider_model(session: As
     model id and the gateway answered 404.
     """
     from app.news import generation as gen
-    from sqlalchemy import select as sel
 
     await _admin(session)
     row = Model(

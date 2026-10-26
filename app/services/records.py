@@ -10,15 +10,25 @@ combined answer, the record-level matches payload, the reviewer's manual
 override, and the per-category stat counts.
 """
 
-from datetime import datetime
 import logging
+from datetime import datetime
 
 from sqlalchemy import delete, func, or_, select
 
 from app.config import settings
-from app.db.models import AuditLog, Category, Channel, Delivery, Main, MainCategoryMatch, Model, PanelUser, Prompt
-from app.news.isced import OTHER_CATEGORY
+from app.db.models import (
+    AuditLog,
+    Category,
+    Channel,
+    Delivery,
+    Main,
+    MainCategoryMatch,
+    Model,
+    PanelUser,
+    Prompt,
+)
 from app.messaging.dispatcher import confirm_deliveries_for_article
+from app.news.isced import OTHER_CATEGORY
 from app.services.transitions import STATUS_FA, assert_record_transition
 
 logger = logging.getLogger(__name__)
@@ -91,7 +101,6 @@ def record_filters(
     needs_classification: bool | None = None,
 ) -> list:
     """Build the shared WHERE clauses for record listings (panel + API)."""
-    from sqlalchemy import exists
 
     filters = []
     if status:
@@ -191,7 +200,6 @@ async def delete_record(session, record: Main) -> None:
 
 async def record_detail(session, record: Main) -> dict:
     """Build the extended record payload (API GET/PATCH share this)."""
-    from app.db.models import Channel, Delivery
 
     deliveries_result = await session.execute(
         select(Delivery, Channel)
@@ -837,8 +845,10 @@ async def republish_record(session, record: Main, username: str) -> list[dict]:
 
     Returns the list of channels newly queued (id, platform, title).
     """
-    from app.db.models import Channel, Delivery
-    from app.messaging.dispatcher import channels_for_article_multi, qualifying_categories
+    from app.messaging.dispatcher import (
+        channels_for_article_multi,
+        qualifying_categories,
+    )
     from app.messaging.formatting import render_article
 
     if record.status not in ("published", "approved"):
@@ -888,36 +898,6 @@ async def republish_record(session, record: Main, username: str) -> list[dict]:
         "republish: record=%s user=%s queued=%d", record.id, username, len(newly_queued)
     )
     return newly_queued
-    """Reclassify one record manually (operator correction).
-
-    Routing reads ``main_category_matches``, so the correction writes a
-    single definitive manual match (score 1.0, reason records the reviewer)
-    and replaces whatever the LLM had stored — otherwise the record would
-    keep routing to the old categories. ``main.category_id`` (the display
-    primary) is set to the same category.
-
-    Raises:
-        ValueError: ``unknown-category`` when the category does not exist.
-    """
-    from app.db.models import Category
-
-    category = await session.get(Category, category_id)
-    if category is None:
-        raise ValueError("unknown-category")
-    await _delete_matches(session, record.id)
-    session.add(MainCategoryMatch(
-        main_id=record.id,
-        category_id=category_id,
-        score=1.0,
-        rank=1,
-        reason="تعیین دستی توسط بازبین",
-    ))
-    record.category_id = category_id
-    record.updated_at = datetime.utcnow()
-    # No refresh(): with expire_on_commit=False the row is already current,
-    # and refreshing would expire attributes the caller may read afterwards.
-    await session.commit()
-    return record
 
 
 async def record_timeline(session, record: Main) -> list[dict]:
@@ -927,7 +907,7 @@ async def record_timeline(session, record: Main) -> list[dict]:
     timeline reflects what actually happened, including failures and the
     model/prompt used for generation.
     """
-    from app.db.models import Category, Channel, Delivery, Model, Prompt
+    from app.db.models import Category, Model, Prompt
 
     steps: list[dict] = [
         {"title": "ثبت درخواست", "sub": _tl_status(record.status), "at": record.created_at}
@@ -1059,7 +1039,7 @@ async def record_overview(session, record: Main) -> dict:
     channel display names, and audit history with usernames. Timestamps stay
     raw datetimes — routes format them for display.
     """
-    from app.db.models import Category, Channel, Delivery, Model, Prompt
+    from app.db.models import Category, Model, Prompt
 
     deliveries_rows = (
         await session.execute(

@@ -11,13 +11,14 @@ This file pins each stage of that contract, plus the migration pieces the
 truncated-``session`` fixture would wipe (vocabulary, prompt seed, routes).
 """
 
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from types import SimpleNamespace
 
 from app.config import settings
 from app.db.connection import async_session
@@ -28,15 +29,13 @@ from app.db.models import (
     Delivery,
     Main,
     MainCategoryMatch,
-    Model,
     Prompt,
 )
 from app.messaging.dispatcher import (
-    channels_for_article_multi,
     ensure_pending_deliveries,
 )
-from app.news.isced import ISCED_CATEGORIES, ISCED_CATEGORY_NAMES, OTHER_CATEGORY
-from app.schemas.news import CategoryMatch, CategoryMatchCompact, GeneratedNews
+from app.news.isced import ISCED_CATEGORY_NAMES, OTHER_CATEGORY
+from app.schemas.news import CategoryMatchCompact, GeneratedNews
 
 OUTPUT = {"title": "تیتر", "lead": "لید", "body": "متن کامل"}
 
@@ -169,8 +168,9 @@ def test_categorymatchcompact_valid():
 
 
 def test_categorymatchcompact_code_out_of_range():
-    from app.schemas.news import CategoryMatchCompact
     from pydantic import ValidationError
+
+    from app.schemas.news import CategoryMatchCompact
 
     with pytest.raises(ValidationError):
         CategoryMatchCompact(code=99, score=95)
@@ -179,8 +179,9 @@ def test_categorymatchcompact_code_out_of_range():
 
 
 def test_categorymatchcompact_score_out_of_range():
-    from app.schemas.news import CategoryMatchCompact
     from pydantic import ValidationError
+
+    from app.schemas.news import CategoryMatchCompact
 
     with pytest.raises(ValidationError):
         CategoryMatchCompact(code=16, score=150)
@@ -256,7 +257,7 @@ async def test_store_rejects_more_than_three_matches(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_store_empty_answer_falls_back_to_other_with_reason(session: AsyncSession):
     await _seed_vocabulary(session, OTHER_CATEGORY)
-    channels = await _seed_worker_world(session)
+    await _seed_worker_world(session)
     job = await _JobBuilder(session).run(categories=[])
 
     rows = await _matches(session, job.id)
@@ -312,7 +313,7 @@ async def test_threshold_and_top_n_apply(monkeypatch, session: AsyncSession):
     monkeypatch.setattr(settings, "top_n_categories", 2)
 
     await _seed_vocabulary(session, "بهداشت", "حقوق", "معماری و ساخت‌وساز", OTHER_CATEGORY)
-    channels = await _seed_worker_world(session)
+    await _seed_worker_world(session)
     job = await _JobBuilder(session).run(categories=[
         {"category": "بهداشت", "score": 0.9, "reason": "r1"},
         {"category": "حقوق", "score": 0.55, "reason": "r2"},
@@ -327,10 +328,9 @@ async def test_threshold_and_top_n_apply(monkeypatch, session: AsyncSession):
 @pytest.mark.asyncio
 async def test_worker_maps_compact_codes(session: AsyncSession):
     """Compact LLM output (codes 0-29) maps to full DB rows."""
-    from app.worker.worker import process_job
 
     vocab = await _seed_vocabulary(session, "بهداشت", "فناوری اطلاعات و ارتباطات", OTHER_CATEGORY)
-    channels = await _seed_worker_world(session)
+    await _seed_worker_world(session)
     job = await _JobBuilder(session).run(categories=[
         {"code": vocab["فناوری اطلاعات و ارتباطات"].short_code, "score": 80, "reason": "ML imaging"},
         {"code": vocab["بهداشت"].short_code, "score": 70, "reason": "تشخیص پزشکی"},
@@ -350,7 +350,6 @@ async def test_worker_maps_compact_codes(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_worker_filters_invalid_compact_code(session: AsyncSession):
-    from app.worker.worker import process_job
 
     await _seed_vocabulary(session, OTHER_CATEGORY)
     await _seed_worker_world(session)
@@ -365,7 +364,6 @@ async def test_worker_filters_invalid_compact_code(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_worker_filters_low_score_compact(session: AsyncSession):
-    from app.worker.worker import process_job
 
     vocab = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
     await _seed_worker_world(session)
@@ -379,7 +377,6 @@ async def test_worker_filters_low_score_compact(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_worker_dedupes_compact_code(session: AsyncSession):
-    from app.worker.worker import process_job
 
     vocab = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
     await _seed_worker_world(session)
@@ -400,7 +397,7 @@ async def test_other_match_never_qualifies_even_at_zero_threshold(
     monkeypatch.setattr(settings, "min_category_relevance", 0.0)
 
     await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
-    channels = await _seed_worker_world(session)
+    await _seed_worker_world(session)
     job = await _JobBuilder(session).run(
         categories=[{"category": "بهداشت", "score": 0.9, "reason": "real match"}]
     )
@@ -469,7 +466,7 @@ async def test_ensure_respects_the_human_gate(monkeypatch, session: AsyncSession
     before = settings.require_human_confirmation
     # Gate ON → awaiting_confirmation.
     monkeypatch.setattr(settings, "require_human_confirmation", True)
-    job = await _JobBuilder(session).run(
+    await _JobBuilder(session).run(
         categories=[{"category": "بهداشت", "score": 0.9, "reason": "r"}]
     )
     assert await ensure_pending_deliveries(session) == 1
@@ -478,7 +475,7 @@ async def test_ensure_respects_the_human_gate(monkeypatch, session: AsyncSession
 
     # Gate OFF → pending directly.
     monkeypatch.setattr(settings, "require_human_confirmation", False)
-    job2 = await _JobBuilder(session).run(
+    await _JobBuilder(session).run(
         categories=[{"category": "بهداشت", "score": 0.9, "reason": "r"}]
     )
     assert await ensure_pending_deliveries(session) == 1
@@ -587,7 +584,6 @@ async def test_manual_override_clearing_to_the_fallback(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_panel_manual_assign_writes_one_manual_match(session: AsyncSession):
     """The panel correction replaces the matches so routing follows it."""
-    from sqlalchemy import func
 
     from app.db.models import AuditLog, PanelUser, Role
     from app.panel.auth import hash_password
@@ -654,8 +650,9 @@ async def migrated_db():
     itself, so they rebuild the test database, apply every migration, and run
     against it. The DB is left rebuilt (other tests simply truncate again).
     """
-    import asyncpg
     from pathlib import Path
+
+    import asyncpg
 
     from app.db.connection import engine
     from tests.conftest import TEST_DB_NAME, _admin_url, _pg_url

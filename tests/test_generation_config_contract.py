@@ -149,7 +149,7 @@ async def test_process_job_calls_generate_news_with_the_real_config(session: Asy
     Patching ``generate_news`` records the kwargs actually passed, which is
     exactly what broke before (the call site was fine; the signature was not).
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from app.db.models import Main
     from app.worker.worker import claim_next_job, process_job
