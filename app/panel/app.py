@@ -4,6 +4,20 @@ Same image as the API with a different command (``web`` compose service).
 Persian RTL UI, plain CSS, Vazirmatn fonts vendored under ``/static``.
 Human auth uses panel users + signed cookies (not the machine shared secret);
 every review/retry/config change is written to ``audit_logs`` for history.
+
+Route groups in this module, in order:
+
+* authentication and session handling
+* dashboard and live counters
+* records, record detail, review, and manual classification
+* deliveries and delivery recovery
+* categories, channels, and routing
+* models and prompts
+* thesis submission
+* users, profile, audit, and authorization map
+
+Shared helpers stay at the top; domain queries and state changes live in
+``app/services`` so the panel and machine API cannot drift apart.
 """
 
 import hashlib
