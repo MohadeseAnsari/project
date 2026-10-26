@@ -18,7 +18,7 @@ from app.credentials_resolve import (
     resolve_model_credentials,
 )
 from app.db.models import AuditLog, Channel, Main, Model, PanelUser, Role
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 #: A distinctive value so "is this string anywhere?" is unambiguous.

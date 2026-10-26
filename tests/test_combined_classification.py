@@ -586,7 +586,7 @@ async def test_panel_manual_assign_writes_one_manual_match(session: AsyncSession
     """The panel correction replaces the matches so routing follows it."""
 
     from app.db.models import AuditLog, PanelUser, Role
-    from app.panel.auth import hash_password
+    from app.services.passwords import hash_password
     from tests.panel_test_client import panel_client
 
     health = await _seed_vocabulary(session, "بهداشت", "حقوق", OTHER_CATEGORY)

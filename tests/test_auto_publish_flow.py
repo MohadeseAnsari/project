@@ -26,9 +26,9 @@ from app.db.models import (
 )
 from app.messaging.dispatcher import ensure_pending_deliveries
 from app.news.isced import ISCED_CATEGORIES, OTHER_CATEGORY
-from app.panel.auth import hash_password
 from app.schemas.news import CategoryMatchCompact, GeneratedNews
 from app.services import records as record_service
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 _spec = importlib.util.spec_from_file_location(

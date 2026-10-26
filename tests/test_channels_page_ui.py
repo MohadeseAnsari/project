@@ -25,7 +25,7 @@ from app.db.models import (
     PanelUser,
     Role,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 from tests.routing_setup import route_all_active
 

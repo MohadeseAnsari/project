@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.connection import async_session
 from app.db.models import AuditLog, Channel, Delivery, Main, PanelUser, Role
 from app.panel.app import panel_app
-from app.panel.auth import hash_password
 from app.panel.authz import Action, can, require
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 #: role -> allowed actions. This table IS the policy (see docs/admin-panel.md).

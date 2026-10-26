@@ -10,8 +10,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.panel.app import panel_app
-from app.panel.auth import hash_password
 from app.panel.csrf import csrf_token_for_cookie
+from app.services.passwords import hash_password
 
 
 def _raw() -> AsyncClient:

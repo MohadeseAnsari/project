@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.panel.auth import ensure_admin_user, session_user_id, verify_password
+from app.panel.auth import ensure_admin_user, session_user_id
 from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
@@ -37,6 +37,7 @@ from app.services import records as record_service
 from app.services import session_dep as service_session_dep
 from app.services import users as user_service
 from app.services.errors import PermissionDenied, from_value_error
+from app.services.passwords import verify_password
 
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))

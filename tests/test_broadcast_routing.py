@@ -21,8 +21,8 @@ from app.db.models import (
     Role,
 )
 from app.messaging.dispatcher import channels_for_article_multi
-from app.panel.auth import hash_password
 from app.services import channels as channel_service
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 from tests.routing_setup import route_category
 

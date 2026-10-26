@@ -15,8 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditLog, Channel, Delivery, Main, PanelUser, Role
-from app.panel.auth import hash_password
 from app.services import deliveries as delivery_service
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 

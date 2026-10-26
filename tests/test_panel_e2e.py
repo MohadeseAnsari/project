@@ -21,7 +21,7 @@ from app.messaging.dispatcher import (
     deliver_one,
     ensure_pending_deliveries,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from app.worker.worker import claim_next_job, process_job
 from tests.panel_test_client import panel_client
 from tests.routing_setup import route_all_active

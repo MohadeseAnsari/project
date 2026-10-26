@@ -66,7 +66,7 @@ async def test_the_dashboard_renders_persian_days(session):
     from sqlalchemy import select
 
     from app.db.models import PanelUser, Role
-    from app.panel.auth import hash_password
+    from app.services.passwords import hash_password
     from tests.panel_test_client import panel_client
 
     role = (await session.execute(select(Role).where(Role.name == "admin"))).scalar_one_or_none()
@@ -98,7 +98,7 @@ async def test_the_live_poll_labels_days_in_persian_too(session):
     from sqlalchemy import select
 
     from app.db.models import PanelUser, Role
-    from app.panel.auth import hash_password
+    from app.services.passwords import hash_password
     from tests.panel_test_client import panel_client
 
     role = (await session.execute(select(Role).where(Role.name == "admin"))).scalar_one_or_none()

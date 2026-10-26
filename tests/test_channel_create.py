@@ -11,7 +11,7 @@ from app.messaging.platforms import (
     TransientDeliveryError,
     build_client,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
