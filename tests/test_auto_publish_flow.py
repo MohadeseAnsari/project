@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,7 @@ from app.db.models import (
     PanelUser,
     Role,
 )
+from app.main import app
 from app.messaging.dispatcher import ensure_pending_deliveries
 from app.news.isced import ISCED_CATEGORIES, OTHER_CATEGORY
 from app.schemas.news import CategoryMatchCompact, GeneratedNews
@@ -298,6 +300,39 @@ async def test_republish_creates_deliveries_for_new_channels(session: AsyncSessi
     assert queued[0]["id"] == ch_new.id
     delivs = (await session.execute(select(Delivery).where(Delivery.main_id == record.id))).scalars().all()
     assert any(d.channel_id == ch_old.id and d.status == "sent" for d in delivs)
+
+
+@pytest.mark.asyncio
+async def test_republish_api_endpoint_queues_corrected_channels(session: AsyncSession):
+    """The machine API republish path must resolve and queue, not 500."""
+    cat = Category(name="بهداشت", description="h", short_code=24, deprecated=False)
+    other = Category(name=OTHER_CATEGORY, description="fallback", short_code=0, deprecated=False)
+    channel = Channel(platform="bale", chat_id=3101, title="new", username="@n", is_active=True, activated_at=datetime(2020, 1, 1))
+    session.add_all([cat, other, channel])
+    await session.commit()
+    session.add(CategoryChannelRoute(category_id=cat.id, channel_id=channel.id))
+    await session.commit()
+    record = Main(username="u", title="T", abstract="A", field="f", university="U",
+                  author="A", supervisor="S", status="published",
+                  output_json={"title": "T", "lead": "L", "body": "B"})
+    session.add(record)
+    await session.commit()
+    await record_service.store_generated_classification(
+        session, record,
+        GeneratedNews(title="T", lead="L", body="B",
+                     categories=[CategoryMatchCompact(code=24, score=90, reason="")]),
+        model_id=None, prompt_id=None,
+    )
+    await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/records/{record.id}/republish",
+            json={"shared_Secret": settings.shared_secret, "username": "api"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["record_id"] == record.id
+    assert response.json()["queued"][0]["id"] == channel.id
 
 
 # ---------------------------------------------------------------------------

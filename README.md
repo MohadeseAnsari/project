@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688)
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791)
 ![Docker Compose](https://img.shields.io/badge/docker-compose-ready-2496ED)
-![Tests](https://img.shields.io/badge/tests-696%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-697%20passed-brightgreen)
 
 **A thesis-to-channel news pipeline for IranDoc.** A thesis is submitted as
 structured metadata; one LLM call writes the Persian news article and classifies
@@ -483,7 +483,7 @@ Coverage highlights:
 - Panel routing, permissions, CSRF, templates, and layering
 - Worker recovery and failure handling
 
-Latest run: **696 passed, 2 skipped**.
+Latest run: **697 passed, 2 skipped**.
 
 Lint the application, scripts, and tests:
 
