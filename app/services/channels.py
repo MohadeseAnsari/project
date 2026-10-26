@@ -1,25 +1,32 @@
 """Channel domain service: destinations, settings, and route mappings.
 
-Single implementation for the panel (the machine API has no channel
-endpoints; ``scripts/manage_channels.py`` stays a thin CLI over the same
-rows). Raises plain ``ValueError`` with stable messages; routes map them to
-error pages. Bot tokens never pass through here — only variable names.
+Single implementation for the panel. Raises plain ``ValueError`` with stable
+messages; routes map them to error pages. Bot tokens never pass through here —
+only variable names.
 """
 
 from sqlalchemy import func, select
 
-from app.db.models import (
-    Category,
-    CategoryChannelRoute,
-    Channel,
-    Field,
-    FieldChannelRoute,
-)
+from app.db.models import Category, CategoryChannelRoute, Channel
 
 
 async def list_channels(session) -> list[Channel]:
     """All channels in id order (cards, selects, matrix headers)."""
     return list((await session.execute(select(Channel).order_by(Channel.id))).scalars().all())
+
+
+async def list_platforms(session) -> list[str]:
+    """Distinct platform values present on channels, sorted.
+
+    The deliveries filter is built from this list rather than from the
+    hardcoded bale/telegram pair, so a channel added on another platform
+    becomes filterable without editing the template. The display side has the
+    same fallback in ``platforms.html``.
+    """
+    rows = await session.execute(
+        select(Channel.platform).distinct().order_by(Channel.platform)
+    )
+    return [row[0] for row in rows]
 
 
 async def get_channel(session, channel_id: int) -> Channel | None:
@@ -270,20 +277,11 @@ async def delete_channel(session, row: Channel) -> str:
 
 
 async def remove_routes(session, channel_id: int) -> int:
-    """Drop every field/category route pointing at one channel.
+    """Drop every category route pointing at one channel.
 
     Runs before a delete so no route outlives the row it points at. Returns
-    how many routes were removed (shown in the confirmation text).
+    how many routes were removed.
     """
-    field_rows = list(
-        (
-            await session.execute(
-                select(FieldChannelRoute).where(FieldChannelRoute.channel_id == channel_id)
-            )
-        ).scalars().all()
-    )
-    for route in field_rows:
-        await session.delete(route)
     cat_rows = list(
         (
             await session.execute(
@@ -293,9 +291,9 @@ async def remove_routes(session, channel_id: int) -> int:
     )
     for route in cat_rows:
         await session.delete(route)
-    if field_rows or cat_rows:
+    if cat_rows:
         await session.commit()
-    return len(field_rows) + len(cat_rows)
+    return len(cat_rows)
 
 
 async def category_channel_matrix(session) -> list[dict]:

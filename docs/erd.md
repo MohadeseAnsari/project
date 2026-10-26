@@ -2,13 +2,12 @@
 
 ```mermaid
 erDiagram
-    categories ||--o{ fields : "contains"
     categories ||--o{ main : "categorized_as"
     fields ||--o{ main : "selected_for"
     models ||--o{ main : "generated_by"
     prompts ||--o{ main : "generated_with"
-    fields ||--o{ field_channel_routes : "routed_by"
-    channels ||--o{ field_channel_routes : "receives"
+    main ||--o{ main_category_matches : "classified_as"
+    categories ||--o{ main_category_matches : "vocabulary"
     categories ||--o{ category_channel_routes : "routed_to"
     channels ||--o{ category_channel_routes : "receives"
     channels ||--o{ deliveries : "target_of"
@@ -22,24 +21,27 @@ erDiagram
         SERIAL id PK
         VARCHAR name UK
         TEXT description
+        BOOLEAN deprecated
+        VARCHAR isc_code
+        INTEGER short_code
         TIMESTAMP created_at
     }
+    # deprecated is retained for retiring a row without breaking its FKs, but
+    # the pre-ISCED rule vocabulary is gone: migration 024 remapped its fields,
+    # records and deliveries onto the closest live rows, then deleted it. The
+    # 29 ISCED-F 2013 intermediate fields + other stay live; isc_code is
+    # indicative metadata only (not used for routing, nullable by design).
 
     fields {
         SERIAL id PK
         VARCHAR name UK
         VARCHAR normalized_name UK
-        INTEGER category_id FK
         VARCHAR source
-        VARCHAR matched_keyword
-        VARCHAR category_source
         TIMESTAMP created_at
     }
-    # fields.category_id is the ONE place a field's category is decided. It is
-    # assigned once — by hand from the panel, or by the classification rules
-    # when the field is first seen — and read from then on, never re-derived
-    # per submission (item 15). category_source records which: 'manual' or
-    # 'rules'.
+    # fields is only a dedup identity for a discipline name. It has no
+    # category, keyword, or channel route. main.field_id references it, but
+    # neither classification nor routing reads the field row.
 
     models {
         SERIAL id PK
@@ -87,6 +89,34 @@ erDiagram
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
+    # main.category_id is the DISPLAY primary (the rank-1 match's category);
+    # the full multi-category answer lives in main_category_matches and is
+    # what routing actually reads.
+
+    main_category_matches {
+        SERIAL id PK
+        INTEGER main_id FK
+        INTEGER category_id FK
+        FLOAT score
+        INTEGER rank
+        TEXT reason
+        INTEGER model_id FK
+        TIMESTAMP created_at
+    }
+    # One row per (category, score, rank) the combined generation call — or a
+    # reviewer — classified a record into. Promotion rules:
+    #   - rank 1 is the primary (highest score; main.category_id mirrors it);
+    #   - ck_main_cat_matches_score pins score to 0..1;
+    #   - a review override ('POST /records/{id}/category-matches' or the
+    #     panel's «تعیین دستی دسته») REPLACES all rows: one manual match with
+    #     score 1.0 and reason «تعیین دستی توسط بازبین», or the single other
+    #     fallback (score 0.0, reason 'no auto-match') when cleared;
+    #   - model_id is NULL on manual/override rows, so an LLM answer is never
+    #     mistaken for a human decision;
+    #   - routing reads ONLY qualifying rows: score >=
+    #     settings.min_category_relevance, category NOT deprecated, category
+    #     != 'other'. An other-only record has one row and sends nothing.
+    # Indexes: (main_id) for the record page, (score) for threshold queries.
 
     roles {
         SERIAL id PK
@@ -140,24 +170,22 @@ erDiagram
     # switched ON, so neither a new channel nor a re-enabled one inherits the
     # archive that predates it.
 
-    field_channel_routes {
-        INTEGER field_id PK,FK
-        INTEGER channel_id PK,FK
-        TIMESTAMP created_at
-    }
-    # Retired from the delivery decision (item 6) and no longer written by the
-    # panel. Kept so existing rows are not lost; dropping the table would be a
-    # destructive migration for no gain.
-
     category_channel_routes {
         INTEGER category_id PK,FK
         INTEGER channel_id PK,FK
         TIMESTAMP created_at
     }
-    # Retired from the delivery decision and no longer written by the panel
-    # (item 6, final rule: news goes to every ACTIVE channel, nothing is
-    # configurable). Kept so existing rows are not lost; the panel has no
-    # screen for them any more.
+    # THE routing matrix, edited one category at a time on the panel's
+    # /categories page: a category reaches exactly the channels ticked here —
+    # and nothing more. It is consulted through main_category_matches now:
+    # every qualifying match of a record contributes the channels of its
+    # category, and the per-channel union (source 'multi' when two categories
+    # hit the same channel) is what gets queued. A category with no rows here
+    # publishes nothing — no fallback to "every active channel", because a
+    # fallback would make the matrix a control that looks live and is not.
+    # Legacy note: deliveries written before v2-combined were remapped to the
+    # closest ISCED category by migration 024. Routing still reads only the
+    # current matches of a record.
 
     deliveries {
         SERIAL id PK
@@ -220,10 +248,17 @@ deliveries are `sent`.
 `awaiting_confirmation` is the gated initial status while
 `REQUIRE_HUMAN_CONFIRMATION` is on; approving the record flips it to `pending`.
 
-An article reaches **every active channel**; there is no route table in the
-decision any more. The only exclusions are `is_active = false` and
-`channels.activated_at > main.created_at` — a channel never receives news that
-predates the moment it was switched on. Each delivery snapshots `category_id` +
-`route_source` (`all`) at queue time, so a send stays explainable after later
-edits. `fields.matched_keyword` records which keyword produced the field's
-category, for the same reason.
+An article reaches **the channels its qualifying category matches name**:
+every row in `main_category_matches` with `score >= MIN_CATEGORY_RELEVANCE`
+(in a live category, never `other`) contributes that category's
+`category_channel_routes`, and the per-channel union is what gets queued —
+a channel reached through two of the record's categories gets ONE delivery
+(`route_source` = the category name, or `multi` when the union coincides).
+Each delivery snapshots the top-1 match's `category_id` at queue time (an
+audit-only simplification in the multi-category case), so a send stays
+explainable after later edits. Excluded channels are `is_active = false` and
+`channels.activated_at > main.created_at` — a channel never receives news
+that predates the moment it was switched on, which is what stops a newly
+routed channel from being flooded with the archive. A record whose only
+match is the `other` fallback reaches **no channel at all** and waits for a
+reviewer. There is no field-level routing fallback.

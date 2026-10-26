@@ -17,9 +17,9 @@ from datetime import datetime
 
 from sqlalchemy import select, update
 
-from app.db.models import Model
 from app.credentials import encrypt
 from app.credentials_resolve import MissingModelKeyError, resolve_model_credentials
+from app.db.models import Model
 from app.news.generation import describe_model_credentials, probe_model_connection
 
 

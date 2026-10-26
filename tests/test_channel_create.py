@@ -2,7 +2,6 @@
 
 import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,8 +11,7 @@ from app.messaging.platforms import (
     TransientDeliveryError,
     build_client,
 )
-from app.panel.app import panel_app
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
@@ -201,7 +199,6 @@ def test_client_for_channel_prefers_row_token(monkeypatch):
 @pytest.mark.asyncio
 async def test_delivery_uses_channel_token(session: AsyncSession, monkeypatch):
     """Sender sends through the channel's own bot when configured."""
-    from sqlalchemy import select as _select
 
     from app.db.models import Category, Delivery, Field, Main
     from app.messaging.dispatcher import claim_next_delivery, deliver_one
@@ -210,7 +207,7 @@ async def test_delivery_uses_channel_token(session: AsyncSession, monkeypatch):
     cat = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(cat)
     await session.commit()
-    field = Field(name="tok-field", normalized_name="tok-field", category_id=cat.id)
+    field = Field(name="tok-field", normalized_name="tok-field")
     session.add(field)
     await session.commit()
     channel = Channel(platform="bale", chat_id=73001, username="@c", bot_token_env="CHAN_SEND_TOKEN")

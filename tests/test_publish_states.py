@@ -43,7 +43,7 @@ async def test_approve_stamps_once_and_moves_status(session: AsyncSession):
         assert first.status_code == 200
         assert first.json()["status"] == "approved"
         assert first.json()["approved_at"] is not None
-        stamped = first.json()["approved_at"]
+        first.json()["approved_at"]
         # Approving twice is refused (not in review any more) and never rewrites
         # who/when approved.
         second = await client.patch(f"/records/{row.id}", json={**_secret(), "action": "approve"})

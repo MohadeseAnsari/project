@@ -4,11 +4,11 @@
 {% block h1 %}کاربران و نقش‌ها{% endblock %}
 {% block crumb %}کنسول › مدیریت › کاربران{% endblock %}
 {% block content %}
-<div class="two">
-  <div class="card">
+<div class="card page-section">
     <h3 class="card-head">کاربران کنسول<span class="grow"></span><span class="badge s-off">{{ users|length|fa }} کاربر</span></h3>
+    <div class="table-scroll">
     <table>
-      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:88px">عملیات</th></tr></thead>
+      <thead><tr><th>کاربر</th><th style="width:126px">نقش</th><th style="width:118px">ایجاد</th><th style="width:104px">وضعیت</th><th style="width:110px">عملیات</th></tr></thead>
       <tbody>
         {% for u in users %}
         <tr class="table-row"><td class="title">{{ u.username }}</td>
@@ -31,11 +31,13 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     <div class="body" style="border-top:1px solid var(--line2)">
       <div class="hint">توصیه: به‌جای حذف، غیرفعال کنید. حذف، حساب را از پنل برمی‌دارد و دیگر دیده یا وارد نمی‌شود، ولی نامش در تاریخچهٔ رویدادها می‌ماند.</div>
     </div>
   </div>
 
+  <div class="two">
   {# ONE settings block for every user: pick someone, then act. Previously this
      looped a role form and a password form per user, so the page grew a pair
      of sections for each account added. #}
@@ -98,7 +100,7 @@
       <tr><td>ویرایش متن خبر</td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td><td><span class="tick">✓</span></td></tr>
       <tr><td>تأیید و انتشار / رد خبر</td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td><td><span class="tick">✓</span></td></tr>
       <tr><td>ارسال دوبارهٔ تحویل ناموفق</td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td><td><span class="tick">✓</span></td></tr>
-      <tr><td>تنظیمات رشته‌ها، دسته‌ها، پرامپت‌ها و کانال‌ها</td><td><span class="cross">—</span></td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td></tr>
+      <tr><td>تنظیمات دسته‌ها، پرامپت‌ها و کانال‌ها</td><td><span class="cross">—</span></td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td></tr>
       <tr><td>مدیریت کاربران و دیدن رویدادها</td><td><span class="cross">—</span></td><td><span class="cross">—</span></td><td><span class="tick">✓</span></td></tr>
     </tbody>
   </table>

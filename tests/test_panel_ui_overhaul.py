@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Channel, Main, Model, PanelUser, Role
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 TEMPLATES = Path("app/panel/templates")
@@ -282,8 +282,9 @@ def test_panel_css_defines_the_layout_and_icon_classes():
                  ".table-row", ".icon-btn", ".icon-btn.danger", ".icon-btn.ok",
                  ".icon-btn.mut"):
         assert rule in css, f"panel.css is missing {rule}"
-    # No media queries were introduced: this work is not responsive.
-    assert "@media" not in css, "the overhaul must not add a breakpoint"
+    # The redesign is responsive: narrow screens collapse the shell, grids,
+    # and detail sidebars instead of pushing content sideways.
+    assert "@media" in css, "the redesigned panel must include responsive rules"
 
 
 def test_no_template_reaches_for_an_icon_library():
@@ -329,3 +330,46 @@ def test_the_kpi_row_class_replaced_the_ad_hoc_one():
         assert 'class="kpis"' not in body, f"{path.name} still uses .kpis"
     css = CSS.read_text(encoding="utf-8")
     assert ".kpis{" in css, "keep .kpis only while something still references it"
+
+
+def test_the_category_channel_picker_is_bounded_and_searchable():
+    """A category can route to dozens of channels; the picker must not stretch
+    the card to the height of the channel table. The summary names the current
+    routes, and the expanded list scrolls inside a fixed bound."""
+    body = _text("categories.html")
+    for marker in ('class="disclose channel-picker"',
+                   'class="picker-list" data-picker-list',
+                   'type="search" data-picker-search',
+                   'class="picker-preview"', 'class="picker-foot"'):
+        assert marker in body, f"categories.html is missing {marker}"
+    css = CSS.read_text(encoding="utf-8")
+    assert ".picker-list{" in css, "the channel list has no bounded container"
+    assert "max-height:220px" in css and "overflow-y:auto" in css, (
+        "a long channel list must scroll instead of growing the category card"
+    )
+
+
+def test_the_platform_badge_falls_back_for_a_new_platform():
+    """Bale and Telegram get friendly labels; any other stored platform name
+    must still render instead of leaving a blank cell."""
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=True)
+    template = env.from_string(
+        '{% from "platforms.html" import platform_badge %}'
+        '{{ platform_badge("eitaa") }}'
+    )
+    html = template.render()
+    assert "platform-badge" in html
+    assert ">eitaa</span>" in html
+
+
+def test_prompt_versions_scroll_inside_their_card():
+    """A growing prompt history scrolls inside its own card instead of pushing
+    the JSON reference card off the page."""
+    body = _text("prompts.html")
+    assert 'class="body version-list"' in body
+    css = CSS.read_text(encoding="utf-8")
+    rule = css.split(".version-list{", 1)[1].split("}", 1)[0]
+    assert "max-height" in rule
+    assert "overflow-y:auto" in rule

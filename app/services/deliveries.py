@@ -84,6 +84,10 @@ def delivery_rows(pairs) -> list[dict]:
             "id": d.id, "main_id": d.main_id, "status": d.status, "attempts": d.attempts,
             "platform_message_id": d.platform_message_id, "title": m.title, "field": m.field,
             "channel_name": c.username or c.title or c.platform,
+            # The platform is kept as the stored value, not a display label:
+            # the table renders it through platforms.html, whose fallback shows
+            # a newly added platform without a code change here.
+            "platform": c.platform,
             "category_id": d.category_id, "route_source": d.route_source,
             "category_name": "—",
         }

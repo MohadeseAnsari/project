@@ -35,7 +35,7 @@ from app.db.models import (
     PanelUser,
     Role,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
@@ -178,7 +178,7 @@ async def test_the_deliveries_tab_still_lists_and_filters(session: AsyncSession)
     article = (await _records(session, 1))[0]
     # One delivery per (article, channel), so use both channels.
     session.add(Delivery(main_id=article.id, channel_id=first.id, status="sent",
-                         platform_message_id=777))
+                         platform_message_id=987654321))
     session.add(Delivery(main_id=article.id, channel_id=second.id, status="failed",
                          error_message="boom"))
     await session.commit()
@@ -191,8 +191,8 @@ async def test_the_deliveries_tab_still_lists_and_filters(session: AsyncSession)
     # The message id is shown only for a row in the result set, so it is what
     # the filter actually controls. (The "boom" text also appears via
     # last_error in the footer, which is not a row.)
-    assert "777" in everything.text
-    assert "777" not in only_failed.text, "the status filter actually filters"
+    assert "987654321" in everything.text
+    assert "987654321" not in only_failed.text, "the status filter actually filters"
     assert only_failed.status_code == 200
 
 
@@ -220,6 +220,52 @@ async def test_filter_state_does_not_leak_across_the_tab_bar(session: AsyncSessi
     # there, so the record status did not follow us across.
     assert "در انتظار بازبینی" in filtered.text
     assert "5150" in tab.text
+
+
+@pytest.mark.asyncio
+async def test_the_deliveries_table_shows_each_channel_platform(session: AsyncSession):
+    """The channel column shows the destination; the platform column shows
+    which service it belongs to. Both are needed because a username alone does
+    not say whether the message went to Bale or Telegram."""
+    await _admin(session)
+    bale = Channel(platform="bale", chat_id=93061, username="@bale-news", is_active=True)
+    telegram = Channel(platform="telegram", chat_id=93062, username="@tg-news", is_active=True)
+    session.add_all([bale, telegram])
+    await session.commit()
+    article = (await _records(session, 1))[0]
+    session.add_all([
+        Delivery(main_id=article.id, channel_id=bale.id, status="sent",
+                 platform_message_id=6101),
+        Delivery(main_id=article.id, channel_id=telegram.id, status="sent",
+                 platform_message_id=6102),
+    ])
+    await session.commit()
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/records", params={"tab": "deliveries"})
+    assert "سکو</th>" in page.text
+    assert "platform-badge platform-bale" in page.text
+    assert "platform-badge platform-telegram" in page.text
+    assert ">بله</span>" in page.text
+    assert ">تلگرام</span>" in page.text
+
+
+@pytest.mark.asyncio
+async def test_the_platform_filter_follows_the_channels_table(session: AsyncSession, monkeypatch):
+    """The filter is not a hardcoded bale/telegram pair: whatever platform list
+    the service returns is rendered, with the stored name as its fallback label."""
+    await _admin(session)
+    from app.services import channels as channel_service
+
+    async def future_platforms(_session):
+        return ["bale", "discord"]
+
+    monkeypatch.setattr(channel_service, "list_platforms", future_platforms)
+    async with panel_client() as client:
+        await _login(client)
+        page = await client.get("/records", params={"tab": "deliveries"})
+    assert '<option value="discord"' in page.text
+    assert ">discord</option>" in page.text
 
 
 @pytest.mark.asyncio

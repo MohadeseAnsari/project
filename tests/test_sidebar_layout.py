@@ -78,7 +78,7 @@ def test_the_account_block_cannot_be_squeezed_out():
 def test_the_account_block_lives_outside_the_scrolling_nav():
     """It is a sibling of <nav> in the sidebar, so nav's scroll can't move it."""
     html = BASE.read_text(encoding="utf-8")
-    nav = re.search(r"<nav>.*?</nav>", html, re.S)
+    nav = re.search(r"<nav\b[^>]*>.*?</nav>", html, re.S)
     assert nav, "sidebar nav must exist"
     assert "side-foot" not in nav.group(0), (
         "the account block must not be inside <nav>, which is the scrolling part"

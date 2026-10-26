@@ -1,19 +1,30 @@
 """LLM news generation via PydanticAI against AvalAI's OpenAI-compatible API.
 
-The LLM is used ONLY for journalistic news generation (Assignment 2/3
-boundary). Field/category classification never goes through this module.
+v2-combined: ONE call per thesis returns the article AND the ISCED-F 2013
+classification together (``GeneratedNews.categories``). The news/catalogue
+boundary moved: classification is no longer a separate rule engine — the
+resolved system prompt carries the 29-category vocabulary, and the Worker
+post-processes the answer (validation, clamping, ranking) before storing it.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any
 
+from openai import AsyncOpenAI
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from openai import AsyncOpenAI
 
 from app.config import settings
+from app.credentials_resolve import (
+    MissingModelKeyError,
+    resolve_model_credentials,
+)
+from app.credentials_resolve import (
+    describe_credentials as _describe_credentials,
+)
 from app.news.prompts import SYSTEM_PROMPT
 from app.schemas.news import GeneratedNews
 
@@ -48,16 +59,6 @@ def resolve_system_prompt(override_prompt: str | None, active_prompt: str | None
 def resolve_base_url(model_base_url: str | None) -> str:
     """Resolve the provider endpoint: per-model override else config."""
     return model_base_url or settings.avalai_base_url
-
-
-#: Credential resolution lives in one place and is shared by the Worker, the
-#: panel regenerate action, the connection probe and the machine API. Re-exported
-#: here because callers already import from this module.
-from app.credentials_resolve import (  # noqa: E402
-    MissingModelKeyError,
-    describe_credentials as _describe_credentials,
-    resolve_model_credentials,
-)
 
 
 def resolve_api_key(api_key_env: str | None, base_url: str | None = None) -> str:
@@ -113,7 +114,6 @@ def resolve_generation_config(
     """
     override_base = getattr(model_override, "base_url", None)
     active_base = getattr(active_model, "base_url", None)
-    effective_base = override_base or active_base
 
     # The row that owns the endpoint also owns the key (PART D3). A row with its
     # own base_url and no usable key raises MissingModelKeyError instead of
@@ -209,8 +209,10 @@ def _get_client() -> AsyncOpenAI:
 def _get_agent() -> Agent:
     """Return the shared PydanticAI agent, creating it on first use.
 
-    The agent is bound to the ``GeneratedNews`` output type, so every run
-    returns a structured ``{title, lead, body}`` result validated by Pydantic.
+    The agent is bound to the ``GeneratedNews`` output type (title/lead/body
+    plus ``categories``), so every run returns one structured result
+    validated by Pydantic. The system prompt is static by design — same
+    prompt, one cached Agent (provider caching cost saving).
     """
     global _agent
     if _agent is None:
@@ -218,7 +220,12 @@ def _get_agent() -> Agent:
             settings.llm_model,
             provider=OpenAIProvider(openai_client=_get_client()),
         )
-        _agent = Agent(model, output_type=GeneratedNews, system_prompt=SYSTEM_PROMPT)
+        _agent = Agent(
+            model,
+            output_type=GeneratedNews,
+            system_prompt=SYSTEM_PROMPT,
+            model_settings={"max_tokens": settings.llm_max_output_tokens},
+        )
     return _agent
 
 
@@ -229,15 +236,26 @@ def build_user_message(thesis_data: dict[str, Any]) -> str:
     reviewer sees is byte-identical to what the model received. Thesis values
     are data, never instructions (see the system prompt); missing values
     render empty rather than failing the job.
+
+    Long inputs are truncated so a very long abstract / table of contents
+    cannot push the prompt past the provider's request limit or make the
+    generation time out. The caps keep the *substance* (first N characters)
+    which is what the model needs.
     """
+    def _cap(value: Any, limit: int) -> str:
+        text = "" if value is None else str(value)
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "…"
+
     return f"""Thesis metadata:
-title: {thesis_data.get('title', '')}
-abstract: {thesis_data.get('abstract', '')}
-field: {thesis_data.get('field', '')}
-university: {thesis_data.get('university', '')}
-table_of_contents: {thesis_data.get('table_of_contents', '') or ''}
-author: {thesis_data.get('author', '')}
-supervisor: {thesis_data.get('supervisor', '')}"""
+title: {_cap(thesis_data.get('title', ''), 200)}
+abstract: {_cap(thesis_data.get('abstract', ''), 600)}
+field: {_cap(thesis_data.get('field', ''), 100)}
+university: {_cap(thesis_data.get('university', ''), 100)}
+table_of_contents: {_cap(thesis_data.get('table_of_contents', '') or '', 400)}
+author: {_cap(thesis_data.get('author', ''), 100)}
+supervisor: {_cap(thesis_data.get('supervisor', ''), 100)}"""
 
 
 async def generate_news(
@@ -269,7 +287,8 @@ async def generate_news(
 
     Returns:
         A structured ``GeneratedNews`` with Persian ``title``, ``lead`` and
-        ``body``.
+        ``body``, plus the ``categories`` classification (up to 3
+        :class:`~app.schemas.news.CategoryMatch` entries, possibly empty).
 
     Raises:
         Exception: Any provider/validation error propagates to the caller
@@ -300,9 +319,52 @@ async def generate_news(
             effective_model,
             provider=OpenAIProvider(openai_client=client),
         )
-        agent = Agent(model, output_type=GeneratedNews, system_prompt=effective_prompt)
+        agent = Agent(
+            model,
+            output_type=GeneratedNews,
+            system_prompt=effective_prompt,
+            model_settings={"max_tokens": settings.llm_max_output_tokens},
+        )
 
     user_message = build_user_message(thesis_data)
 
-    result = await agent.run(user_message)
+    last_exc: Exception | None = None
+    for _attempt in range(2):
+        try:
+            result = await asyncio.wait_for(
+                agent.run(user_message), timeout=settings.llm_timeout_seconds
+            )
+            break
+        except asyncio.TimeoutError:
+            last_exc = TimeoutError(
+                f"LLM request timed out after {settings.llm_timeout_seconds}s"
+            )
+            logger.warning("LLM attempt %d timed out, retrying", _attempt + 1)
+            if _attempt == 1:
+                raise last_exc
+        except Exception as exc:
+            msg = str(exc).lower()
+            if _attempt == 0 and ("connection" in msg or "timeout" in msg):
+                logger.warning("LLM attempt %d failed (%s), retrying", _attempt + 1, exc)
+                continue
+            raise
+    else:
+        if last_exc is not None:
+            raise last_exc
+
+    # Cache-verification logging: report token usage so the operator can see
+    # whether prompt caching is active (cache_read_tokens > 0). Never raises.
+    try:
+        usage = result.usage
+        logger.info(
+            "LLM call: model=%s input_tokens=%s output_tokens=%s cache_read=%s cache_write=%s",
+            effective_model,
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "cache_read_tokens", "n/a"),
+            getattr(usage, "cache_write_tokens", "n/a"),
+        )
+    except Exception as exc:  # pragma: no cover - logging must never break generation
+        logger.debug("could not read LLM usage: %s", exc)
+
     return result.output

@@ -11,7 +11,6 @@ from fastapi import Request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from app.config import settings
-from app.services.passwords import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +143,6 @@ def _login_now():
 
 def is_login_locked(ip: str) -> bool:
     """Whether this IP is currently locked out after repeated failures."""
-    from datetime import timedelta
 
     expiry = _login_locked_until.get(ip)
     if expiry is None:

@@ -4,6 +4,8 @@ All secrets (shared secret, AvalAI API key, database credentials) come from
 environment configuration only — nothing is hard-coded as a real credential.
 """
 
+import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,13 +24,18 @@ class Settings(BaseSettings):
     shared_secret: str = "change-me-in-production"
     avalai_api_key: str = ""
     avalai_base_url: str = "https://api.avalai.ir/v1"
+    # Fallback only: the active model row in the database (panel /models) wins.
     llm_model: str = "gpt-5.6-luna"
 
     # Engineering decision (not required by the assignments): a hung LLM call
     # would otherwise block the single sequential worker forever, because the
     # stale-job lease can only recover jobs after the worker process is gone.
     # A bounded timeout lets the worker fail the job and continue.
-    llm_timeout_seconds: float = 120.0
+    llm_timeout_seconds: float = 300.0
+    # Cap on generated output tokens (title/lead/body + compact categories).
+    # Prevents runaway generation on long inputs. Override per model row via
+    # max_output_tokens in the panel if needed.
+    llm_max_output_tokens: int = 1000
 
     worker_poll_interval_seconds: float = 1.0
     worker_heartbeat_interval_seconds: float = 30.0
@@ -43,19 +50,30 @@ class Settings(BaseSettings):
     # figures are cheap `GROUP BY` counts.
     panel_dashboard_refresh_seconds: int = 15
 
-    # Field -> category classification.
+    # Combined generation + ISCED-F 2013 classification.
     #
-    # OFF by default and the default is deliberate: the deterministic rules in
-    # ``app/fields/classification.py`` are instant, free, auditable (they
-    # report the matched keyword) and never fail. Turning this on asks the
-    # active model to choose a category instead, which can place a field the
-    # rules have never seen — at the cost of a network call per NEW field, a
-    # non-deterministic answer, and no keyword to explain it.
-    #
-    # Either way the result is stored ONCE on the field row (item 15) and read
-    # from then on, so this flag affects only the first sighting of a field.
-    use_llm_for_categorization: bool = False
-    llm_classification_timeout_seconds: float = 20.0
+    # ONE LLM call per thesis returns the news AND the classification. The
+    # model answers with up to ``top_n_categories`` ISCED-F 2013 categories,
+    # each with a 0..1 relevance score; the worker stores every qualifying
+    # match and routing fans the article out to each category's channels.
+    top_n_categories: int = 3
+    # A match only counts (for storage and routing) at or above this score.
+    min_category_relevance: float = 0.5
+
+    # Human gate for publishing. When True, newly queued deliveries start as
+    # `awaiting_confirmation`; when False, news is auto-published to matched
+    # channels. Default off (auto-publish mode) per the operator's request.
+    require_human_confirmation: bool = False
+
+    # What to do when an article has NO qualifying category match.
+    # "review" (default, safest): stays in review, visible via filter.
+    # "fallback_other": enqueue deliveries for the "other" category's channels.
+    # "failed": move to failed with a clear error message.
+    unmatched_category_behavior: str = "review"
+
+    # Compact LLM output (v3-compact).
+    skip_reason_above_score: int = 90
+    store_llm_raw_output: bool = False
 
     # Outbound delivery (sender Worker).
     #
@@ -88,12 +106,6 @@ class Settings(BaseSettings):
     # A send attempt is normally seconds; a `sending` row older than this means
     # the Worker died mid-call, so it is returned to `pending`.
     sender_lease_minutes: int = 5
-
-    # Human gate for publishing. When True (default), newly queued deliveries
-    # start as `awaiting_confirmation` so an article is never published without
-    # explicit approval; approving flips them to `pending`. When False, queueing
-    # writes `pending` directly (the pre-gate behaviour).
-    require_human_confirmation: bool = True
 
     # Review panel (server-rendered Jinja2 + HTMX). Credentials come from env
     # only; the first admin is created at runtime, never seeded in migrations.
@@ -138,3 +150,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.require_human_confirmation:
+    logging.warning(
+        "REQUIRE_HUMAN_CONFIRMATION=false: news will be auto-published to "
+        "matched categories' channels without human review. "
+        "Ensure auto-routing is verified (scripts/auto_route_channels.py)."
+    )

@@ -4,14 +4,28 @@ Same image as the API with a different command (``web`` compose service).
 Persian RTL UI, plain CSS, Vazirmatn fonts vendored under ``/static``.
 Human auth uses panel users + signed cookies (not the machine shared secret);
 every review/retry/config change is written to ``audit_logs`` for history.
+
+Route groups in this module, in order:
+
+* authentication and session handling
+* dashboard and live counters
+* records, record detail, review, and manual classification
+* deliveries and delivery recovery
+* categories, channels, and routing
+* models and prompts
+* thesis submission
+* users, profile, audit, and authorization map
+
+Shared helpers stay at the top; domain queries and state changes live in
+``app/services`` so the panel and machine API cannot drift apart.
 """
 
 import hashlib
 import logging
 import time
-from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 import jdatetime
@@ -22,22 +36,22 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.panel.auth import ensure_admin_user, session_user_id, verify_password
+from app.panel.auth import ensure_admin_user, session_user_id
 from app.panel.authz import Action, can, require
 from app.panel.csrf import CSRFError, csrf_field, verify_csrf
 from app.services import audit as audit_service
-from app.services import dashboard as dashboard_service
-from app.services.errors import PermissionDenied, from_value_error
+from app.services import categories as category_service
 from app.services import channels as channel_service
+from app.services import dashboard as dashboard_service
 from app.services import deliveries as delivery_service
 from app.services import dispose_engine
-from app.services import fields as field_service
 from app.services import models as model_service
 from app.services import prompts as prompt_service
 from app.services import records as record_service
 from app.services import session_dep as service_session_dep
 from app.services import users as user_service
-from app.services.transitions import STATUS_FA
+from app.services.errors import PermissionDenied, from_value_error
+from app.services.passwords import verify_password
 
 _here = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_here / "templates"))
@@ -355,7 +369,6 @@ async def logout():
 @panel_app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, session: AsyncSession = Depends(session_dep)):
     """Show KPIs, a 7-day chart, health, recent events, and channel state."""
-    from datetime import timedelta
 
     user = await require_login(request, session)
 
@@ -363,8 +376,6 @@ async def dashboard(request: Request, session: AsyncSession = Depends(session_de
     refresh_seconds = settings.panel_dashboard_refresh_seconds
 
     # Real 7-day series: records created per day, heights normalized.
-    today = datetime.utcnow().date()
-    days = [today - timedelta(days=i) for i in range(6, -1, -1)]
     per_day = await record_service.records_per_day(session, 7)
     peak = max((n for _, n in per_day), default=0)
     chart = [
@@ -433,13 +444,15 @@ _ACTION_FA = {
     "submit": "ثبت رکورد", "model_create": "ساخت مدل", "model_activate": "فعال‌سازی مدل",
     "curate": "تأیید انسانی دسته",
     "model_test": "آزمون اتصال مدل", "prompt_create": "ساخت پرامپت",
-    "prompt_activate": "فعال‌سازی پرامپت", "channel_create": "ساخت کانال",
+    "prompt_activate": "فعال‌سازی پرامپت", "prompt_delete": "حذف پرامپت",
+    "channel_create": "ساخت کانال",
     "route": "افزودن مسیر", "unroute": "حذف مسیر",
     "category_channels": "تنظیم کانال‌های دسته",
+    "category_create": "افزودن دسته", "category_delete": "حذف دسته",
     "user_create": "ساخت کاربر", "user_role": "تغییر نقش کاربر", "user_toggle": "تغییر وضعیت کاربر",
     "user_delete": "حذف کاربر",
     "password_reset": "ثبت گذرواژهٔ کاربر", "password_change": "تغییر گذرواژهٔ خود",
-    "regenerate": "تولید دوباره با مدل",
+    "regenerate": "تولید دوباره با مدل", "record_delete": "حذف رکورد",
 }
 
 
@@ -470,6 +483,7 @@ async def records_page(
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, approved: str = "",
     tab: str = "", platform: str = "", main_id: str = "",
+    auto_published: str = "", needs_classification: str = "",
 ):
     """Records/review and deliveries: one page, two bookmarkable tabs.
 
@@ -521,6 +535,10 @@ async def records_page(
             if newest_failure and newest_failure.error_message else None
         )
         delivery_counts = await delivery_service.delivery_status_counts(session)
+        # The filter's options come from the channels table, not from a
+        # hardcoded bale/telegram pair, so a new platform appears here as soon
+        # as it has a channel.
+        platforms = await channel_service.list_platforms(session)
         dquery = urlencode(
             {k: v for k, v in {"status": status, "platform": platform, "main_id": main_id}.items() if v}
         )
@@ -528,6 +546,7 @@ async def records_page(
             _ctx(
                 request, user, active="records", tab="deliveries", **counts_ctx,
                 dstatus=status, dplatform=platform, dmain_id=main_id, dquery=dquery,
+                platforms=platforms,
                 total=dtotal, items=items, page=page, page_size=page_size, last_error=last_error,
                 max_attempts=settings.sender_max_attempts,
                 backoff_base=settings.sender_backoff_base_seconds,
@@ -548,17 +567,27 @@ async def records_page(
     counts = await record_service.record_status_counts(session)
     options = await record_service.filter_options(session)
     approved_flag = {"yes": True, "no": False}.get(approved)
+    auto_pub_flag = True if auto_published == "yes" else None
+    needs_cls_flag = True if needs_classification == "yes" else None
     items, total = await record_service.list_records(
         session, page=page, page_size=page_size, status=status or None,
         field=field or None, university=university or None, q=q or None,
         order=order, approved=approved_flag,
+        auto_published=auto_pub_flag, needs_classification=needs_cls_flag,
     )
     needs_review = await record_service.needs_review_count(session)
-    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
+    # Primary category + match-count badge per row (one grouped query).
+    category_view = await record_service.primary_category_snapshot(
+        session, [r.id for r in items]
+    )
+    query = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved, "auto_published": auto_published, "needs_classification": needs_classification}.items() if v})
     return templates.TemplateResponse(request, "records.html",
         _ctx(
             request, user, active="records", tab="records", **counts_ctx,
             status=status, field=field, university=university, q=q, order=order, approved=approved, query=query,
+            auto_published=auto_published, needs_classification=needs_classification,
+            require_human_confirmation=settings.require_human_confirmation,
+            unmatched_category_behavior=settings.unmatched_category_behavior,
             # Record states only. The delivery counts that used to sit here
             # (kpi_sent) would answer a question this page is not asked, and
             # they are the first thing the operator scrolls past.
@@ -568,6 +597,7 @@ async def records_page(
             kpi_failed=counts.get("failed", 0),
             field_options=options["fields"], university_options=options["universities"],
             items=items, total=total, page=page, page_size=page_size,
+            category_view=category_view,
         ),
     )
 
@@ -577,23 +607,30 @@ async def records_table(
     request: Request, session: AsyncSession = Depends(session_dep),
     status: str = "", field: str = "", university: str = "",
     q: str = "", order: str = "newest", page: int = 1, page_size: int = 20,
-    approved: str = "",
+    approved: str = "", auto_published: str = "", needs_classification: str = "",
 ):
     """HTMX partial: one page of filtered record rows (used by the list page)."""
     user = await require_login(request, session)
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     approved_flag = {"yes": True, "no": False}.get(approved)
+    auto_pub_flag = True if auto_published == "yes" else None
+    needs_cls_flag = True if needs_classification == "yes" else None
     items, total = await record_service.list_records(
         session, page=page, page_size=page_size, status=status or None,
         field=field or None, university=university or None, q=q or None,
         order=order, approved=approved_flag,
+        auto_published=auto_pub_flag, needs_classification=needs_cls_flag,
+    )
+    # Primary category + match-count badge per row (one grouped query).
+    category_view = await record_service.primary_category_snapshot(
+        session, [r.id for r in items]
     )
     from urllib.parse import urlencode
 
-    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved}.items() if v})
+    query_str = urlencode({k: v for k, v in {"status": status, "field": field, "university": university, "q": q, "order": order, "approved": approved, "auto_published": auto_published, "needs_classification": needs_classification}.items() if v})
     return templates.TemplateResponse(request, "records_table.html",
-        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str},
+        {"request": request, "current_user": user, "items": items, "total": total, "page": page, "page_size": page_size, "query": query_str, "category_view": category_view},
     )
 
 
@@ -609,9 +646,9 @@ async def record_detail(
     request: Request, record_id: int, session: AsyncSession = Depends(session_dep),
     tab: str = "text",
 ):
-    """Show one record with editable output, raw/meta/history/delivery tabs."""
+    """Show one record with editable output, raw/meta/history/delivery/categories tabs."""
     user = await require_login(request, session)
-    if tab not in ("text", "raw", "meta", "history", "delivery", "final"):
+    if tab not in ("text", "raw", "meta", "history", "delivery", "final", "categories"):
         tab = "text"
     record = await record_service.get_record(session, record_id)
     if not record:
@@ -663,10 +700,12 @@ async def record_detail(
     message_preview = None
     preview_channel = None
     # Same route resolution the sender uses (no copy of the query here).
-    from app.messaging.dispatcher import channels_for_article
+    from app.messaging.dispatcher import channels_for_article_multi
     from app.messaging.formatting import render_article
 
-    routed = await channels_for_article(session, record)
+    routed = [channel for channel, _source in await channels_for_article_multi(session, record)]
+    if routed:
+        routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
     if routed:
         routed_channels = "، ".join(c.username or c.title or c.platform for c in routed)
     if tab == "delivery" and record.output_json:
@@ -686,7 +725,7 @@ async def record_detail(
         {"title": step["title"], "sub": f"{step['sub']} · {_jalali(step['at'])}" if step["at"] else step["sub"]}
         for step in await record_service.record_timeline(session, record)
     ]
-    categories = await field_service.list_categories(session)
+    categories = await category_service.list_categories(session)
     counts_ctx = await dashboard_service.sidebar_badges(session)
     # How many messages are really out there, for the bulk delete button.
     published_count = sum(1 for d in deliveries if d.status == "sent")
@@ -701,10 +740,10 @@ async def record_detail(
             history=history, tab=tab, model_name=model_name, prompt_version=prompt_version,
             approved_by=approved_by, timeline=timeline, categories=categories,
             routed_channels=routed_channels, message_preview=message_preview,
-            snapshot_category=overview["snapshot_category"],
-            current_category=overview["current_category"],
-            field_keyword=overview["field_keyword"], prompt_preview=prompt_preview,
+            snapshot_category=overview["snapshot_category"], prompt_preview=prompt_preview,
             published_count=published_count, delete_note=delete_note,
+            category_matches=overview["category_matches"],
+            classification_fallback=overview["classification_fallback"],
             preview_channel=(preview_channel.username or preview_channel.title or preview_channel.platform) if preview_channel else None,
         )
     )
@@ -736,6 +775,30 @@ async def record_regenerate(
         return RedirectResponse(url=f"/records/{record_id}", status_code=302)
     await audit_service.record_event(session, user.id, "regenerate", record.id, "تولید دوباره با مدل")
     return RedirectResponse(url=f"/records/{record_id}", status_code=302)
+
+
+@panel_app.post("/records/{record_id}/republish")
+async def record_republish(request: Request, record_id: int, session: AsyncSession = Depends(session_dep)):
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.REVIEW_RECORD)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    try:
+        queued = await record_service.republish_record(session, record, user.username)
+    except ValueError as e:
+        message = str(e)
+        error = "رکورد منتشر یا تأیید نشده است." if message == "not-published" else (
+            "رکورد دسته‌بندی ندارد." if message == "no-matches" else message
+        )
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=error), status_code=422)
+    await audit_service.record_event(session, user.id, "republish", record_id, f"queued={len(queued)}")
+    return RedirectResponse(url=f"/records/{record_id}?tab=categories", status_code=303)
 
 
 @panel_app.post("/records/{record_id}/review")
@@ -1018,6 +1081,28 @@ async def record_delete_everywhere(
                             status_code=303)
 
 
+@panel_app.post("/records/{record_id}/delete")
+async def panel_record_delete(request: Request, record_id: int, session: AsyncSession = Depends(session_dep)):
+    """Permanently delete one record and its deliveries/matches."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+    record = await record_service.get_record(session, record_id)
+    if record is None:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رکورد یافت نشد."), status_code=404)
+    try:
+        await record_service.delete_record(session, record)
+    except ValueError as exc:
+        message = {
+            "record-processing": "این رکورد در حال پردازش است؛ پس از اتمام یا شکست مجدد تلاش کنید.",
+        }.get(str(exc), "حذف رکورد ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "record_delete", None, f"record={record_id}")
+    return RedirectResponse(url="/records", status_code=302)
+
+
 def _delete_notice(report: dict) -> str:
     """One short, safe summary of a fan-out delete for the redirect note.
 
@@ -1067,93 +1152,88 @@ async def delivery_mark_deleted(
 
 
 @panel_app.get("/fields", response_class=HTMLResponse)
-async def fields_page(
+async def fields_page_removed(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "", page: int = 1, page_size: int = 50,
-    category_id: int | None = None, source: str = "", unconfirmed: str = "",
 ):
-    """Fields — one row each, with the category editable on that row.
+    """The legacy field-categorization page is gone.
 
-    A field's category is a property OF THE FIELD, so it belongs on the field
-    row: you can see the assignment and the keyword that produced it in one
-    glance. The categories themselves are a list of destinations and now have
-    their own page at ``/categories``, which the owner asked for.
-
-    ``?tab=categories`` still redirects there so old links keep working.
+    Classification is LLM/manual per record now, so the old page has no job.
+    The address redirects for bookmarks instead of 404ing.
     """
-    user = await require_login(request, session)
-    if tab == "categories":
-        return RedirectResponse(url="/categories", status_code=301)
-
-    # SEARCH AND PAGINATE IN SQL. This page used to call list_fields(), which
-    # has a default limit of 100 and was called with no argument, so 449 of 549
-    # fields were never rendered — and the search box then filtered that
-    # already-truncated list in Python, so those 449 could not be found by
-    # searching either. 16 fields match "زیست"; the page could show 4.
-    page = max(1, page)
-    page_size = min(max(1, page_size), 200)
-    fields, total = await field_service.field_category_rows(
-        session, q=q, page=page, page_size=page_size, category_id=category_id,
-        source=source, unconfirmed_only=unconfirmed == "1",
-    )
-    top = await field_service.top_fields(session)
-    # The category NAMES are needed for the per-row select even though the
-    # categories page is separate — the select edits a field's category.
-    categories, _category_total = await field_service.category_cards(session)
-    counts_ctx = await dashboard_service.sidebar_badges(session)
-    # Every active filter rides into the pager, so paging never silently
-    # drops the search the operator typed.
-    from urllib.parse import urlencode
-
-    query = urlencode(
-        {k: v for k, v in {
-            "q": q, "category_id": category_id, "source": source,
-            "unconfirmed": unconfirmed, "page_size": page_size,
-        }.items() if v not in (None, "")}
-    )
-    shown_from = (page - 1) * page_size + 1 if total else 0
-    shown_to = min(page * page_size, total)
-    return templates.TemplateResponse(request, "fields.html",
-        _ctx(request, user, active="fields", **counts_ctx, fields=fields, total=total,
-             top=top, q=q, categories=categories, category_id=category_id,
-             source=source, unconfirmed=unconfirmed, page=page, page_size=page_size,
-             query=query, shown_from=shown_from, shown_to=shown_to))
+    await require_login(request, session)
+    return RedirectResponse(url="/categories", status_code=301)
 
 
 @panel_app.get("/categories", response_class=HTMLResponse)
 async def categories_page(
     request: Request, session: AsyncSession = Depends(session_dep),
-    q: str = "", tab: str = "",
+    q: str = "",
 ):
-    """Categories and keywords, plus the category-to-channel mapping.
+    """Categories, their record usage, and the category-to-channel mapping.
 
-    A category is a destination you browse ("what buckets exist and what falls
-    into each"), which is a different job from editing one field's assignment,
-    so it keeps its own page.
-
-    The per-category channel picker is here because a CATEGORY is what gets
-    routed. Routing each of 500+ fields individually is not a configuration
-    screen anyone will ever fill in; routing the bucket is.
-
-    The dispatcher still broadcasts to every active channel. This mapping is
-    recorded and displayed, not yet acted on, which is why the note above the
-    matrix says so plainly -- a matrix an operator fills in and then watches be
-    ignored is worse than no matrix, so the panel never implies it is live.
+    A category is a destination: the LLM classifies each thesis during
+    generation, and every qualifying category routes the article to that
+    category's selected channels. There is no field-name classification layer,
+    so this page is the single place routing is configured.
     """
     user = await require_login(request, session)
-    if tab == "fields":
-        return RedirectResponse(url="/fields", status_code=301)
-    categories, category_total = await field_service.category_cards(session, q)
+    categories, category_total = await category_service.category_cards(session, q)
     counts_ctx = await dashboard_service.sidebar_badges(session)
-    # One row per category with its channel ids, plus every channel so each
-    # picker can list them. Both come from the same tables the routes live in.
     matrix = await channel_service.category_channel_matrix(session)
     routes_by_category = {row["id"]: row["channel_ids"] for row in matrix}
     active_channels = [c for c in await channel_service.list_channels(session) if c.is_active]
+
+    # A category with no channels publishes nothing. Show how many records are
+    # stranded, scoped to the categories currently on screen so the warning never
+    # contradicts the search filter.
+    displayed = {row["id"] for row in categories}
+    # ``other`` is the explicit fallback, not a destination: it is expected to
+    # have no channels and must not turn the warning into permanent noise.
+    unrouted = {
+        row["id"] for row in matrix
+        if not row["channel_ids"] and row["id"] in displayed and row["name"] != "other"
+    }
+    def _recs(row):
+        return max(row["record_count"], row["primary_count"])
+
+    unrouted_records = sum(_recs(row) for row in categories if row["id"] in unrouted)
     return templates.TemplateResponse(request, "categories.html",
         _ctx(request, user, active="categories", **counts_ctx,
              categories=categories, category_total=category_total, q=q,
-             routes_by_category=routes_by_category, active_channels=active_channels))
+             routes_by_category=routes_by_category, active_channels=active_channels,
+             unrouted_records=unrouted_records,
+             unrouted_categories=[
+                 {"id": row["id"], "name": row["name"]}
+                 for row in categories
+                 if row["id"] in unrouted and _recs(row) > 0
+             ]))
+
+
+@panel_app.post("/categories/{category_id}/delete")
+async def categories_delete(
+    request: Request, category_id: int, session: AsyncSession = Depends(session_dep),
+):
+    """Delete a category (admins), refusing while any record references it.
+
+    Classification history is not disposable: `main_category_matches` and the
+    display primary (`main.category_id`) are how a generated record stays
+    explainable. A category that is still used therefore keeps its row and its
+    routes; the operator must reassign the records first.
+    """
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
+    try:
+        await category_service.delete_category(session, category_id)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "حذف دسته ممکن نشد.")),
+            status_code=409)
+    await audit_service.record_event(session, user.id, "category_delete", None,
+                                     f"category={category_id}")
+    return RedirectResponse(url="/categories", status_code=303)
 
 
 @panel_app.post("/categories/{category_id}/channels")
@@ -1190,21 +1270,31 @@ async def category_channels_set(
     return RedirectResponse(url="/categories", status_code=303)
 
 
-@panel_app.post("/fields/{field_id}/confirm")
-async def field_confirm(request: Request, field_id: int, session: AsyncSession = Depends(session_dep)):
-    """Freeze a field's category as human-curated (reviewers and admins)."""
+@panel_app.post("/categories")
+async def categories_create(
+    request: Request, name: str = Form(...), description: str = Form(""),
+    session: AsyncSession = Depends(session_dep),
+):
+    """Create a category (admins).
+
+    There was no way to do this at all: buckets could only be deleted or
+    reused. With routing decided per category, that made a missing bucket
+    unfixable -- its records would have nowhere to go.
+    """
     user = await require_login(request, session)
     try:
-        _require_role(user, Action.REVIEW_RECORD)
+        _require_role(user, Action.MANAGE_CONFIG)
     except PermissionDenied:
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="حساب بیننده فقط خواندنی است."), status_code=403)
-
-    field = await field_service.get_field(session, field_id)
-    if not field:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
-    field = await field_service.confirm_category(session, field)
-    await audit_service.record_event(session, user.id, "curate", None, f"field={field.name}")
-    return RedirectResponse(url="/fields", status_code=303)
+    try:
+        category = await category_service.create_category(session, name, description)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=_service_error(e, "افزودن دسته ممکن نشد.")),
+            status_code=422)
+    await audit_service.record_event(session, user.id, "category_create", None,
+                                     f"category={category.id}")
+    return RedirectResponse(url="/categories", status_code=303)
 
 
 @panel_app.get("/channels", response_class=HTMLResponse)
@@ -1214,15 +1304,9 @@ async def channels_page(
 ):
     """Destinations only: add, edit, switch on/off, delete.
 
-    The owner asked for exactly this page and nothing more. Every generated
-    article goes to every ACTIVE channel, so there is no routing to
-    configure — no "which field goes where" and no "which category maps to
-    which channel". Those two configuration screens had accumulated for a
-    behaviour that never actually filtered anything, and switching a channel
-    OFF is the only thing that decides where news does not go.
-
-    A channel that is on but failing says so on its row, because otherwise it
-    looks healthy while nothing reaches it.
+    Every article reaches a channel through its category matches; this page
+    manages the destinations themselves and shows which categories name the
+    selected channel. It does not classify theses.
     """
     user = await require_login(request, session)
 
@@ -1232,24 +1316,17 @@ async def channels_page(
         selected = await channel_service.get_channel(session, channel_id)
     if selected is None:
         selected = channels[0] if channels else None
-    # The field list is searched and paginated: a deployment has hundreds of
-    # fields, and rendering every one of them made the page unusable.
     usage = await channel_service.channel_usage(session)
     last_errors = await channel_service.last_errors(session)
     for channel in channels:
         channel.usage = usage.get(
-            channel.id,
-            {"deliveries": 0, "sent": 0, "failed": 0, "field_routes": 0,
-             "category_routes": 0},
+            channel.id, {"deliveries": 0, "sent": 0, "failed": 0}
         )
         channel.last_error = last_errors.get(channel.id)
-    # Read-only mirror of the category matrix: which categories currently name
-    # this channel. Shown as chips on the settings card so an operator editing a
-    # channel can see what points at it without opening /categories.
     routed_names: dict[int, list[str]] = {}
     for row in await channel_service.category_channel_matrix(session):
-        for channel_id in row["channel_ids"]:
-            routed_names.setdefault(channel_id, []).append(row["name"])
+        for cid in row["channel_ids"]:
+            routed_names.setdefault(cid, []).append(row["name"])
     counts_ctx = await dashboard_service.sidebar_badges(session)
     return templates.TemplateResponse(request, "channels.html",
         _ctx(request, user, active="channels", **counts_ctx, channels=channels, selected=selected,
@@ -1257,56 +1334,13 @@ async def channels_page(
              active_count=sum(1 for c in channels if c.is_active),
              total_sent=sum(c.usage.get("sent", 0) for c in channels),
              total_failed=sum(c.usage.get("failed", 0) for c in channels),
-             # With no channels at all there is nothing to edit, so the empty
-             # state must offer the add form — otherwise the page has no form
-             # on it and a first-time operator is stuck.
              show_new=bool(new) or not channels))
-
 
 
 @panel_app.get("/routing")
 async def routing_page_removed(request: Request):
-    """The routing-preview page is gone (item 5).
-
-    Its old address redirects to the channels page, which is where the
-    field/category/channel configuration lives now, so bookmarks and any link
-    typed earlier keep working instead of 404ing.
-    """
+    """The old routing-preview page redirects to the channels page."""
     return RedirectResponse(url="/channels", status_code=301)
-
-
-@panel_app.post("/fields/{field_id}/category")
-async def field_set_category(
-    request: Request, field_id: int, category_id: int = Form(...),
-    session: AsyncSession = Depends(session_dep),
-):
-    """Pin a field to a category once, by hand (item 15).
-
-    The assignment is stored on the row and marked ``manual``, so the
-    automatic ruleset does not quietly overwrite an operator's decision on the
-    next classification pass.
-
-    This lives on the fields page only. It decides which CATEGORY a field
-    belongs to — the classification the generator and the records use — and has
-    nothing to do with routing, which no longer exists.
-    """
-    user = await require_login(request, session)
-    try:
-        _require_role(user, Action.FIELD_CURATE)
-    except PermissionDenied:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی لازم را ندارید."), status_code=403)
-    row = await field_service.get_field(session, field_id)
-    if not row:
-        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="رشته یافت نشد."), status_code=404)
-    try:
-        row = await field_service.assign_field_category(session, row, category_id)
-    except ValueError as e:
-        return templates.TemplateResponse(request, "base.html",
-            _ctx(request, user, error=_service_error(e, "تعیین دسته ممکن نشد.")),
-            status_code=422)
-    await audit_service.record_event(session, user.id, "route", None,
-                                     f"field={field_id} category={row.category_id} source=manual")
-    return RedirectResponse(url="/fields", status_code=303)
 
 
 @panel_app.post("/channels/{channel_id}/toggle")
@@ -1492,7 +1526,7 @@ async def panel_model_create(
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
-        row = await model_service.create_model(
+        await model_service.create_model(
             session, name=name.strip(), provider=provider.strip(), version=version.strip(),
             base_url=base_url.strip() or None, api_key_env=api_key_env.strip() or None,
             temperature=float(temperature) if temperature.strip() else None,
@@ -1721,7 +1755,7 @@ async def panel_prompt_create(request: Request, version: str = Form(...), system
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
 
     try:
-        row = await prompt_service.create_prompt(
+        await prompt_service.create_prompt(
             session, version=version.strip(), system_prompt=system_prompt, is_active=False
         )
     except ValueError:
@@ -1749,6 +1783,32 @@ async def panel_prompt_activate(request: Request, prompt_id: int, session: Async
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="پرامپت یافت نشد."), status_code=404)
     row = await prompt_service.activate_prompt(session, row)
     await audit_service.record_event(session, user.id, "prompt_activate", None, f"version={row.version}")
+    return RedirectResponse(url="/prompts", status_code=302)
+
+
+@panel_app.post("/prompts/{prompt_id}/delete")
+async def panel_prompt_delete(request: Request, prompt_id: int, session: AsyncSession = Depends(session_dep)):
+    """Delete an inactive prompt version that no record references."""
+    user = await require_login(request, session)
+    try:
+        _require_role(user, Action.MANAGE_CONFIG)
+    except PermissionDenied:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="دسترسی مدیریتی لازم است."), status_code=403)
+
+    row = await prompt_service.get_prompt(session, prompt_id)
+    if not row:
+        return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="پرامپت یافت نشد."), status_code=404)
+    version = row.version
+    try:
+        await prompt_service.delete_prompt(session, row)
+    except ValueError as exc:
+        message = {
+            "prompt-active": "پرامپت فعال قابل حذف نیست؛ ابتدا نسخهٔ دیگری را فعال کنید.",
+            "prompt-in-use": "این نسخه در رکوردهای تولیدشده استفاده شده و برای حفظ تاریخچه حذف نمی‌شود.",
+        }.get(str(exc), "حذف پرامپت ناموفق بود.")
+        return templates.TemplateResponse(request, "base.html",
+            _ctx(request, user, error=message), status_code=422)
+    await audit_service.record_event(session, user.id, "prompt_delete", None, f"version={version}")
     return RedirectResponse(url="/prompts", status_code=302)
 
 
@@ -1842,11 +1902,13 @@ GUARDED_ROUTES: dict[str, str] = {
     "/channels/{channel_id}": "MANAGE_CONFIG",
     "/channels/{channel_id}/toggle": "MANAGE_CONFIG",
     "/channels/{channel_id}/delete": "MANAGE_CONFIG",
-    "/fields/{field_id}/category": "FIELD_CURATE",
-"/categories/{category_id}/channels": "MANAGE_CONFIG",
+    "/categories": "MANAGE_CONFIG",
+    "/categories/{category_id}/delete": "MANAGE_CONFIG",
+    "/categories/{category_id}/channels": "MANAGE_CONFIG",
     "/submit": "SUBMIT_RECORD",
     "/records/{record_id}/regenerate": "REVIEW_RECORD",
     "/records/{record_id}/delete-everywhere": "RETRY_DELIVERY",
+    "/records/{record_id}/delete": "MANAGE_CONFIG",
 }
 
 #: Routes whose guard is ``require_login`` rather than a role check: a signed-in
@@ -1901,7 +1963,7 @@ async def user_create(
         return templates.TemplateResponse(request, "base.html", _ctx(request, user, error="نقش نامعتبر است."), status_code=422)
 
     try:
-        row = await user_service.create_user_with_password(
+        await user_service.create_user_with_password(
             session, username=username.strip(), password=password, role=role,
         )
     except ValueError as e:

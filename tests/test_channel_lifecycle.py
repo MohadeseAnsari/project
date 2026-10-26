@@ -23,12 +23,11 @@ from app.db.models import (
     Channel,
     Delivery,
     Field,
-    FieldChannelRoute,
     Main,
     PanelUser,
     Role,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
@@ -277,13 +276,14 @@ async def test_switch_flips_one_channel_only(session: AsyncSession, stub_get_cha
 @pytest.mark.asyncio
 async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub_get_chat):
     """A switched-off channel is not a delivery target, even with a category route."""
-    from app.messaging.dispatcher import channels_for_article
+    from app.db.models import MainCategoryMatch
+    from app.messaging.dispatcher import channels_for_article_multi
 
     await _admin(session)
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="off-field", normalized_name="off-field", category_id=category.id)
+    field = Field(name="off-field", normalized_name="off-field")
     session.add(field)
     async with panel_client() as client:
         await _login(client)
@@ -296,16 +296,20 @@ async def test_disabled_channel_drops_out_of_routing(session: AsyncSession, stub
     session.add(CategoryChannelRoute(category_id=category.id, channel_id=on.id))
     article = Main(
         username="t", title="T", abstract="A", field="پزشکی", university="U", author="A",
-        supervisor="S", status="approved", field_id=field.id,
+        supervisor="S", status="approved", field_id=field.id, category_id=category.id,
         output_json={"title": "T", "lead": "L", "body": "B"},
     )
     session.add(article)
+    await session.flush()
+    session.add(MainCategoryMatch(
+        main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
     async with panel_client() as client:
         await _login(client)
         await client.post(f"/channels/{off.id}/toggle", follow_redirects=False)
-    routed = await channels_for_article(session, article)
-    assert [c.id for c in routed] == [on.id], "only the enabled channel is a target"
+    routed = await channels_for_article_multi(session, article)
+    assert [c.id for c, _s in routed] == [on.id], "only the enabled channel is a target"
 
 
 # --------------------------------------------------------------------------
@@ -317,10 +321,9 @@ async def _route(session: AsyncSession, channel: Channel) -> None:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="routed-field", normalized_name="routed-field", category_id=category.id)
+    field = Field(name="routed-field", normalized_name="routed-field")
     session.add(field)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
     session.add(CategoryChannelRoute(category_id=category.id, channel_id=channel.id))
     await session.commit()
 
@@ -344,9 +347,6 @@ async def test_delete_removes_an_unused_channel_and_its_routes(
         )
         assert response.status_code == 303
     assert [r.id for r in await _channels(session)] == [keep.id], "the other channel survives"
-    assert (await session.execute(
-        select(FieldChannelRoute).where(FieldChannelRoute.channel_id == drop.id)
-    )).scalars().all() == []
     assert (await session.execute(
         select(CategoryChannelRoute).where(CategoryChannelRoute.channel_id == drop.id)
     )).scalars().all() == []

@@ -16,13 +16,18 @@ are no microservices, no Redis/Celery/Kafka, and exactly one Worker of each kind
 Client ──POST /submit──▶ FastAPI ──INSERT──▶ PostgreSQL (main.status='ready')
                                                      │
 Worker ◀──claim (FOR UPDATE SKIP LOCKED, FIFO)──────┘
-  │  1. normalize + rule-based classify field (deterministic, no LLM)
-  │  2. PydanticAI Agent ──▶ AvalAI (OpenAI-compatible) ──▶ {title, lead, body}
+  │  1. register the field name as a dedup identity (no category, no keyword)
+  │  2. ONE PydanticAI Agent call ──▶ AvalAI (OpenAI-compatible)
+  │     → GeneratedNews{title, lead, body, categories[≤3]}  (news + ISCED-F 2013 together)
+  │  3. post-process categories → main_category_matches (hallucination filter,
+  │     clamp 0..1, dedupe, MIN_CATEGORY_RELEVANCE, top TOP_N_CATEGORIES;
+  │     empty answer → single 'other' fallback row that never delivers)
   ▼
 PostgreSQL (main.status='review', output_json=..., model_id, prompt_id)
   │
 Sender ◀──claim deliveries (processed, not yet sent for that channel)
-  │  render message ──▶ Bale / Telegram ──▶ deliveries.status='sent'
+  │  union of qualifying matches' channels (multi-category) ──▶ Bale / Telegram
+  │     ──▶ deliveries.status='sent'
   ▼
 Channel (throttled: SENDER_SEND_DELAY_SECONDS between sends)
 ```
@@ -32,8 +37,8 @@ Separation of responsibilities (Assignment 2):
 | Concern | Owner | Rule |
 |---|---|---|
 | Authenticate / validate / create job | API | Never calls the LLM |
-| Normalize + classify field | `app/fields/` | Deterministic rules, never the LLM |
-| Generate news | `app/news/` (PydanticAI + AvalAI) | Only journalistic generation |
+| Classify thesis | `app/news/` (same combined call) | LLM names, Worker validates + stores |
+| Generate news | `app/news/` (PydanticAI + AvalAI) | ONE call returns article + classification |
 | Job state / queue / results | PostgreSQL | Source of truth |
 | Sequential processing + recovery | `app/worker/` | One Worker, persistent |
 | Publishing to channels + send retry | `app/messaging/` | Separate Worker, never blocks generation |
@@ -54,11 +59,11 @@ project/
 │   │   └── limits.py         # slowapi rate limiter (10/min per client)
 │   ├── auth/secret.py        # constant-time shared-secret verification
 │   ├── fields/
-│   │   ├── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
-│   │   └── classification.py # priority-ordered keyword rules -> category
+│   │   └── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + AvalAI client
-│   │   └── prompts.py        # versioned system prompt (injection-safe)
+│   │   ├── prompts.py        # versioned v2-combined prompt (injection-safe)
+│   │   └── isced.py          # canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/worker.py      # persistent sequential Worker + recovery
 │   └── messaging/
 │       ├── formatting.py     # article -> channel message (emoji sections, bold title)
@@ -69,8 +74,8 @@ project/
 ├── scripts/
 │   ├── apply_migrations.py    # ordered, once-only migration runner (_migrations table);
 │   │                          # run automatically by the one-shot `migrate` compose service
-│   ├── seed_fields.py        # loads data/fields.xlsx into the fields table
-│   └── manage_channels.py    # channels + field -> channel routes CLI
+│   ├── seed_fields.py        # loads data/fields.xlsx as dedup identities
+│   └── auto_route_channels.py # one-time category-channel title matching
 ├── tests/                    # pytest suite (PostgreSQL-backed unit + E2E tests)
 ├── data/fields.xlsx          # 533 source field names
 ├── docs/                     # this guide, architecture.md, erd.md, llm-prompt.md
@@ -113,15 +118,18 @@ returns a record's status and (when finished) its output.
    (`ORDER BY created_at`, FIFO) with `FOR UPDATE SKIP LOCKED`, sets
    `processing`, and stamps `claimed_at`/`heartbeat_at`.
 3. **Process** — `process_job`:
-   - resolves the field (exact normalized match, else classify + insert as
-     `source='runtime'`) and links `field_id`/`category_id`;
+   - upserts the field (exact normalized match, else insert as
+     `source='runtime'` with `category_id = NULL` — dedup identity only) and
+     links `field_id`;
    - links the active `model_id`/`prompt_id` (auditability);
-   - starts a heartbeat task, calls the LLM, stores
-     `output_json={title, lead, body}`, sets `review`.
-   - `category_id` is a snapshot: re-classifying the field later (new
-     keywords, `scripts/reclassify_fields.py --apply`) never rewrites
-     `main` rows, so history stays stable. The record page shows both the
-     stored category and the field's current one when they differ.
+   - starts a heartbeat task, makes the ONE combined LLM call, post-processes
+     the classification into `main_category_matches`, stores
+     `output_json={title, lead, body, categories}`, sets `review`;
+   - the classification is stored per record: regenerating replaces the
+     matches, a reviewer override replaces them too — history moves only
+     through deliberate actions, never a silent re-derivation. The record
+     page's دسته‌بندی‌های خودکار tab always shows what is stored, and each
+     row records whether the LLM (`model_id` set) or a person (NULL) wrote it.
 4. **Fail** — any exception → `fail_job` sets `failed` with the error text
    (truncated to 2000 chars). There is **no automatic retry counter**; failed
    jobs stay failed.
@@ -132,20 +140,35 @@ returns a record's status and (when finished) its output.
 ## 5. Database
 
 PostgreSQL is both the persistent store and the queue. Tables (see
-`migrations/001_initial_schema.sql` and `docs/erd.md`):
+`migrations/023_isced_categories.sql` and
+`migrations/024_drop_legacy_categories.sql` for the v2-combined vocabulary
+changes and `docs/erd.md` for the full picture):
 
-- **categories** — 13 seeded categories + `other` (migration 002).
-- **fields** — 533 fields seeded from `data/fields.xlsx` (migration-free,
-  via `scripts/seed_fields.py`) plus runtime-discovered fields;
-  `normalized_name` is the unique stable identity, `source` distinguishes
-  `spreadsheet` vs `runtime`.
+- **categories** — exactly the 29 ISCED-F 2013 intermediate fields + `other`
+  are live (`deprecated=FALSE`, with indicative `isc_code`). The retired rule
+  vocabulary was remapped onto these rows and deleted by migration 024, so
+  no dead vocabulary is left for the model or the router to trip over. The
+  `deprecated` flag remains for retiring a category without breaking its FKs.
+- **fields** — 533 field names seeded from `data/fields.xlsx` plus
+  runtime-discovered names; `normalized_name` is the unique stable identity and
+  `source` distinguishes `spreadsheet` vs `runtime`. The table has no category,
+  keyword, or channel route; it exists only so repeated discipline names share
+  one dedup identity. `main.field_id` points at it, and neither classification
+  nor routing reads it.
 - **models** — LLM model configuration; `is_active` selects the one in use.
-- **prompts** — versioned system prompts; `is_active` selects the one in use.
+- **prompts** — versioned system prompts; `is_active` selects the one in use
+  (migration 023 seeds and activates `v2-combined`).
 - **main** — the thesis/news record and queue entry: thesis fields, `status`
   (`ready|processing|review|failed|rejected`, CHECK constraint), `field_id` /
-  `category_id` / `model_id` / `prompt_id` audit FKs, `output_json` (JSONB),
-  `error_message`, `claimed_at` / `heartbeat_at` (recovery), `created_at` /
-  `updated_at`. Indexed on `(status, created_at)`, `field_id`, `category_id`.
+  `category_id` (display primary — the rank-1 match) / `model_id` /
+  `prompt_id` audit FKs, `output_json` (JSONB, incl. the model's
+  `categories` answer), `error_message`, `claimed_at` / `heartbeat_at`
+  (recovery), `created_at` / `updated_at`. Indexed on `(status, created_at)`,
+  `field_id`, `category_id`.
+- **main_category_matches** — the per-record classification: one row per
+  `{category, score 0..1, rank 1..N, reason}` the combined call stored, with
+  `model_id = NULL` marking manual overrides. Routing and the panel read this
+  table, not `main.category_id` alone.
 - **channels** — a publishing destination: `platform` (`bale|telegram`,
   CHECK), `chat_id` (BIGINT, because chat ids exceed 2³¹), `username` (rendered
   as the message footer), `title`, `is_active`. Unique per
@@ -162,13 +185,12 @@ PostgreSQL is both the persistent store and the queue. Tables (see
   switched ON. Without it, adding a channel made the sender enqueue the whole
   archive to it — a new channel has no delivery rows for anything, so every
   historical record looked like pending work.
-- **category_channel_routes** — retired. No longer written, no longer read, and
-  the panel has no screen for it: the owner removed the category → channel
-  configuration because news goes to every active channel regardless. Kept so
-  existing rows are not lost.
-- **field_channel_routes** — retired from the delivery decision (item 6) and no
-  longer written by the panel. The table is kept so existing rows and the
-  history they explain are not lost.
+- **category_channel_routes** — **the routing matrix.** A record publishes to
+  the union of the channels its qualifying matches name: every qualifying
+  `main_category_matches` row contributes that category's rows here. Written
+  from the per-category checkbox picker on `/categories`, which replaces the
+  whole set rather than appending, and read by the sender, the preview
+  endpoint and the panel so every surface agrees.
 - **deliveries** — one row per (article, channel): `status`
   (`pending|sending|sent|failed|awaiting_confirmation`, CHECK), `attempts`,
   `platform_message_id`, `error_message`, `claimed_at`, `next_attempt_at`,
@@ -213,30 +235,38 @@ prevention (unique index on `normalized_name`), and runtime insertion all use
 it. Re-running the seed script is idempotent
 (`ON CONFLICT (normalized_name) DO NOTHING`).
 
-## 8. Classification
+## 8. Classification (LLM, combined)
 
-`app/fields/classification.py` — deterministic, rule-based, **never the LLM**.
-Token-aware longest-match rules map a normalized field to a category:
-multi-token phrases match exactly, ≤4-char keywords match whole tokens only,
-longer keywords may substring-match at lower score, and the longest match
-wins (category order breaks ties only). `معماری داخلی` matches its specific
-rule and is **not** swallowed by the broad `معماری` rule; `مو` can never fire
-inside `موزه`. `classify_with_reason` returns `(category, matched_keyword,
-rule)` so every decision is explainable. Unmatched fields fall back to the
-`other` category. Unknown incoming fields are inserted with
-`source='runtime'` and the deterministically classified category.
+Since v2-combined there is **no rule-based classifier in the live path**.
+Classification of a thesis comes from the SAME LLM call that writes the news:
+the prompt embeds the 29 ISCED-F 2013 intermediate fields (canonical list in
+`app/news/isced.py`, with exact ZWNJ spelling) plus an `other` fallback, and
+the model answers with up to three `{category, score, reason}` entries. The
+Worker validates the answer (`app/services/records.py`): names that are not
+live `categories` rows are dropped as hallucinations, scores are clamped to
+[0,1], duplicates collapse to the highest score, only matches at/above
+`MIN_CATEGORY_RELEVANCE` are stored in `main_category_matches` (rank 1..N),
+and an empty answer becomes a single `other` row (`score=0.0`, reason
+`no auto-match`) that never auto-delivers.
+
+There is no field-level classifier and no field-level routing path. The
+`fields` table is only a dedup identity; classification is stored per record
+in `main_category_matches` and a reviewer can replace it manually.
 
 ## 9. LLM generation
 
 `app/news/generation.py` — PydanticAI `Agent` with
-`output_type=GeneratedNews` (`title`, `lead`, `body`) over AvalAI's
-OpenAI-compatible API (`AsyncOpenAI` client). The system prompt
+`output_type=GeneratedNews` (`title`, `lead`, `body`, `categories`) over
+AvalAI's OpenAI-compatible API (`AsyncOpenAI` client). The system prompt
 (`app/news/prompts.py`) frames thesis metadata as **data, not instructions**
-(to prevent prompt injection from thesis content) and forbids unsupported
-additions, promotional language, and unnecessary repetition. The client uses
-a bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s — see Engineering
-decisions). The LLM is never used for classification, and no secrets are
-included in its input.
+(to prevent prompt injection from thesis content), forbids unsupported
+additions, promotional language, and unnecessary repetition, and embeds the
+numbered ISCED-F 2013 category list with per-category guidance. The client
+uses a bounded timeout (`LLM_TIMEOUT_SECONDS`, default 120s — see Engineering
+decisions). No secrets are included in its input. The full prompt, its
+placeholders and the post-processing contract are documented verbatim in
+`docs/llm-prompt.md` and pinned by `tests/test_prompt_contract.py` +
+`tests/test_combined_classification.py`.
 
 ## 10. Error handling
 
@@ -321,6 +351,7 @@ ssh user@your-vps
 git clone <repo> && cd project
 cp .env.example .env          # edit with real credentials
 docker compose up -d
+# optional: preload the starter discipline names as dedup identities
 docker compose exec api python scripts/seed_fields.py
 ```
 
@@ -356,11 +387,11 @@ windows/panes instead of background shell jobs you cannot reattach to.
 | Jobs stuck in `processing` | Worker logs; `WORKER_LEASE_MINUTES` vs heartbeat interval |
 | Jobs in `failed` | `main.error_message` (LLM/provider errors) |
 | Worker not claiming | queue empty? `docker compose logs worker` |
-| Field classified as `other` | check `app/fields/classification.py` keyword rules |
+| Field classified as `other` | `main_category_matches` has a single `other` row (score 0, `no auto-match`) — correct it via the record page's دسته‌بندی‌های خودکار tab or `POST /records/{id}/category-matches` |
 | Container can't reach DB | use `postgres` (not `localhost`) as host inside containers |
 | Nothing sent to the channel | is the article `review`? `SELECT * FROM deliveries ORDER BY id DESC` — `pending` with a future `next_attempt_at` is waiting out backoff, `failed` has `error_message` |
 | Sends fail immediately | `deliveries.error_message`; a `failed` row with `no bot token configured` means `BALE_BOT_TOKEN` is missing from the `sender` service |
-| Article never delivered | `main.field_id IS NULL` → the field has no route and delivery fell back to active channels; check `manage_channels.py list` |
+| Article never delivered | check that the record has a qualifying `main_category_matches` row and that its category has channel routes on `/categories`; an `other`-only or unrouted record publishes nowhere by design |
 
 ## Engineering decisions (not explicitly required by the assignments)
 
@@ -405,14 +436,20 @@ windows/panes instead of background shell jobs you cannot reattach to.
   that is gone. It is told apart from a genuine refusal (no rights, wrong
   chat) by the provider's own description, since the HTTP status differs
   between Bale (404) and Telegram (400).
-- Delivery to EVERY active channel rather than a routed subset: the owner
-  redefined the core rule, and the previous chain meant that adding one
-  category mapping silently stopped delivery to all the other channels. A
-  channel is excluded only by switching it off, which is explicit and
-  reversible.
+- Strict, matches-based routing rather than "every active channel": the
+  broadcast rule (item 6) was tried and reversed — adding one route silently
+  stopped delivery to every other channel, and the archive would flood any new
+  channel. The current core rule: a record is delivered to the per-channel
+  union of the channels its QUALIFYING `main_category_matches` name (score ≥
+  `MIN_CATEGORY_RELEVANCE`, never the `other` fallback), a category with no
+  selected channels publishes nothing, and a fallback-only record waits for a
+  reviewer. Exclusion is explicit (channel switched off, score under
+  threshold, or no route), which is reversible where broadcast silence was
+  not.
 - `awaiting_confirmation` is the gated initial delivery status when
-  `REQUIRE_HUMAN_CONFIRMATION=true` (default): queued by the sender but never
-  claimed until approval flips it to `pending`. With the flag off, queueing
-  writes `pending` directly (pre-gate behaviour).
+  `REQUIRE_HUMAN_CONFIRMATION=true`: queued by the sender but never claimed
+  until approval flips it to `pending`. With the gate off (the default), queueing
+  writes `pending` directly; a record whose only classification is the `other`
+  fallback never auto-publishes under any setting.
 - At-least-once sending on crash (possible duplicate post in the channel) —
   the same trade-off as generation, and for the same reason.

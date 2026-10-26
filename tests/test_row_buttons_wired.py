@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Category, Channel, Delivery, Field, Main, PanelUser, Role
 from app.panel.app import panel_app
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 OUTPUT = {"title": "تیتر", "lead": "lead", "body": "body"}
@@ -65,7 +65,7 @@ async def _world(session: AsyncSession) -> Main:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    field = Field(name="test-field", normalized_name="test-field", category_id=category.id)
+    field = Field(name="test-field", normalized_name="test-field")
     article = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
                    author="A", supervisor="S", status="review", field_id=field.id,
                    output_json=OUTPUT)
@@ -130,7 +130,7 @@ async def test_the_most_dangerous_delivery_buttons_are_all_exercised(session: As
                           follow_redirects=False)
         html = await _rows(client, ROW_PARTIALS["deliveries"])
     for action in ("retry", "release", "cancel", "delete-from-channel", "mark-deleted"):
-        assert f"/deliveries/" in html and f"/{action}\"" in html, (
+        assert "/deliveries/" in html and f"/{action}\"" in html, (
             f"the {action} button must render for the status that offers it"
         )
 

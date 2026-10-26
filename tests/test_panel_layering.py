@@ -27,10 +27,10 @@ ALLOWED_PANEL_IMPORTS = {
     "app.services",
     "app.services.audit",
     "app.services.errors",
+    "app.services.categories",
     "app.services.channels",
     "app.services.dashboard",
     "app.services.deliveries",
-    "app.services.fields",
     "app.services.models",
     "app.services.passwords",
     "app.services.prompts",
@@ -41,7 +41,6 @@ ALLOWED_PANEL_IMPORTS = {
     "app.news.prompts",
     "app.messaging.dispatcher",
     "app.messaging.formatting",
-    "app.fields.classification",
     "app.fields.normalization",
 }
 
@@ -140,6 +139,7 @@ def test_every_panel_route_calls_a_service(path, methods, handler):
         "categories_page_merged",  # permanent redirect; merged into /fields (item 4)
         "deliveries_page_merged",  # permanent redirect; merged into /records (item 2)
         "deliveries_page",  # permanent redirect; the deliveries tab of /records
+        "fields_page_removed",  # permanent redirect to /categories after the page was retired
     }:
         return
     source = ast.parse(_source_of(handler))

@@ -2,8 +2,9 @@
 
 PostgreSQL acts as both the persistent store and the job queue (Assignment
 2/3): the API creates ``ready`` records, and this Worker claims them one at a
-time in creation order (FIFO), runs preprocessing/classification and LLM
-generation, and stores the result.
+time in creation order (FIFO), upserts the field identity for dedup, makes
+ONE LLM call that both writes the news and classifies the thesis into ISCED-F
+2013 categories, and stores the result.
 
 Failure/recovery model (Assignment 4):
 - A job is claimed with ``FOR UPDATE SKIP LOCKED`` and moves to ``processing``
@@ -24,14 +25,15 @@ import logging
 import signal
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 
 from app.config import settings
 from app.db.connection import async_session
-from app.db.models import Category, Field, Main, Model, Prompt
-from app.fields.classification import classify_with_reason
+from app.db.models import Field, Main, Model, Prompt
 from app.fields.normalization import normalize_field
 from app.news.generation import generate_news
+from app.news.isced import OTHER_CATEGORY
+from app.services.records import store_generated_classification
 from app.services.transitions import assert_record_transition
 
 logger = logging.getLogger(__name__)
@@ -91,98 +93,34 @@ async def claim_next_job(session) -> Main | None:
     return job
 
 
-async def resolve_field(session, raw_field: str) -> tuple[Field | None, Category | None]:
-    """Resolve a raw thesis field to a stored ``Field`` and its ``Category``.
+async def _upsert_field(session, raw_field: str) -> Field | None:
+    """Register the thesis field name as a dedup identity.
 
-    The decision is made ONCE, the first time a field is seen, and stored on
-    the row (item 15) — later submissions reuse it and never re-classify.
-
-    For an unknown field the category comes from the deterministic rules in
-    ``app.fields.classification``, UNLESS ``USE_LLM_FOR_CATEGORIZATION`` is on
-    (item 20), in which case the active model is asked first and the rules are
-    the fallback for every failure. The LLM is offered only the category names
-    that already exist and its answer is verified against them, so it can
-    never invent a category or leave a dangling reference.
-
-    A new ``Field`` is inserted with ``source='runtime'`` and a stable
-    normalized identity, so repeated submissions of the same unknown field
-    reuse one record.
-
-    Returns:
-        ``(field, category)``; ``field`` is ``None`` only if no category could
-        be determined (the ``other`` category always exists, so this is
-        defensive).
+    Classification is decided by the LLM during generation and stored per
+    record in ``main_category_matches``. This row only keeps a stable identity
+    for repeated field names; it has no category or keyword.
     """
     norm = normalize_field(raw_field)
+    if not norm:
+        return None
     result = await session.execute(
         select(Field).where(Field.normalized_name == norm)
     )
     field = result.scalar_one_or_none()
     if field:
-        cat_result = await session.execute(
-            select(Category).where(Category.id == field.category_id)
-        )
-        return field, cat_result.scalar_one()
+        return field
 
-    cat_name, matched_keyword, category_source = await _choose_category(session, norm)
-    cat_result = await session.execute(
-        select(Category).where(Category.name == cat_name)
-    )
-    category = cat_result.scalar_one_or_none()
-    if not category:
-        cat_result = await session.execute(
-            select(Category).where(Category.name == "other")
-        )
-        category = cat_result.scalar_one()
-
-    field = Field(
-        name=raw_field,
-        normalized_name=norm,
-        category_id=category.id,
-        source="runtime",
-        matched_keyword=matched_keyword,
-        category_source=category_source,
-    )
+    field = Field(name=raw_field, normalized_name=norm, source="runtime")
     session.add(field)
-    await session.commit()
-    logger.info(
-        "Created new field id=%s name=%s category=%s keyword=%s source=%s",
-        field.id, norm, cat_name, matched_keyword, category_source,
-    )
-    return field, category
-
-
-async def _choose_category(session, norm: str) -> tuple[str, str | None, str]:
-    """Pick a category for a new field: LLM when enabled, rules as fallback.
-
-    Returns ``(category_name, matched_keyword, category_source)``. The keyword
-    is ``None`` when the LLM decided — the honest value, since there was no
-    keyword match — and ``category_source`` records which path answered.
-    """
-    rules_name, matched_keyword, _ = classify_with_reason(norm)
-    if not settings.use_llm_for_categorization:
-        return rules_name, matched_keyword, "rules"
-
-    from app.fields.llm_classification import classify_with_llm
-
-    names = [
-        name
-        for (name,) in (
-            await session.execute(select(Category.name).order_by(Category.name))
-        ).all()
-    ]
-    chosen = await classify_with_llm(norm, names)
-    if chosen is None:
-        logger.info("LLM categorisation gave no answer for %r, using the rules", norm)
-        return rules_name, matched_keyword, "rules"
-    logger.info("LLM categorised %r as %r (rules would say %r)", norm, chosen, rules_name)
-    return chosen, None, "llm"
+    await session.flush()  # grab field.id for the FK without a full commit
+    logger.info("Registered new field id=%s name=%s", field.id, norm)
+    return field
 
 
 async def get_active_model(session) -> Model | None:
     """Return the active LLM model configuration (for auditability)."""
     result = await session.execute(
-        select(Model).where(Model.is_active == True).limit(1)
+        select(Model).where(Model.is_active.is_(True)).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -190,7 +128,7 @@ async def get_active_model(session) -> Model | None:
 async def get_active_prompt(session) -> Prompt | None:
     """Return the active prompt version (for auditability)."""
     result = await session.execute(
-        select(Prompt).where(Prompt.is_active == True).limit(1)
+        select(Prompt).where(Prompt.is_active.is_(True)).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -224,11 +162,19 @@ async def heartbeat_loop(job_id: int, stop_event: asyncio.Event) -> None:
 
 
 async def process_job(session, job: Main) -> None:
-    """Process one claimed job: classify, generate news, store the result.
+    """Process one claimed job: ONE LLM call for news + classification.
 
-    Commits field/category/model/prompt links BEFORE the LLM call (so the
-    classification is durable even if generation fails), then commits the
-    generated output and moves the job to ``review``.
+    Flow (v2-combined):
+    1. Upsert the field name for dedup (category stays NULL on new rows) and
+       commit field/model/prompt links BEFORE the LLM call (so the job's
+       audit FKs are durable even if generation fails).
+    2. Call ``generate_news`` exactly once — the resolved prompt instructs
+       the model to return the article AND up to 3 ISCED-F 2013 category
+       matches in one structured response.
+    3. Store ``output_json`` and classify: ``store_generated_classification``
+       filters/clamps/dedupes the answer, writes ``main_category_matches``,
+       and sets ``job.category_id`` (top match, or the ``other`` fallback).
+    4. Move the job to ``review`` and commit.
 
     Model/prompt resolution is override > active > config fallback: a
     per-record ``model_id``/``prompt_id`` from ``POST /submit`` is kept and
@@ -237,17 +183,20 @@ async def process_job(session, job: Main) -> None:
 
     Raises:
         Exception: Any failure (e.g. LLM error) propagates to the caller,
-            which marks the job as ``failed``.
+            which marks the job as ``failed``. No special handling: the LLM
+            must return a valid ``GeneratedNews`` (``categories`` may be
+            empty), otherwise the job stays failed and can be retried by a
+            reviewer via "تولید دوباره".
     """
     from app.news.generation import resolve_generation_config
 
     logger.info("Processing job id=%s", job.id)
 
-    field_obj, category_obj = await resolve_field(session, job.field)
+    field_obj = await _upsert_field(session, job.field)
     if field_obj:
         job.field_id = field_obj.id
-    if category_obj:
-        job.category_id = category_obj.id
+    # NOTE: no job.category_id yet — classification happens with the
+    # generation call below, not from the field name.
 
     active_model = await get_active_model(session)
     active_prompt = await get_active_prompt(session)
@@ -289,7 +238,64 @@ async def process_job(session, job: Main) -> None:
     assert_record_transition(job.status, "review")
     job.status = "review"
     job.updated_at = datetime.utcnow()
+    # ONE call did both: every qualifying ISCED category match is stored
+    # here (old rows replaced), ``job.category_id`` becomes the display
+    # primary; nothing qualifies → single ``other`` fallback row and the
+    # dispatcher will create NO deliveries (unless configured otherwise).
+    qualifying = await store_generated_classification(
+        session, job, output, model_id=job.model_id, prompt_id=job.prompt_id,
+    )
     await session.commit()
+
+    # Unmatched handling (settings.unmatched_category_behavior).
+    if not qualifying:
+        behavior = settings.unmatched_category_behavior
+        if behavior == "failed":
+            assert_record_transition(job.status, "failed")
+            job.status = "failed"
+            job.error_message = "No category matched above threshold"
+            job.updated_at = datetime.utcnow()
+            await session.commit()
+            logger.info("Completed job id=%s (failed: no category)", job.id)
+            return
+        elif behavior == "fallback_other":
+            from app.db.models import Category, CategoryChannelRoute, Channel, Delivery
+
+            other = (
+                await session.execute(
+                    select(Category).where(Category.name == OTHER_CATEGORY)
+                )
+            ).scalar_one_or_none()
+            if other is not None:
+                # channels routed to "other" (if any)
+                ch_rows = await session.execute(
+                    select(Channel)
+                    .join(CategoryChannelRoute, CategoryChannelRoute.channel_id == Channel.id)
+                    .where(
+                        CategoryChannelRoute.category_id == other.id,
+                        Channel.is_active.is_(True),
+                    )
+                )
+                gated = settings.require_human_confirmation
+                for ch in ch_rows.scalars().all():
+                    if ch.activated_at is not None and ch.activated_at > job.created_at:
+                        continue
+                    session.add(Delivery(
+                        main_id=job.id,
+                        channel_id=ch.id,
+                        category_id=other.id,
+                        route_source="category",
+                        status="awaiting_confirmation" if gated else "pending",
+                        attempts=0,
+                    ))
+                await session.commit()
+                logger.info(
+                    "Completed job id=%s (fallback_other: %d deliveries)",
+                    job.id,
+                    len(ch_rows.scalars().all()),
+                )
+                # Note: counts above may be off due to consumed iterator; log is informational.
+                return
     logger.info("Completed job id=%s", job.id)
 
 
@@ -346,7 +352,19 @@ async def run_worker() -> None:
                 try:
                     await process_job(session, job)
                 except Exception as e:
-                    await fail_job(session, job, str(e))
+                    # A database error can leave the session's transaction
+                    # aborted. Marking the job failed on that same session then
+                    # throws too, leaving the row stuck in ``processing``. Roll
+                    # back and use a fresh session so the failure is recorded.
+                    logger.exception("Job id=%s failed", job.id)
+                    try:
+                        await session.rollback()
+                    except Exception:
+                        logger.exception("Rollback failed for job id=%s", job.id)
+                    async with async_session() as fail_session:
+                        stuck = await fail_session.get(Main, job.id)
+                        if stuck is not None:
+                            await fail_job(fail_session, stuck, str(e))
         except Exception as e:
             logger.error("Worker loop error: %s", e)
             try:

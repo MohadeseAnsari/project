@@ -1,0 +1,15 @@
+{# Platform presentation shared by the deliveries table and its filter.
+
+   Known platforms get a readable Persian name from one map. Anything else
+   falls back to the value stored on the channel, so adding a platform shows up
+   with its stored name even before a label is added here. #}
+
+{% set PLATFORM_LABELS = {'bale': 'بله', 'telegram': 'تلگرام'} %}
+
+{% macro platform_name(value) -%}
+  {{- PLATFORM_LABELS.get(value, value or '—') -}}
+{%- endmacro %}
+
+{% macro platform_badge(value) -%}
+  <span class="badge platform-badge{% if value == 'bale' %} platform-bale{% elif value == 'telegram' %} platform-telegram{% endif %}" dir="auto"{% if value %} title="{{ value }}"{% endif %}>{{ platform_name(value) }}</span>
+{%- endmacro %}

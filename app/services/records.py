@@ -3,15 +3,35 @@
 Single implementation shared by the machine API (``PATCH /records/{id}``)
 and the panel (review form, bulk approve). Raises plain ``ValueError`` with
 stable messages; routes map them to HTTP statuses or error pages.
+
+The classification layer (v2-combined) also lives here: everything that
+reads or writes ``main_category_matches`` — post-processing the LLM's
+combined answer, the record-level matches payload, the reviewer's manual
+override, and the per-category stat counts.
 """
 
+import logging
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
-from app.db.models import AuditLog, Channel, Delivery, Main, Model, PanelUser, Prompt
+from app.config import settings
+from app.db.models import (
+    AuditLog,
+    Category,
+    Channel,
+    Delivery,
+    Main,
+    MainCategoryMatch,
+    Model,
+    PanelUser,
+    Prompt,
+)
 from app.messaging.dispatcher import confirm_deliveries_for_article
+from app.news.isced import OTHER_CATEGORY
 from app.services.transitions import STATUS_FA, assert_record_transition
+
+logger = logging.getLogger(__name__)
 
 #: Persian labels for delivery states in the record timeline.
 _DELIVERY_FA = {
@@ -77,13 +97,11 @@ def record_filters(
     university: str | None = None,
     q: str | None = None,
     approved: bool | None = None,
+    auto_published: bool | None = None,
+    needs_classification: bool | None = None,
 ) -> list:
-    """Build the shared WHERE clauses for record listings (panel + API).
+    """Build the shared WHERE clauses for record listings (panel + API)."""
 
-    ``approved`` is now status-based (the lifecycle owns the truth):
-    True -> statuses ``approved``/``published``; False -> everything else
-    (still undecided or failed/rejected).
-    """
     filters = []
     if status:
         filters.append(Main.status == status)
@@ -107,6 +125,22 @@ def record_filters(
                 Main.supervisor.ilike(like),
             )
         )
+    if auto_published is True:
+        filters.append(Main.published_at.isnot(None))
+        filters.append(Main.approved_at.is_(None))
+    if needs_classification is True:
+        filters.append(Main.status == "review")
+        # no qualifying match: no main_category_matches row with score >= threshold
+        qualifying = (
+            select(MainCategoryMatch.id)
+            .where(
+                MainCategoryMatch.main_id == Main.id,
+                MainCategoryMatch.score >= settings.min_category_relevance,
+            )
+            .correlate(Main)
+            .exists()
+        )
+        filters.append(~qualifying)
     return filters
 
 
@@ -128,9 +162,11 @@ async def list_records(
     q: str | None = None,
     order: str = "newest",
     approved: bool | None = None,
+    auto_published: bool | None = None,
+    needs_classification: bool | None = None,
 ) -> tuple[list[Main], int]:
     """Return ``(page rows, filtered total)`` with SQL LIMIT/OFFSET + COUNT."""
-    filters = record_filters(status, field, university, q, approved)
+    filters = record_filters(status, field, university, q, approved, auto_published, needs_classification)
     count_query = select(func.count()).select_from(Main)
     if filters:
         count_query = count_query.where(*filters)
@@ -154,9 +190,16 @@ async def get_record(session, record_id: int) -> Main | None:
     return result.scalar_one_or_none()
 
 
+async def delete_record(session, record: Main) -> None:
+    """Permanently remove a record and all of its deliveries/matches."""
+    if record.status == "processing":
+        raise ValueError("record-processing")
+    await session.delete(record)
+    await session.commit()
+
+
 async def record_detail(session, record: Main) -> dict:
     """Build the extended record payload (API GET/PATCH share this)."""
-    from app.db.models import Channel, Delivery
 
     deliveries_result = await session.execute(
         select(Delivery, Channel)
@@ -196,7 +239,380 @@ async def record_detail(session, record: Main) -> dict:
             }
             for delivery, channel in deliveries_result.all()
         ],
+        # The stored multi-category classification (post-processed LLM answer
+        # or a reviewer's manual override).
+        "category_matches": await record_category_matches(session, record.id),
     }
+
+
+# ---------------------------------------------------------------------------
+# Classification (v2-combined): main_category_matches read/write.
+#
+# ONE generation call classifies each thesis into up to
+# settings.top_n_categories ISCED-F 2013 categories. Everything that touches
+# ``main_category_matches`` lives here so the Worker, the panel regenerate
+# action and the reviewer's manual override cannot drift apart.
+# ---------------------------------------------------------------------------
+
+#: The reason stored on the ``other`` fallback row when nothing qualifies.
+NO_AUTO_MATCH_REASON = "no auto-match"
+
+
+async def _active_categories(session) -> dict[str, Category]:
+    """Live classification vocabulary: name -> Category, deprecated excluded.
+
+    Hallucinated names (anything not in here) are rejected by construction.
+    """
+    rows = (
+        await session.execute(select(Category).where(Category.deprecated.is_(False)))
+    ).scalars().all()
+    return {row.name: row for row in rows}
+
+
+def _clamp_score(value: float) -> float:
+    """Clamp to [0.0, 1.0]; guard against NaN-ish inputs by clamping to 0.0."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value:  # NaN
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
+def _dedupe_and_sort(matches: list[dict]) -> list[dict]:
+    """Dedupe by category keeping the highest score, then sort desc."""
+    best: dict[str, dict] = {}
+    for match in matches:
+        name = match["category"]
+        if name not in best or match["score"] > best[name]["score"]:
+            best[name] = match
+    return sorted(best.values(), key=lambda m: (-m["score"], m["category"]))
+
+
+async def _active_categories_by_code(session) -> dict[int, Category]:
+    """Live classification vocabulary: short_code -> Category (deprecated excluded)."""
+    rows = (
+        await session.execute(
+            select(Category).where(
+                Category.deprecated.is_(False),
+                Category.short_code.isnot(None),
+            )
+        )
+    ).scalars().all()
+    return {row.short_code: row for row in rows}
+
+
+async def normalize_llm_categories(session, output) -> list[dict]:
+    """Post-process the LLM's ``categories`` list into trustworthy matches.
+
+    Accepts BOTH the new compact form (``code``/``score`` 0-100/``reason``)
+    and the legacy name form (``category``/``score`` 0.0-1.0) for backward
+    compat. Defence layers, in order: code/name validation against the live
+    (non-deprecated) ``categories`` rows rejects hallucinations; scores are
+    clamped; duplicates collapse to the highest score; results sort by score
+    desc. Codes/ids are resolved here so callers only insert.
+
+    ``other`` (code 0) is kept in the validated list (the LLM may say it) but
+    it never auto-qualifies — callers must treat it as the fallback.
+    """
+    code_to_category = await _active_categories_by_code(session)
+    name_to_category = await _active_categories(session)
+
+    validated: list[dict] = []
+    for match in getattr(output, "categories", None) or []:
+        # Compact form (v3-compact): code + int score + reason.
+        code = getattr(match, "code", None)
+        if code is not None:
+            category = code_to_category.get(code)
+            if category is None:
+                continue  # hallucinated / unknown code: always filtered
+            raw_score = getattr(match, "score", 0)
+            try:
+                score_int = int(raw_score)
+            except (TypeError, ValueError):
+                score_int = 0
+            score = max(0.0, min(1.0, score_int / 100.0))
+            validated.append({
+                "category": category.name,
+                "category_id": category.id,
+                "score": score,
+                "reason": (getattr(match, "reason", None) or "").strip() or None,
+                "code": code,
+            })
+            continue
+
+        # Legacy form (v2-combined): name + float score + reason.
+        name = (getattr(match, "category", None) or "").strip()
+        category = name_to_category.get(name)
+        if category is None:
+            continue  # hallucinated / deprecated: always filtered
+        validated.append({
+            "category": name,
+            "category_id": category.id,
+            "score": _clamp_score(getattr(match, "score", 0)),
+            "reason": (getattr(match, "reason", None) or "").strip() or None,
+            "code": getattr(category, "short_code", None),
+        })
+
+    # Dedupe by category_id keeping the highest score, then sort desc.
+    best: dict[int, dict] = {}
+    for match in validated:
+        cid = match["category_id"]
+        if cid not in best or match["score"] > best[cid]["score"]:
+            best[cid] = match
+    return sorted(best.values(), key=lambda m: (-m["score"], m["category"]))
+
+
+async def _delete_matches(session, record_id: int) -> None:
+    """Reset a record's classification (regeneration/manual override)."""
+    await session.execute(delete(MainCategoryMatch).where(MainCategoryMatch.main_id == record_id))
+
+
+async def store_generated_classification(
+    session,
+    record: Main,
+    output,
+    *,
+    model_id: int | None = None,
+    prompt_id: int | None = None,
+) -> list[dict]:
+    """Store the combined call's classification answer for one record.
+
+    Replaces any previous rows (regeneration must not mix answers), keeps the
+    qualifying subset (score >= ``min_category_relevance``, exact live
+    category names, ``other`` excluded), ranked 1..N, and sets
+    ``record.category_id``:
+
+    - with matches → primary = the top match (backward-compatible display);
+    - without → exactly one ``other`` fallback row (score 0.0, rank 1,
+      reason ``no auto-match``) — no deliveries follow, the record waits for
+      a reviewer.
+
+    Returns the qualifying matches (empty when the fallback path ran).
+    The caller commits.
+    """
+    await _delete_matches(session, record.id)
+
+    if settings.store_llm_raw_output:
+        try:
+            record.llm_raw_output = output.model_dump_json()
+        except Exception:  # pragma: no cover - audit only
+            pass
+
+    validated = await normalize_llm_categories(session, output)
+    qualifying = [
+        m for m in validated
+        if m["score"] >= settings.min_category_relevance and m["category"] != OTHER_CATEGORY
+    ][: max(0, settings.top_n_categories)]
+
+    if qualifying:
+        for rank, match in enumerate(qualifying, start=1):
+            # Skip the reason for high-confidence matches when configured
+            # (Optimization D + feature flag). Default threshold 90.
+            if match["score"] * 100 >= settings.skip_reason_above_score:
+                reason = None
+            else:
+                reason = match["reason"]
+            session.add(MainCategoryMatch(
+                main_id=record.id,
+                category_id=match["category_id"],
+                score=match["score"],
+                rank=rank,
+                reason=reason,
+                model_id=model_id,
+                prompt_id=prompt_id,
+            ))
+        record.category_id = qualifying[0]["category_id"]
+        logger_classified = ", ".join(
+            f"{match['category']} ({match['score']:.2f})" for match in qualifying
+        )
+        logger.info("LLM classified as: %s", logger_classified)
+        codes_log = ", ".join(
+            f"code={match.get('code', '?')} score={int(round(match['score'] * 100))}"
+            for match in qualifying
+        )
+        logger.info("LLM classified: %s", codes_log)
+        if settings.store_llm_raw_output:
+            try:
+                record.llm_raw_output = output.model_dump_json()
+            except Exception:  # pragma: no cover - audit only
+                pass
+        return qualifying
+
+    other = (await _active_categories(session)).get(OTHER_CATEGORY)
+    if other is not None:
+        session.add(MainCategoryMatch(
+            main_id=record.id,
+            category_id=other.id,
+            score=0.0,
+            rank=1,
+            reason=NO_AUTO_MATCH_REASON,
+            model_id=model_id,
+            prompt_id=prompt_id,
+        ))
+        record.category_id = other.id
+    else:  # defensive: the migration guarantees an ``other`` row exists
+        record.category_id = None
+    logger.info("No qualifying LLM match: stored \"other\" fallback, no auto-delivery")
+    return []
+
+
+async def record_category_matches(session, record_id: int) -> list[dict]:
+    """The record's stored matches with category names (API + panel)."""
+    rows = (
+        await session.execute(
+            select(MainCategoryMatch, Category, Main.category_id)
+            .join(Category, Category.id == MainCategoryMatch.category_id)
+            .join(Main, Main.id == MainCategoryMatch.main_id)
+            .where(MainCategoryMatch.main_id == record_id)
+            .order_by(MainCategoryMatch.rank)
+        )
+    ).all()
+    return [
+        {
+            "category": category.name,
+            "category_id": match.category_id,
+            "score": match.score,
+            "rank": match.rank,
+            "reason": match.reason,
+            "is_primary": match.category_id == main_category_id,
+        }
+        for match, category, main_category_id in rows
+    ]
+
+
+async def record_matches_fallback_only(session, record_id: int) -> bool:
+    """True when the only match is the ``other`` fallback (needs a reviewer).
+
+    Tells the panel to show the manual-assignment warning instead of scores.
+    """
+    rows = (
+        await session.execute(
+            select(MainCategoryMatch.reason)
+            .where(MainCategoryMatch.main_id == record_id)
+        )
+    ).all()
+    if not rows:
+        return False  # not generated yet — not a failed classification
+    return len(rows) == 1 and rows[0][0] == NO_AUTO_MATCH_REASON
+
+
+async def replace_category_matches(session, record_id: int, matches) -> Main:
+    """Reviewer's manual override: replace the stored matches wholesale.
+
+    ``matches`` is a list of {category, score, reason} (schemas/objects both
+    work). Validation mirrors the LLM path — exact names, clamped scores,
+    dedupe, highest score first — and up to 5 rows may be stored (the DB
+    ``rank`` CHECK bound). An empty list clears back to the ``other``
+    fallback: a record must never be left with NO classification, or the
+    routing predicate could not tell "unclassified" from "not generated".
+
+    The primary category becomes the top match's category.
+    """
+    record = await get_record(session, record_id)
+    if record is None:
+        raise ValueError("not-found")
+    if len(matches) > 5:
+        raise ValueError("too-many-matches")
+
+    vocabulary = await _active_categories(session)
+    validated: list[dict] = []
+    for match in matches:
+        if isinstance(match, dict):
+            category_id = match.get("category_id")
+            name = (match.get("category") or "").strip()
+            score = match.get("score")
+            reason = match.get("reason")
+        else:
+            category_id = getattr(match, "category_id", None)
+            name = (getattr(match, "category", None) or "").strip()
+            score = getattr(match, "score", None)
+            reason = getattr(match, "reason", None)
+
+        if category_id is not None:
+            category = await session.get(Category, category_id)
+            if category is None:
+                raise ValueError(f"unknown-category:{category_id}")
+            name = category.name
+        else:
+            category = vocabulary.get(name)
+            if category is None:
+                raise ValueError(f"unknown-category:{name}")
+
+        validated.append({
+            "category": name,
+            "category_id": category.id,
+            "score": _clamp_score(score),
+            "reason": (reason or "").strip() or None,
+        })
+    validated = _dedupe_and_sort(validated)[:5]
+
+    await _delete_matches(session, record_id)
+    if validated:
+        for rank, match in enumerate(validated, start=1):
+            session.add(MainCategoryMatch(
+                main_id=record.id,
+                category_id=match["category_id"],
+                score=match["score"],
+                rank=rank,
+                reason=match["reason"],
+            ))
+        record.category_id = validated[0]["category_id"]
+    else:
+        other = vocabulary.get(OTHER_CATEGORY)
+        if other is not None:
+            session.add(MainCategoryMatch(
+                main_id=record.id, category_id=other.id,
+                score=0.0, rank=1, reason=NO_AUTO_MATCH_REASON,
+            ))
+            record.category_id = other.id
+    record.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def primary_category_snapshot(session, record_ids: list[int]) -> dict[int, dict]:
+    """``{record_id: {name, extras}}`` for the records-table badges.
+
+    ``name`` is the primary (rank-1) match's category; ``extras`` is the
+    number of ADDITIONAL matches, so the template can render "+N" for N > 0.
+    Records without matches (ready/processing/old) map to ``name=None``.
+    """
+    if not record_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(MainCategoryMatch.main_id, Category.name, MainCategoryMatch.rank)
+            .join(Category, Category.id == MainCategoryMatch.category_id)
+            .where(MainCategoryMatch.main_id.in_(record_ids))
+            .order_by(MainCategoryMatch.main_id, MainCategoryMatch.rank, MainCategoryMatch.score.desc())
+        )
+    ).all()
+    snapshot: dict[int, dict] = {}
+    for main_id, name, _rank in rows:
+        entry = snapshot.setdefault(main_id, {"name": None, "extras": 0})
+        if entry["name"] is None:
+            entry["name"] = name
+        else:
+            entry["extras"] += 1
+    return snapshot
+
+
+async def records_by_category(session) -> dict[str, int]:
+    """Count of records whose PRIMARY (rank-1) match is each category."""
+    rows = (
+        await session.execute(
+            select(Category.name, func.count())
+            .select_from(MainCategoryMatch)
+            .join(Category, Category.id == MainCategoryMatch.category_id)
+            .where(MainCategoryMatch.rank == 1)
+            .group_by(Category.name)
+            .order_by(func.count().desc(), Category.name)
+        )
+    ).all()
+    return {name: count for name, count in rows}
 
 
 async def apply_review(
@@ -312,8 +728,9 @@ async def regenerate(session, record_id: int) -> Main:
     Uses the exact same resolution + generation path as the Worker
     (``get_active_*`` + shared ``resolve_generation_config`` +
     ``generate_news``), so a regenerated article is indistinguishable from
-    one the Worker produced. Success stores the new output and returns the
-    record to ``review`` (``failed -> review``, a declared transition);
+    one the Worker produced. Success stores the new output AND the new
+    classification (``main_category_matches`` replaced wholesale) and returns
+    the record to ``review`` (``failed -> review``, a declared transition);
     provider errors park it ``failed`` with the error text.
 
     Raises:
@@ -349,17 +766,24 @@ async def regenerate(session, record_id: int) -> Main:
     try:
         output = await generate_news(thesis, **config)
     except Exception as e:
-        assert_record_transition(record.status, "failed")
-        record.status = "failed"
+        if record.status != "failed":
+            assert_record_transition(record.status, "failed")
+            record.status = "failed"
         record.error_message = str(e)[:2000]
         record.updated_at = datetime.utcnow()
         await session.commit()
         raise
     record.output_json = {"title": output.title, "lead": output.lead, "body": output.body}
-    assert_record_transition(record.status, "review")
-    record.status = "review"
+    if record.status != "review":
+        assert_record_transition(record.status, "review")
+        record.status = "review"
     record.error_message = None
     record.updated_at = datetime.utcnow()
+    # Fresh generation = fresh classification: the old matches are replaced
+    # exactly like the Worker does (one shared implementation).
+    await store_generated_classification(
+        session, record, output, model_id=record.model_id, prompt_id=record.prompt_id,
+    )
     await session.commit()
     await session.refresh(record)
     return record
@@ -380,11 +804,13 @@ async def needs_review_count(session) -> int:
 
 
 async def reassign_category(session, record: Main, category_id: int) -> Main:
-    """Re-point one record at another category (operator correction).
+    """Reclassify one record manually (operator correction).
 
-    The recovery action for a record classified into the wrong category: the
-    sender routes by ``main.category_id``, so until this is fixed the article
-    would keep publishing to the wrong channel.
+    Routing reads ``main_category_matches``, so the correction writes a
+    single definitive manual match (score 1.0, reason records the reviewer)
+    and replaces whatever the LLM had stored — otherwise the record would
+    keep routing to the old categories. ``main.category_id`` (the display
+    primary) is set to the same category.
 
     Raises:
         ValueError: ``unknown-category`` when the category does not exist.
@@ -394,12 +820,84 @@ async def reassign_category(session, record: Main, category_id: int) -> Main:
     category = await session.get(Category, category_id)
     if category is None:
         raise ValueError("unknown-category")
+    await _delete_matches(session, record.id)
+    session.add(MainCategoryMatch(
+        main_id=record.id,
+        category_id=category_id,
+        score=1.0,
+        rank=1,
+        reason="تعیین دستی توسط بازبین",
+    ))
     record.category_id = category_id
     record.updated_at = datetime.utcnow()
-    # No refresh(): with expire_on_commit=False the row is already current,
-    # and refreshing would expire attributes the caller may read afterwards.
     await session.commit()
     return record
+
+
+async def republish_record(session, record: Main, username: str) -> list[dict]:
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent.
+
+    Used after a manual category reassignment to push the article to the
+    correct channels. Already-sent deliveries are left alone (with a warning);
+    failed ones are retried; channels that have no delivery yet get a new
+    pending one.
+
+    Returns the list of channels newly queued (id, platform, title).
+    """
+    from app.messaging.dispatcher import (
+        channels_for_article_multi,
+        qualifying_categories,
+    )
+    from app.messaging.formatting import render_article
+
+    if record.status not in ("published", "approved"):
+        raise ValueError("not-published")
+    qualifying = await qualifying_categories(session, record)
+    if not qualifying:
+        raise ValueError("no-matches")
+
+    existing = await session.execute(
+        select(Delivery).where(Delivery.main_id == record.id)
+    )
+    existing_list = list(existing.scalars().all())
+    already_channels = {d.channel_id for d in existing_list}
+
+    # Reset failed deliveries to pending (retry).
+    for d in existing_list:
+        if d.status == "failed":
+            d.status = "pending"
+            d.attempts = 0
+            d.next_attempt_at = datetime.utcnow()
+            d.updated_at = datetime.utcnow()
+
+    newly_queued: list[dict] = []
+    for channel, _source in await channels_for_article_multi(session, record):
+        if channel.id in already_channels:
+            if any(d.channel_id == channel.id and d.status == "sent" for d in existing_list):
+                logger.warning(
+                    "republish: delivery already sent to channel %s, skipping",
+                    channel.id,
+                )
+            continue
+        if not render_article(record.output_json or {}, channel.username):
+            continue
+        session.add(Delivery(
+            main_id=record.id,
+            channel_id=channel.id,
+            category_id=qualifying[0][0] if qualifying else record.category_id,
+            route_source="category",
+            status="pending",
+            attempts=0,
+        ))
+        newly_queued.append({"id": channel.id, "platform": channel.platform, "title": channel.title})
+
+    await session.commit()
+    await session.refresh(record)
+    logger.info(
+        "republish: record=%s user=%s queued=%d", record.id, username, len(newly_queued)
+    )
+    return newly_queued
 
 
 async def record_timeline(session, record: Main) -> list[dict]:
@@ -409,28 +907,19 @@ async def record_timeline(session, record: Main) -> list[dict]:
     timeline reflects what actually happened, including failures and the
     model/prompt used for generation.
     """
-    from app.db.models import Category, Channel, Delivery, Field, Model, Prompt
+    from app.db.models import Category, Model, Prompt
 
     steps: list[dict] = [
         {"title": "ثبت درخواست", "sub": _tl_status(record.status), "at": record.created_at}
     ]
 
-    # field_row stays None when the record has no field link yet (a record can
-    # carry a category without one), so it is initialised before the branch.
-    field_row = None
-    field_name = None
-    if record.field_id is not None:
-        field_row = await session.get(Field, record.field_id)
-        field_name = field_row.name if field_row else None
     if record.category_id is not None:
         category = await session.get(Category, record.category_id)
         if category is not None:
-            detail = f"رشته: {field_name or record.field} · دسته: {category.name}"
-            if field_row is not None and field_row.matched_keyword:
-                detail += f" · کلیدواژه: {field_row.matched_keyword}"
-            steps.append({"title": "تعیین رشته و دسته", "sub": detail, "at": record.claimed_at})
-    elif field_row is not None:
-        steps.append({"title": "تعیین رشته و دسته", "sub": f"رشته: {field_name}", "at": record.claimed_at})
+            detail = f"رشته: {record.field} · دسته: {category.name}"
+            steps.append({"title": "تعیین دسته", "sub": detail, "at": record.claimed_at})
+    else:
+        steps.append({"title": "تعیین رشته", "sub": f"رشته: {record.field}", "at": record.claimed_at})
 
     model_name = prompt_version = None
     if record.model_id is not None:
@@ -550,7 +1039,7 @@ async def record_overview(session, record: Main) -> dict:
     channel display names, and audit history with usernames. Timestamps stay
     raw datetimes — routes format them for display.
     """
-    from app.db.models import Category, Channel, Delivery, Field, Model, Prompt
+    from app.db.models import Category, Model, Prompt
 
     deliveries_rows = (
         await session.execute(
@@ -587,17 +1076,10 @@ async def record_overview(session, record: Main) -> dict:
         prompt = await session.get(Prompt, record.prompt_id)
         if prompt is not None:
             prompt_version, prompt_text = prompt.version, prompt.system_prompt
-    snapshot_category = current_category = field_keyword = None
+    snapshot_category = None
     if record.category_id is not None:
         snapshot = await session.get(Category, record.category_id)
         snapshot_category = snapshot.name if snapshot else None
-    if record.field_id is not None:
-        field_row = await session.get(Field, record.field_id)
-        if field_row is not None:
-            field_keyword = field_row.matched_keyword
-            if field_row.category_id is not None:
-                current = await session.get(Category, field_row.category_id)
-                current_category = current.name if current else None
 
     audits = (
         await session.execute(
@@ -615,6 +1097,9 @@ async def record_overview(session, record: Main) -> dict:
         "deliveries": deliveries,
         "model_name": model_name, "model_base_url": model_base_url,
         "prompt_version": prompt_version, "prompt_text": prompt_text,
-        "snapshot_category": snapshot_category, "current_category": current_category,
-        "field_keyword": field_keyword, "history": history,
+        "snapshot_category": snapshot_category, "history": history,
+        # The LLM's classification with per-match explanation + the flag for
+        # the "unclassified" warning the categories tab shows.
+        "category_matches": await record_category_matches(session, record.id),
+        "classification_fallback": await record_matches_fallback_only(session, record.id),
     }

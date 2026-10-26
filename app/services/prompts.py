@@ -57,3 +57,29 @@ async def activate_prompt(session, row: Prompt) -> Prompt:
     await session.commit()
     await session.refresh(row)
     return row
+
+
+async def delete_prompt(session, row: Prompt) -> None:
+    """Delete an unused, inactive prompt version.
+
+    The active version is the one the Worker is generating with, and a version
+    referenced by a record is the audit trail of how that record was produced —
+    neither may be removed. Retire a version by activating another one instead.
+
+    Raises:
+        ValueError: ``prompt-active`` when the row is active,
+            ``prompt-in-use`` when records already reference it.
+    """
+    if row.is_active:
+        raise ValueError("prompt-active")
+
+    from app.db.models import Main
+
+    in_use = (
+        await session.execute(select(Main.id).where(Main.prompt_id == row.id).limit(1))
+    ).scalar_one_or_none()
+    if in_use is not None:
+        raise ValueError("prompt-in-use")
+
+    await session.delete(row)
+    await session.commit()

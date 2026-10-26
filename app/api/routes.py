@@ -21,6 +21,7 @@ from app.api.limits import limiter
 from app.auth.secret import verify_secret
 from app.db.connection import get_session
 from app.schemas.news import (
+    ClassificationResponse,
     ConnectionTestResponse,
     DeliveryInfo,
     DeliveryListResponse,
@@ -246,6 +247,152 @@ async def _record_detail_payload(session: AsyncSession, record) -> dict:
     return await record_service.record_detail(session, record)
 
 
+@router.get(
+    "/records/{record_id}/classification",
+    response_model=ClassificationResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+    },
+)
+async def get_record_classification(
+    record_id: int = Path(..., description="The record identifier."),
+    shared_Secret: str = Query("", description="Authentication secret."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Lightweight classification payload: only the stored matches.
+
+    The v2-combined generation stores up to 3 ISCED-F 2013 matches per record
+    (``main_category_matches``); this endpoint returns exactly those, with the
+    primary flagged, without the full record body.
+    """
+    if not verify_secret(shared_Secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from app.services import records as record_service
+
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return {
+        "record_id": record.id,
+        "category_id": record.category_id,
+        "matches": await record_service.record_category_matches(session, record.id),
+    }
+
+
+@router.post(
+    "/records/{record_id}/category-matches",
+    response_model=ClassificationResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        422: {"model": ErrorResponse, "description": "Unknown category name or invalid payload"},
+    },
+)
+async def override_category_matches(
+    record_id: int = Path(..., description="The record identifier."),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Manual override: a reviewer replaces the stored classification.
+
+    Body: ``{ "shared_Secret", "matches": [{"category", "score", "reason"}] }``.
+    The list REPLACES the previous matches (LLM answer included); the
+    top-scoring entry becomes the primary category. Names must be exact live
+    categories (the 29 ISCED-F 2013 names or ``other``); scores are clamped
+    to [0, 1]. Audited.
+    """
+    from app.schemas.news import CategoryMatchesOverrideRequest
+    from app.services import audit as audit_service
+    from app.services import records as record_service
+
+    _require_secret(payload)
+    try:
+        data = CategoryMatchesOverrideRequest(**(payload or {}))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        await record_service.replace_category_matches(
+            session,
+            record_id,
+            [
+                {"category": m.category, "score": m.score, "reason": m.reason}
+                for m in data.matches
+            ],
+        )
+    except ValueError as e:
+        message = str(e)
+        if message.startswith("unknown-category:"):
+            raise HTTPException(
+                status_code=422, detail=f"Unknown category: {message.split(':', 1)[1]}"
+            )
+        if message == "not-found":
+            raise HTTPException(status_code=404, detail="Record not found")
+        if message == "too-many-matches":
+            raise HTTPException(status_code=422, detail="At most 5 matches")
+        raise HTTPException(status_code=422, detail=message)
+
+    record = await record_service.get_record(session, record_id)
+    matches = await record_service.record_category_matches(session, record_id)
+    names = ", ".join(m["category"] for m in matches) or "empty"
+    await audit_service.record_event(
+        session,
+        None,  # machine API: no panel user to attribute
+        "override_category_matches",
+        main_id=record_id,
+        detail=f"matches: {names}"[:500],
+    )
+    logger.info("Manual category override record=%s matches=%s", record_id, names)
+    return {
+        "record_id": record_id,
+        "category_id": record.category_id if record else None,
+        "matches": matches,
+    }
+
+
+@router.post(
+    "/records/{record_id}/republish",
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
+        404: {"model": ErrorResponse, "description": "Record not found"},
+        409: {"model": ErrorResponse, "description": "Record not published/approved or no matches"},
+    },
+)
+async def republish_record_endpoint(
+    record_id: int = Path(...),
+    payload: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-queue deliveries for the (possibly corrected) categories of a
+    published/approved record, without deleting anything already sent."""
+    from app.services import audit as audit_service
+    from app.services import records as record_service
+
+    _require_secret(payload)
+    body = payload or {}
+    record = await record_service.get_record(session, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    try:
+        queued = await record_service.republish_record(
+            session, record, body.get("username", "api"),
+        )
+    except ValueError as e:
+        message = str(e)
+        if message == "not-published":
+            raise HTTPException(status_code=409, detail="Record is not published or approved")
+        if message == "no-matches":
+            raise HTTPException(status_code=409, detail="Record has no category matches")
+        raise HTTPException(status_code=422, detail=message)
+    await audit_service.record_event(
+        session, None, "republish", main_id=record_id,
+        detail=f"queued={len(queued)}",
+    )
+    return {"record_id": record_id, "queued": queued}
+
+
 @router.patch(
     "/records/{record_id}",
     response_model=RecordDetailResponse,
@@ -271,9 +418,7 @@ async def review_record(
     sent); ``save_draft`` only edits the stored ``output_json``. Optional
     ``title``/``lead``/``body`` edit the output before the transition.
     """
-    from datetime import datetime
 
-    from sqlalchemy import select
 
     from app.schemas.news import ReviewActionRequest
     from app.services import records as record_service
@@ -454,6 +599,9 @@ async def get_stats(
     queue depth at a glance. Freshness is the newest ``main.heartbeat_at`` —
     the last time the generation Worker touched a job — and nothing else: no
     per-record processing times are exposed here (the demo must not show them).
+
+    ``records_by_category`` counts records by their PRIMARY (rank-1) match,
+    so a multi-category article is counted once, under its strongest match.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -465,6 +613,7 @@ async def get_stats(
         "records": await record_service.record_status_counts(session),
         "deliveries": await delivery_service.delivery_status_counts(session),
         "worker_last_heartbeat_at": await record_service.worker_heartbeat(session),
+        "records_by_category": await record_service.records_by_category(session),
     }
 
 
@@ -474,21 +623,19 @@ async def get_stats(
     responses={
         401: {"model": ErrorResponse, "description": "Missing or invalid shared_Secret"},
         404: {"model": ErrorResponse, "description": "Record not found"},
-        422: {"model": ErrorResponse, "description": "Pass exactly one of field or record_id"},
+        422: {"model": ErrorResponse, "description": "Missing or invalid record_id"},
     },
 )
 async def routing_preview(
     shared_Secret: str = Query("", description="Authentication secret."),
-    field: str | None = Query(None, description="Raw field name to resolve."),
-    record_id: int | None = Query(None, description="Existing record to resolve."),
+    record_id: int = Query(..., description="Existing record to resolve."),
     session: AsyncSession = Depends(get_session),
 ):
-    """Preview the routing chain: category, matched keyword, destination channels.
+    """Preview the routing chain for one record.
 
-    Read-only audit surface for the client: given a raw field name (or an
-    existing record), show which category it resolves to, which keyword
-    decided it, and which channels the sender would use right now (with the
-    route level of each). Uses the same resolver as the sender and the panel.
+    Shows the record's display primary category and the channels the sender
+    would use right now (with the category name that reached each). There is no
+    field-name classification path; classification is stored per record.
     """
     if not verify_secret(shared_Secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -496,9 +643,7 @@ async def routing_preview(
     from app.messaging.dispatcher import preview_routing
 
     try:
-        return await preview_routing(session, field=field, record_id=record_id)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return await preview_routing(session, record_id=record_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -541,7 +686,6 @@ async def list_models(
     session: AsyncSession = Depends(get_session),
 ):
     """List model configurations (key values never included)."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
@@ -555,7 +699,7 @@ async def create_model(
     payload: dict | None = None, session: AsyncSession = Depends(get_session)
 ):
     """Create a model row (inactive by default; use activate for single-active)."""
-    from app.schemas.news import ModelCreateRequest, ModelResponse
+    from app.schemas.news import ModelCreateRequest
     from app.services import models as model_service
 
     _require_secret(payload)
@@ -583,7 +727,6 @@ async def get_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Retrieve one model configuration."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     if not verify_secret(shared_Secret):
@@ -601,7 +744,7 @@ async def update_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Update a model row (is_active only via activate, never here)."""
-    from app.schemas.news import ModelResponse, ModelUpdateRequest
+    from app.schemas.news import ModelUpdateRequest
     from app.services import models as model_service
 
     _require_secret(payload)
@@ -635,7 +778,6 @@ async def activate_model(
     session: AsyncSession = Depends(get_session),
 ):
     """Activate one model atomically (exactly one active row afterwards)."""
-    from app.schemas.news import ModelResponse
     from app.services import models as model_service
 
     _require_secret(payload)

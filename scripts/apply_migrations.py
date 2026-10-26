@@ -48,6 +48,24 @@ async def apply_migrations():
             print(f"APPLY {f.name}")
 
         print("Done.")
+        try:
+            from app.news.isced import ISCED_CATEGORIES, OTHER_CATEGORY
+
+            expected = {name for name, _ in ISCED_CATEGORIES} | {OTHER_CATEGORY}
+            rows = await conn.fetch(
+                "SELECT name FROM categories WHERE short_code IS NOT NULL"
+            )
+            actual = {r["name"] for r in rows}
+            missing = expected - actual
+            if missing:
+                print("WARNING: categories missing short_code:", sorted(missing))
+            if len(rows) != len(expected):
+                print(
+                    "WARNING: expected %d short codes, found %d"
+                    % (len(expected), len(rows))
+                )
+        except Exception as exc:  # pragma: no cover - verification only
+            print("WARNING: could not verify short codes:", exc)
     finally:
         await conn.close()
 

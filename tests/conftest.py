@@ -25,7 +25,6 @@ _PG_SCHEME = "postgresql" if _PARTS.scheme.startswith("postgresql") else _PARTS.
 _PG_URL = urlunsplit((_PG_SCHEME, _PARTS.netloc, f"/{TEST_DB_NAME}", _PARTS.query, _PARTS.fragment))
 
 import asyncpg
-import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
@@ -90,7 +89,7 @@ async def session(test_database):
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE deliveries, field_channel_routes, category_channel_routes, channels, "
+                "TRUNCATE deliveries, main_category_matches, category_channel_routes, channels, "
                 "main, fields, categories, models, prompts, "
                 "audit_logs, panel_users RESTART IDENTITY CASCADE"
             )

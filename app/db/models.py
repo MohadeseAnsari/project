@@ -30,29 +30,50 @@ class Base(DeclarativeBase):
 
 
 class Category(Base):
-    """A deterministic field category (e.g. ``پزشکی و علوم سلامت``, ``other``)."""
+    """A destination bucket for classification.
+
+    Two vocabularies met here during the v2-combined migration. The LLM
+    classifies against the 29 ISCED-F 2013 intermediate fields (+ the ``other``
+    fallback); those rows have ``deprecated = FALSE`` and are the only ones a
+    NEW record references. The old rule-based categories were remapped onto
+    these rows and deleted by migration 024, so historical
+    ``fields``/``main``/``deliveries`` FKs point at live ISCED rows (or NULL
+    where no honest equivalent existed). The ``deprecated`` flag remains for
+    future retirement without breaking FKs.
+
+    ``isc_code`` records the indicative ISCED-F 2013 reference code (metadata
+    only; routing never reads it).
+    """
 
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
     description = Column(Text, nullable=True)
+    deprecated = Column(Boolean, nullable=False, default=False, server_default="false")
+    isc_code = Column(String(10), nullable=True)
+    # Internal compact code for LLM output (0 = other, 1-29 = ISCED). NULL for
+    # deprecated/retired rows. NOT the official ISCED-F 2013 code (see isc_code).
+    short_code = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    fields = relationship("Field", back_populates="category")
     main_records = relationship("Main", back_populates="category")
     channel_routes = relationship(
         "CategoryChannelRoute", back_populates="category", cascade="all, delete-orphan"
     )
+    main_matches = relationship(
+        "MainCategoryMatch", back_populates="category", cascade="all, delete-orphan"
+    )
 
 
 class Field(Base):
-    """A known thesis field.
+    """A normalized thesis-field name, kept only as a dedup identity.
 
-    ``normalized_name`` is the stable identity used for exact matching and
-    duplicate prevention;     ``source`` distinguishes spreadsheet-seeded fields
-    from runtime-discovered ones; ``matched_keyword`` records WHY the field
-    got its category (see ``classify_with_reason``).
+    Classification is not stored here. The LLM classifies each record during
+    generation and the result lives in ``main_category_matches``; a reviewer
+    can replace it manually. ``normalized_name`` is the stable identity used to
+    avoid duplicate field rows, and ``source`` records how the row was first
+    seen (spreadsheet, runtime, manual seed).
     """
 
     __tablename__ = "fields"
@@ -60,17 +81,10 @@ class Field(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(500), unique=True, nullable=False)
     normalized_name = Column(String(500), unique=True, nullable=False)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     source = Column(String(20), nullable=False, default="spreadsheet")
-    matched_keyword = Column(String(200), nullable=True)
-    category_source = Column(String(20), nullable=False, default="rules")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    category = relationship("Category", back_populates="fields")
     main_records = relationship("Main", back_populates="field_record")
-    channel_routes = relationship(
-        "FieldChannelRoute", back_populates="field_record", cascade="all, delete-orphan"
-    )
 
 
 class Model(Base):
@@ -174,9 +188,13 @@ class Main(Base):
     ``ready`` → ``processing`` → ``review`` → ``approved`` → ``published``,
     plus ``rejected`` (human rejection from ``review``) and ``failed``.
     ``claimed_at``/``heartbeat_at`` support Worker crash recovery;
-    ``field_id``/``category_id``/``model_id``/``prompt_id`` provide
-    auditability of the classification and generation configuration used;
-    ``approved_at``/``published_at`` record the decision/publication times.
+    ``field_id``/``model_id``/``prompt_id`` provide auditability of the field
+    identity and generation configuration used; ``approved_at``/``published_at``
+    record the decision/publication times.
+
+    ``category_id`` is the DISPLAY primary category only (the LLM's top
+    match, or a reviewer's manual choice). It is deprecated for routing:
+    delivery resolution reads ``main_category_matches``.
     """
 
     __tablename__ = "main"
@@ -205,6 +223,9 @@ class Main(Base):
     model_id = Column(Integer, ForeignKey("models.id"), nullable=True)
     prompt_id = Column(Integer, ForeignKey("prompts.id"), nullable=True)
     output_json = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    # Optional audit copy of the FULL raw LLM response JSON (feature flag
+    # ``store_llm_raw_output``). NULL by default to save ~200 bytes/record.
+    llm_raw_output = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
     heartbeat_at = Column(DateTime, nullable=True)
@@ -220,6 +241,52 @@ class Main(Base):
     deliveries = relationship(
         "Delivery", back_populates="article", cascade="all, delete-orphan"
     )
+    category_matches = relationship(
+        "MainCategoryMatch",
+        back_populates="article",
+        cascade="all, delete-orphan",
+        order_by="MainCategoryMatch.rank",
+    )
+
+
+class MainCategoryMatch(Base):
+    """One stored classification answer for a record (v2-combined).
+
+    The single generation call classifies each thesis into up to
+    ``settings.top_n_categories`` ISCED-F 2013 categories; every qualifying
+    match (score >= ``settings.min_category_relevance``, exact category name)
+    becomes a row here, ranked 1..N by score. ``rank == 1`` is the primary.
+
+    Rows are replaced wholesale on regeneration/manual override. A record
+    whose only row is the ``other`` fallback (score 0.0, rank 1,
+    reason ``no auto-match``) received no auto-deliveries and waits for a
+    reviewer's manual assignment.
+
+    ``model_id``/``prompt_id`` snapshot WHICH configuration classified the
+    record; ``deliveries.category_id`` snapshots only the top-1 category for
+    audit (a known limitation in the multi-category case).
+    """
+
+    __tablename__ = "main_category_matches"
+    __table_args__ = (
+        CheckConstraint("score >= 0.0 AND score <= 1.0", name="ck_main_category_matches_score"),
+        CheckConstraint("rank >= 1 AND rank <= 5", name="ck_main_category_matches_rank"),
+        Index("ix_main_cat_matches_main_id", "main_id"),
+        Index("ix_main_cat_matches_score", "main_id", "score"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    main_id = Column(Integer, ForeignKey("main.id", ondelete="CASCADE"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    score = Column(Float, nullable=False)
+    rank = Column(Integer, nullable=False)
+    reason = Column(Text, nullable=True)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
+    prompt_id = Column(Integer, ForeignKey("prompts.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    article = relationship("Main", back_populates="category_matches")
+    category = relationship("Category", back_populates="main_matches")
 
 
 class Channel(Base):
@@ -259,38 +326,16 @@ class Channel(Base):
     #: channel added today never inherits the archive that predates it.
     activated_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    routes = relationship("FieldChannelRoute", back_populates="channel")
     category_routes = relationship("CategoryChannelRoute", back_populates="channel")
     deliveries = relationship("Delivery", back_populates="channel")
-
-
-class FieldChannelRoute(Base):
-    """The one-to-many field -> channel mapping.
-
-    Today every field routes to the single Bale channel, but the mapping is a
-    table rather than a constant so splitting fields across Bale/Telegram
-    channels later is a row insert and not a code change.
-    """
-
-    __tablename__ = "field_channel_routes"
-
-    field_id = Column(Integer, ForeignKey("fields.id", ondelete="CASCADE"), primary_key=True)
-    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-
-    field_record = relationship("Field", back_populates="channel_routes")
-    channel = relationship("Channel", back_populates="routes")
 
 
 class CategoryChannelRoute(Base):
     """The category -> channel mapping: the business routing chain.
 
-    An article reaches a channel through field -> category -> channels, so
-    the category (not each of the 500+ fields) is what the owner manages.
-    ``field_channel_routes`` stays as the field-level exception table and is
-    consulted when a category has no route; unmapped categories fall back to
-    all active channels. The permissive seed (every category to every active
-    channel) preserves pre-existing publishing behavior until refined.
+    An article reaches a channel through its category matches -> category
+    channels. There is no field-level routing fallback: a category with no
+    routes publishes nowhere, which keeps the panel's choice authoritative.
     """
 
     __tablename__ = "category_channel_routes"

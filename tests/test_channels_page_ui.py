@@ -25,8 +25,9 @@ from app.db.models import (
     PanelUser,
     Role,
 )
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
+from tests.routing_setup import route_all_active
 
 
 async def _admin(session: AsyncSession) -> None:
@@ -57,6 +58,11 @@ async def _world(session: AsyncSession, channels: int = 2) -> list[Channel]:
         session.add(channel)
         rows.append(channel)
     await session.commit()
+    # The channels page now shows which categories route to each channel, so a
+    # world with categories and no mapping would render an empty strip.
+    categories = (await session.execute(select(Category))).scalars().all()
+    for category in categories:
+        await route_all_active(session, category)
     return rows
 
 
@@ -82,16 +88,24 @@ async def test_the_page_is_about_channels_only(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_the_rule_is_stated_plainly_with_the_one_control_that_matters(
-    session: AsyncSession,
-):
+async def test_the_page_says_delivery_follows_the_category(session: AsyncSession):
+    """The note must not still claim a broadcast that no longer happens.
+
+    This page used to tell the operator "every article goes to every active
+    channel, switch a channel off to stop it". Routing made both halves false,
+    and a note that lies about where news goes is worse than no note: it is
+    what the operator trusts when news does not arrive.
+    """
     await _admin(session)
     await _world(session)
     async with panel_client() as client:
         await _login(client)
         page = await client.get("/channels")
-    assert "همهٔ کانال‌های فعال" in page.text
-    assert "خاموش کنید" in page.text, "it says the only way to exclude a channel"
+    assert "همهٔ کانال‌های فعال" not in page.text
+    assert "بر اساس" in page.text and "دستهٔ" in page.text, (
+        "it says delivery is decided by the category"
+    )
+    assert "دسته‌بندی و مسیریابی" in page.text, "and where to configure it"
 
 
 @pytest.mark.asyncio

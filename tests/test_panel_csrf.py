@@ -10,8 +10,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.panel.app import panel_app
-from app.panel.auth import hash_password
 from app.panel.csrf import csrf_token_for_cookie
+from app.services.passwords import hash_password
 
 
 def _raw() -> AsyncClient:
@@ -19,8 +19,9 @@ def _raw() -> AsyncClient:
 
 
 async def _admin(session: AsyncSession, username: str = "csrf-admin") -> None:
-    from app.db.models import PanelUser, Role
     from sqlalchemy import select
+
+    from app.db.models import PanelUser, Role
 
     role = (await session.execute(select(Role).where(Role.name == "admin"))).scalar_one_or_none()
     if role is None:
@@ -80,8 +81,9 @@ async def test_invalid_token_rejected(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_valid_token_accepted(session: AsyncSession):
     """The session-bound token lets a compliant browser through."""
-    from app.db.models import Main
     from sqlalchemy import select
+
+    from app.db.models import Main
 
     await _admin(session)
     async with _raw() as client:

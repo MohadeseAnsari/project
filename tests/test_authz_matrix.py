@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.connection import async_session
 from app.db.models import AuditLog, Channel, Delivery, Main, PanelUser, Role
 from app.panel.app import panel_app
-from app.panel.auth import hash_password
 from app.panel.authz import Action, can, require
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 #: role -> allowed actions. This table IS the policy (see docs/admin-panel.md).
@@ -29,14 +29,12 @@ EXPECTED_MATRIX = {
         Action.REVIEW_RECORD,
         Action.RETRY_DELIVERY,
         Action.SUBMIT_RECORD,
-        Action.FIELD_CURATE,
     },
     "admin": {
         Action.VIEW_RECORDS,
         Action.REVIEW_RECORD,
         Action.RETRY_DELIVERY,
         Action.SUBMIT_RECORD,
-        Action.FIELD_CURATE,
         Action.MANAGE_CONFIG,
         Action.MANAGE_USERS,
         Action.VIEW_AUDIT,

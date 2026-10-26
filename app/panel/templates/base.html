@@ -1,37 +1,57 @@
+{% from "icons.html" import glyph %}
+{% macro nav_item(href, key, icon, label) -%}
+<a href="{{ href }}" class="{% if active == key %}on{% endif %}"{% if active == key %} aria-current="page"{% endif %}><span class="ic">{{ glyph(icon) }}</span>{{ label }}</a>
+{%- endmacro %}
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
-<head><meta charset="utf-8"><title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title><link rel="stylesheet" href="/static/panel.css?v={{ asset_v() }}"></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}کنسول ایران‌داک{% endblock %} — کنسول ایران‌داک</title>
+  <link rel="stylesheet" href="/static/panel.css?v={{ asset_v() }}">
+</head>
 <body>
 {% block layout %}
 <div class="grid">
   <aside>
     <div class="brand"><div class="logo">ا</div><div><b>ایران‌داک</b><span>تولید خودکار خبر</span></div></div>
-    <nav>
-      <a href="/" class="{% if active=='dashboard' %}on{% endif %}"><span class="ic">◧</span>داشبورد</a>
+    <nav aria-label="ناوبری اصلی">
+      {{ nav_item('/', 'dashboard', 'dashboard', 'داشبورد') }}
       {# One entry for both halves. Deliveries went back to being a tab of
          /records (the owner asked for the merge), and a second sidebar item
          pointing at a tab would be two doors to one room -- the operator would
          have to know which room the door they were about to click led to.
          The badge sums the two counts because both mean "waiting on you". #}
       {% set waiting = ((review_count or 0) + (gated_count or 0)) %}
-      <a href="/records" class="{% if active=='records' %}on{% endif %}"><span class="ic">☰</span>رکوردها و بازبینی{% if waiting %}<span class="cnt">{{ waiting|fa }}</span>{% endif %}</a>
+      <a href="/records" class="{% if active == 'records' %}on{% endif %}"{% if active == 'records' %} aria-current="page"{% endif %}>
+        <span class="ic">{{ glyph('records') }}</span>رکوردها و بازبینی
+        {% if waiting %}<span class="cnt">{{ waiting|fa }}</span>{% endif %}
+      </a>
       <div class="sep">تنظیمات</div>
-      <a href="/fields" class="{% if active=='fields' %}on{% endif %}"><span class="ic">◈</span>رشته‌ها</a>
-      <a href="/categories" class="{% if active=='categories' %}on{% endif %}"><span class="ic">◫</span>دسته‌ها و کلیدواژه‌ها</a>
-      <a href="/channels" class="{% if active=='channels' %}on{% endif %}"><span class="ic">⇄</span>کانال‌ها</a>
-      <a href="/prompts" class="{% if active=='prompts' %}on{% endif %}"><span class="ic">✎</span>پرامپت‌ها</a>
-      <a href="/models" class="{% if active=='models' %}on{% endif %}"><span class="ic">⚙</span>مدل‌ها</a>
+      {{ nav_item('/categories', 'categories', 'categories', 'دسته‌بندی و مسیریابی') }}
+      {{ nav_item('/channels', 'channels', 'channels', 'کانال‌ها') }}
+      {{ nav_item('/prompts', 'prompts', 'pencil', 'پرامپت‌ها') }}
+      {{ nav_item('/models', 'models', 'gear', 'مدل‌ها') }}
       <div class="sep">مدیریت</div>
-      <a href="/users" class="{% if active=='users' %}on{% endif %}"><span class="ic">◕</span>کاربران و نقش‌ها</a>
-      <a href="/audit" class="{% if active=='audit' %}on{% endif %}"><span class="ic">⌘</span>رویدادها</a>
+      {{ nav_item('/users', 'users', 'users', 'کاربران و نقش‌ها') }}
+      {{ nav_item('/audit', 'audit', 'audit', 'رویدادها') }}
     </nav>
     {% if current_user %}
-    <div class="side-foot"><div class="avatar">{{ current_user.username[:1] }}</div><div><b style="font-size:12.5px"><a href="/profile" style="color:inherit;text-decoration:none">{{ current_user.username }}</a></b><small>{{ role_fa(current_user) }}</small></div></div>
+    <div class="side-foot">
+      <div class="avatar">{{ current_user.username[:1] }}</div>
+      <div class="grow">
+        <b style="font-size:12px"><a href="/profile" style="color:inherit;text-decoration:none">{{ current_user.username }}</a></b>
+        <small>{{ role_fa(current_user) }}</small>
+      </div>
+    </div>
     {% endif %}
   </aside>
   <main>
     <header class="top">
-      <div><h1>{% block h1 %}{% endblock %}</h1><div class="crumb">{% block crumb %}کنسول{% endblock %}</div></div>
+      <div>
+        <h1>{% block h1 %}{% endblock %}</h1>
+        <div class="crumb">{% block crumb %}کنسول{% endblock %}</div>
+      </div>
       <div class="grow"></div>
       {% block top_actions %}{% endblock %}
     </header>
@@ -41,11 +61,11 @@
       {% block content %}{% endblock %}
     </div>
     {# Which build is on screen. A cached stylesheet served to a page opened
-       before a deploy looks exactly like a deploy that never happened. Styled
-       with the existing .hint class so the design is unchanged. #}
+       before a deploy looks exactly like a deploy that never happened. #}
     <div class="wrap" style="padding-top:0"><div class="hint">نسخهٔ {{ build_stamp() }}</div></div>
   </main>
 </div>
 {% endblock %}
 <script src="/static/htmx.min.js?v={{ asset_v() }}" defer></script>
-</body></html>
+</body>
+</html>

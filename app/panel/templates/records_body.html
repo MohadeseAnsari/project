@@ -3,6 +3,15 @@
    Included, never rendered directly: it carries no {% extends %} and no
    layout of its own, so it can only appear inside the tabbed page. #}
 
+{% if not require_human_confirmation %}
+<div class="note page-section">
+  ⚠️ انتشار خودکار روشن است. خبرها بدون بازبینی انسانی به کانال‌های دسته‌های منطبق ارسال می‌شوند.
+  <a href="/records?auto_published=yes">مشاهدهٔ منتشرشده‌های خودکار</a> ·
+  {% if unmatched_category_behavior == 'review' %}<a href="/records?needs_classification=yes">نیازمند دسته‌بندی دستی</a> ·{% endif %}
+  <a href="/records?status=failed">ناموفق‌ها</a>
+</div>
+{% endif %}
+
 <div class="kpi-row">
   <div class="kpi"><div class="b b-violet">★</div><div><div class="n">{{ kpi_review|fa }}</div><div class="t">در انتظار بازبینی</div></div></div>
   <div class="kpi"><div class="b b-amber">…</div><div><div class="n">{{ kpi_queued|fa }}</div><div class="t">در صف پردازش</div></div></div>
@@ -19,6 +28,12 @@
         <a href="/records?status=published" style="text-decoration:none;color:inherit"><span class="{% if status=='published' %}on{% endif %}">منتشرشده</span></a>
         <a href="/records?status=failed" style="text-decoration:none;color:inherit"><span class="{% if status=='failed' %}on{% endif %}">ناموفق</span></a>
         <a href="/records?status=ready" style="text-decoration:none;color:inherit"><span class="{% if status=='ready' %}on{% endif %}">در صف</span></a>
+        {% if require_human_confirmation is false %}
+        <a href="/records?auto_published=yes" style="text-decoration:none;color:inherit"><span class="{% if auto_published=='yes' %}on{% endif %}">منتشرشدهٔ خودکار</span></a>
+        {% endif %}
+        {% if unmatched_category_behavior == 'review' %}
+        <a href="/records?needs_classification=yes" style="text-decoration:none;color:inherit"><span class="{% if needs_classification=='yes' %}on{% endif %}">نیازمند دسته‌بندی</span></a>
+        {% endif %}
       </div>
       <select name="field"><option value="">همهٔ رشته‌ها</option>{% for f in field_options %}<option value="{{ f }}" {% if field==f %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
       <select name="university"><option value="">همهٔ دانشگاه‌ها</option>{% for u in university_options %}<option value="{{ u }}" {% if university==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>

@@ -3,12 +3,11 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.panel.app import panel_app
-from app.panel.auth import hash_password
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
@@ -457,8 +456,9 @@ async def test_templates_have_balanced_jinja_comments():
 
 def test_every_template_still_parses():
     """Catch a broken block/if/endif at import time rather than on a request."""
-    from jinja2 import Environment, FileSystemLoader
     from pathlib import Path
+
+    from jinja2 import Environment, FileSystemLoader
 
     env = Environment(loader=FileSystemLoader("app/panel/templates"))
     for template in Path("app/panel/templates").glob("*.html"):
@@ -492,8 +492,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
         "/": "داشبورد",
         "/records": "رکوردها و بازبینی",
         "/records?tab=deliveries": "ارسال‌ها و تحویل",
-        "/fields": "رشته‌ها",
-        "/categories": "دسته‌ها و کلیدواژه‌ها",
+        "/categories": "دسته‌بندی و مسیریابی",
         "/channels": "کانال‌ها",
         "/models": "مدل‌ها",
         "/prompts": "پرامپت‌ها",
@@ -521,8 +520,7 @@ async def test_all_panel_pages_render(session: AsyncSession):
             assert (await client.get(new_path)).status_code == 200
         detail = await client.get(f"/records/{row.id}")
         assert detail.status_code == 200
-        assert "دستهٔ ثبت‌شده" in detail.text
-        assert "دستهٔ کنونی رشته" in detail.text
+        assert "دستهٔ اصلی" in detail.text
         delivery_tab = await client.get(f"/records/{row.id}", params={"tab": "delivery"})
         assert "پیش‌نمایش پیام" in delivery_tab.text
 
@@ -706,7 +704,7 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
     """Bulk approve stamps, releases, and audits each eligible record; skips the rest."""
     from sqlalchemy import select
 
-    from app.db.models import AuditLog, Delivery, Main
+    from app.db.models import AuditLog, Main
 
     await _user(session, "panel-admin")
     rows = []
@@ -758,7 +756,6 @@ async def test_bulk_approve_releases_backlog(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_panel_release_is_audited(session: AsyncSession):
     """Panel release flips the row and records who released it."""
-    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -853,7 +850,7 @@ async def test_user_delete_safeguards(session: AsyncSession):
     """Self-delete and last-admin delete are refused; every delete tombstones."""
     from sqlalchemy import select
 
-    from app.db.models import AuditLog, PanelUser
+    from app.db.models import PanelUser
 
     await _user(session, "panel-admin")
     await _user_with_role(session, "panel-editor", "editor")
@@ -926,7 +923,6 @@ async def test_a_deleted_user_disappears_from_the_panel(session: AsyncSession):
 async def test_delete_last_admin_refused_at_service(session: AsyncSession):
     """The sole active admin survives even a privileged delete call."""
     import pytest
-
     from sqlalchemy import select
 
     from app.db.models import PanelUser
@@ -939,3 +935,100 @@ async def test_delete_last_admin_refused_at_service(session: AsyncSession):
     with pytest.raises(ValueError, match="last-admin"):
         await user_service.delete_user(session, admin, actor_id=editor.id)
     assert (await session.get(PanelUser, admin.id)).is_active is True
+
+
+@pytest.mark.asyncio
+async def test_models_page_never_renders_a_credential_hint(session: AsyncSession):
+    """The models page must not echo any part of an API key.
+
+    The old "اعتبار" column and the key field both printed masked hints such
+    as ``••••1234``; now only presence is described, never the value.
+    """
+    from app.credentials import encrypt
+    from app.db.models import Model
+
+    await _user(session)
+    session.add(
+        Model(
+            name="secret-model",
+            provider="openai",
+            version="v1",
+            is_active=True,
+            base_url="https://api.example/v1",
+            api_key_encrypted=encrypt("sk-super-secret-tail-1234"),
+        )
+    )
+    await session.commit()
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        page = await client.get("/models")
+
+    assert page.status_code == 200
+    assert "اعتبار" not in page.text
+    assert "••••" not in page.text
+    assert "1234" not in page.text
+    # The credential surface itself still exists, minus the value.
+    assert "کلید API" in page.text
+
+
+@pytest.mark.asyncio
+async def test_record_delete_from_panel(session: AsyncSession):
+    """Admins can permanently delete a record from the records table."""
+    from sqlalchemy import select
+
+    from app.db.models import Main
+
+    await _user(session)
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="ready")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        response = await client.post(f"/records/{rid}/delete", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/records"
+    remaining = (await session.execute(select(Main.id).where(Main.id == rid))).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_record_delete_refuses_processing_record(session: AsyncSession):
+    from app.db.models import Main
+
+    await _user(session)
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="processing")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-tester")
+        response = await client.post(f"/records/{rid}/delete")
+
+    assert response.status_code == 422
+    assert "در حال پردازش" in response.text
+
+
+@pytest.mark.asyncio
+async def test_record_delete_is_admin_only(session: AsyncSession):
+    from app.db.models import Main
+
+    await _user(session, "panel-admin")
+    await _user_with_role(session, "panel-editor", "editor")
+    row = Main(username="u", title="T", abstract="A", field="پزشکی", university="U",
+               author="A", supervisor="S", status="ready")
+    session.add(row)
+    await session.commit()
+    rid = row.id
+
+    async with _client() as client:
+        await _login(client, "panel-editor")
+        response = await client.post(f"/records/{rid}/delete")
+
+    assert response.status_code == 403

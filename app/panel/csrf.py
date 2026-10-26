@@ -16,8 +16,8 @@ before the session does). ``/logout`` is exempt too (signed-cookie deletion
 only).
 """
 
-import hmac
 import hashlib
+import hmac
 import logging
 
 from fastapi import Request

@@ -66,7 +66,7 @@ async def test_every_page_carries_the_build_stamp(session):
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.db.models import PanelUser, Role
-    from app.panel.auth import hash_password
+    from app.services.passwords import hash_password
     from tests.panel_test_client import panel_client
 
     async def _admin(session: AsyncSession) -> None:
@@ -85,11 +85,11 @@ async def test_every_page_carries_the_build_stamp(session):
                           follow_redirects=False)
         # Real pages in the CURRENT design: /deliveries and /categories are
         # 301 stubs onto a tab, so they are not pages to stamp.
-        for path in ("/", "/records", "/fields", "/channels", "/models", "/users", "/audit"):
+        for path in ("/", "/records", "/categories", "/channels", "/models", "/users", "/audit"):
             page = await client.get(path)
             assert page.status_code == 200, path
             assert re.search(r"نسخهٔ [0-9a-f]{10}", page.text), f"{path} has no build stamp"
-            assert f"/static/panel.css?v=" in page.text, f"{path} loads an unversioned stylesheet"
+            assert "/static/panel.css?v=" in page.text, f"{path} loads an unversioned stylesheet"
 
 
 def test_the_whole_suite_of_templates_compiles():

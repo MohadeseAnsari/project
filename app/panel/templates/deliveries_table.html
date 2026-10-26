@@ -1,14 +1,16 @@
 {% from "icons.html" import icon, icon_link %}
+{% from "platforms.html" import platform_badge %}
 <table>
   <thead>
-    <tr><th style="width:66px">شناسه</th><th>رکورد و خبر</th><th style="width:92px">کانال</th><th style="width:130px">دسته / مسیر</th><th style="width:96px">تلاش</th>
-    <th style="width:150px">شناسهٔ پیام کانال</th><th style="width:158px">وضعیت</th><th style="width:120px">عملیات</th></tr>
+    <tr><th style="width:66px">شناسه</th><th>رکورد و خبر</th><th style="width:92px">کانال</th><th style="width:84px">سکو</th><th style="width:130px">دسته / مسیر</th><th style="width:96px">تلاش</th>
+    <th style="width:150px">شناسهٔ پیام کانال</th><th style="width:158px">وضعیت</th><th style="width:132px">عملیات</th></tr>
   </thead>
   <tbody>
     {% for d in items %}
     <tr class="table-row"><td class="num">{{ d.id|fa }}</td>
       <td class="title">{{ d.title }}<span class="sub">رکورد {{ d.main_id|fa }} · {{ d.field }}</span></td>
       <td>{{ d.channel_name }}</td>
+      <td>{{ platform_badge(d.platform) }}</td>
       <td><small>{{ d.category_name }}{% if d.route_source %} · {{ d.route_source }}{% endif %}</small></td>
       <td class="num">{{ d.attempts|fa if d.attempts else '—' }}</td>
       <td class="num">{{ d.platform_message_id or '—' }}</td>

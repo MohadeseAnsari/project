@@ -13,9 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Category, Channel, Field, Main, PanelUser, Role
-from app.panel.app import panel_app
-from app.panel.auth import hash_password
 from app.services import models as model_service
+from app.services.passwords import hash_password
 from tests.panel_test_client import panel_client
 
 
@@ -105,8 +104,8 @@ async def test_only_the_active_model_is_reported(session: AsyncSession, monkeypa
 @pytest.mark.asyncio
 async def test_health_never_exposes_the_key(session: AsyncSession, monkeypatch):
     """Whatever the state, no credential value comes back."""
-    from app.credentials import encrypt
     from app.config import settings
+    from app.credentials import encrypt
 
     monkeypatch.setattr(settings, "avalai_api_key", "")
     _model(session, api_key_encrypted=encrypt("sk-SUPER-SECRET-KEY"))
@@ -127,7 +126,7 @@ async def _seed(session: AsyncSession) -> None:
     category = Category(name="پزشکی و علوم سلامت", description="Medical")
     session.add(category)
     await session.commit()
-    session.add(Field(name="f", normalized_name="f", category_id=category.id))
+    session.add(Field(name="f", normalized_name="f"))
     session.add(Channel(platform="bale", chat_id=90001, is_active=True))
     await session.commit()
     session.add(Main(username="u", title="T", abstract="A", field="پزشکی", university="U",

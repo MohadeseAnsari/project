@@ -1,10 +1,11 @@
 {% from "icons.html" import icon, icon_link %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr>
       <th style="width:36px"><input type="checkbox" data-select-all title="انتخاب همهٔ این صفحه"></th><th style="width:58px">شناسه</th><th>عنوان پایان‌نامه</th><th style="width:112px">رشته</th>
-      <th style="width:142px">دانشگاه</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
-      <th style="width:88px">عملیات</th>
+      <th style="width:142px">دانشگاه</th><th style="width:132px">دستهٔ اصلی</th><th style="width:158px">وضعیت</th><th style="width:104px">تاریخ ثبت</th>
+      <th style="width:132px">عملیات</th>
     </tr>
   </thead>
   <tbody>
@@ -15,6 +16,14 @@
       <td class="title">{{ r.title }}<span class="sub">نویسنده: {{ r.author }} · استاد: {{ r.supervisor }}</span></td>
       <td>{{ r.field }}</td>
       <td>{{ r.university }}</td>
+      <td>
+        {# Primary classification + extra-match count (the v2 multi-category
+           answer). The badge only appears from the SECOND match on: a single
+           match is the whole answer and needs no counter. #}
+        {% set cv = category_view.get(r.id) if category_view is defined else None %}
+        {% if cv and cv.name %}{{ cv.name }}{% if cv.extras > 0 %} <span class="badge s-processing">+ {{ cv.extras|fa }}</span>{% endif %}
+        {% else %}<span class="hint">—</span>{% endif %}
+      </td>
       <td>
         {% if r.status == 'review' %}<span class="badge s-review">★ در انتظار بازبینی</span>
         {% elif r.status == 'approved' %}<span class="badge s-ready">✓ تأیید شده</span>
@@ -34,11 +43,13 @@
         {% else %}
         {{ icon_link('/records/' ~ r.id, 'eye', 'این خبر را مشاهده کن') }}
         {% endif %}
+        <form method="post" action="/records/{{ r.id }}/delete" style="display:inline" onsubmit="return confirm('رکورد {{ r.id|fa }} برای همیشه حذف شود؟ اگر خبر منتشر شده باشد، پیام‌ها روی کانال‌ها باقی می‌مانند (برای حذف آنها از کانال از «حذف از همهٔ کانال‌ها» استفاده کنید).')">{{ csrf_field(request) | safe }}{{ icon('trash', 'رکورد ' ~ r.id ~ ' را حذف کن', 'danger') }}</form>
       </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="foot">
   نمایش {{ ((page - 1) * page_size + 1)|fa }} تا {{ ([page * page_size, total]|min)|fa }} از {{ total|fa }} رکورد
   <div class="pager">

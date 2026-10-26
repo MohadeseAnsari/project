@@ -12,33 +12,40 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main
+from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from app.messaging.dispatcher import (
     claim_next_delivery,
     confirm_deliveries_for_article,
     ensure_pending_deliveries,
 )
+from tests.routing_setup import route_category
 
 OUTPUT = {"title": "عنوان", "lead": "لید", "body": "متن کامل"}
 
 _field_counter = itertools.count(1000)
 
 
-async def _field(session: AsyncSession) -> Field:
-    """Create a field with a unique name (``fields.name`` is UNIQUE)."""
+async def _category(session: AsyncSession) -> Category:
     cat = await session.get(Category, 1)
     if cat is None:
         cat = Category(name="پزشکی و علوم سلامت", description="Medical")
         session.add(cat)
         await session.commit()
+    return cat
+
+
+async def _field(session: AsyncSession) -> Field:
+    """Create a field with a unique name (``fields.name`` is UNIQUE)."""
     unique = f"gate-field-{next(_field_counter)}"
-    field = Field(name=unique, normalized_name=unique, category_id=cat.id)
+    field = Field(name=unique, normalized_name=unique)
     session.add(field)
     await session.commit()
     return field
 
 
 async def _article(session: AsyncSession, field: Field) -> Main:
+    """A review record WITH the qualifying match the resolver reads."""
+    category = await _category(session)
     article = Main(
         username="tester",
         title="Thesis",
@@ -49,9 +56,14 @@ async def _article(session: AsyncSession, field: Field) -> Main:
         supervisor="Supervisor",
         status="review",
         field_id=field.id,
+        category_id=category.id,
         output_json=dict(OUTPUT),
     )
     session.add(article)
+    await session.flush()
+    session.add(MainCategoryMatch(
+        main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+    ))
     await session.commit()
     return article
 
@@ -66,8 +78,10 @@ async def test_gate_on_queues_awaiting_confirmation(
     channel = Channel(platform="bale", chat_id=9001, username="@c")
     session.add(channel)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    # Routing is by CATEGORY now, so a field->channel row would be inert and
+    # the gate would have nothing to act on. Point the field's category at the
+    # channel instead -- which is what the panel's per-category picker writes.
+    await route_category(session, await _category(session), [channel])
     article = await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -88,8 +102,10 @@ async def test_gate_off_queues_pending_directly(
     channel = Channel(platform="bale", chat_id=9002, username="@c")
     session.add(channel)
     await session.commit()
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    # Routing is by CATEGORY now, so a field->channel row would be inert and
+    # the gate would have nothing to act on. Point the field's category at the
+    # channel instead -- which is what the panel's per-category picker writes.
+    await route_category(session, await _category(session), [channel])
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -109,13 +125,11 @@ async def test_confirm_flips_only_gated_rows(
     second = Channel(platform="telegram", chat_id=9004, username="@c")
     session.add_all([first, second])
     await session.commit()
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
+    # Category routing (see the note in the sibling test): the field's category
+    # names both channels, which is what makes two deliveries to appear.
+    await route_category(
+        session, await _category(session), [first, second]
     )
-    await session.commit()
     article = await _article(session, field)
     assert await ensure_pending_deliveries(session) == 2
 

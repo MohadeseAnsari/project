@@ -22,13 +22,13 @@
     </div>
   </div>
 
-  <div style="display:flex;flex-direction:column;gap:14px">
-    <div class="card"><h3>نسخه‌ها</h3><div class="body" style="display:flex;flex-direction:column;gap:9px">
+  <div class="stack">
+    <div class="card"><h3>نسخه‌ها</h3><div class="body version-list">
       {% for p in prompts %}
       {% if p.is_active %}
-      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><span class="badge s-sent">فعال</span><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
+      <div class="version-row on"><b>{{ p.version }}</b><span class="grow"></span><span class="badge s-sent">فعال</span><small>{{ p.created_at|jalali }}</small></div>
       {% else %}
-      <div style="display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;padding:10px"><b style="font-size:13px">{{ p.version }}</b><span class="grow"></span><form method="post" action="/prompts/{{ p.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('retry', 'پرامپت نسخهٔ ' ~ p.version ~ ' را دوباره فعال کن') }}</form><small style="color:var(--mut)">{{ p.created_at|jalali }}</small></div>
+      <div class="version-row"><b>{{ p.version }}</b><span class="grow"></span><form method="post" action="/prompts/{{ p.id }}/activate" style="display:inline">{{ csrf_field(request) | safe }}{{ icon('retry', 'پرامپت نسخهٔ ' ~ p.version ~ ' را دوباره فعال کن') }}</form><form method="post" action="/prompts/{{ p.id }}/delete" style="display:inline" onsubmit="return confirm('نسخهٔ «{{ p.version }}» برای همیشه حذف شود؟ اگر رکوردی از آن استفاده کرده باشد یا نسخهٔ فعال باشد، حذف انجام نمی‌شود.')">{{ csrf_field(request) | safe }}{{ icon('trash', 'پرامپت نسخهٔ ' ~ p.version ~ ' را حذف کن', 'danger') }}</form><small>{{ p.created_at|jalali }}</small></div>
       {% endif %}
       {% endfor %}
     </div></div>

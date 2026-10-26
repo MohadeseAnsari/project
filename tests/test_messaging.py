@@ -15,10 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Category, Channel, Delivery, Field, FieldChannelRoute, Main
+from app.db.models import Category, Channel, Delivery, Field, Main, MainCategoryMatch
 from app.messaging import dispatcher
 from app.messaging.dispatcher import (
-    channels_for_article,
+    channels_for_article_multi,
     claim_next_delivery,
     deliver_one,
     ensure_pending_deliveries,
@@ -33,6 +33,7 @@ from app.messaging.platforms import (
     build_client,
     configured_clients,
 )
+from tests.routing_setup import route_all_active
 
 OUTPUT = {"title": "عنوان", "lead": "لید", "body": "متن کامل"}
 
@@ -46,27 +47,58 @@ _field_counter = itertools.count(1)
 
 
 async def _field(session: AsyncSession) -> Field:
-    """Create a field with a unique name (``fields.name`` is UNIQUE)."""
-    cat = await session.get(Category, 1)
+    """Create a field with a unique name (``fields.name`` is UNIQUE).
+
+    The row carries NO category any more: fields only identify disciplines;
+    a record's classification comes from its matches (see ``_article``).
+    """
+    unique = f"field-{next(_field_counter)}"
+    field = Field(name=unique, normalized_name=unique)
+    session.add(field)
+    await session.commit()
+    return field
+
+
+async def _classification_category(session: AsyncSession) -> Category:
+    """The category the helper articles are classified into."""
+    cat = (await session.execute(select(Category).order_by(Category.id))).scalars().first()
     if cat is None:
         cat = Category(name="پزشکی و علوم سلامت", description="Medical")
         session.add(cat)
         await session.commit()
-    unique = f"field-{next(_field_counter)}"
-    field = Field(name=unique, normalized_name=unique, category_id=cat.id)
-    session.add(field)
-    await session.commit()
-    return field
+    return cat
 
 
 async def _channel(session: AsyncSession, platform: str = "bale", chat_id: int = 100) -> Channel:
     channel = Channel(platform=platform, chat_id=chat_id, username="@newschanneltest123")
     session.add(channel)
     await session.commit()
+    await _route_to_all(session)
     return channel
 
 
+async def _route_to_all(session: AsyncSession) -> None:
+    """Name every active channel as a destination for every category.
+
+    Delivery is routed by category now, so a test that just wants news to reach
+    somewhere has to say so. Re-seeding from BOTH ``_channel`` and ``_article``
+    is deliberate: these two helpers are called in either order by different
+    tests, and re-seeding is cheap, whereas seeding only once would silently
+    leave whichever channel was created later unrouted.
+    """
+    categories = (await session.execute(select(Category))).scalars().all()
+    for category in categories:
+        await route_all_active(session, category)
+
+
 async def _article(session: AsyncSession, field: Field | None = None, status: str = "review") -> Main:
+    """A record whose classification comes from a stored qualifying match.
+
+    (v2-combined: ``category_id`` alone is only the display primary; the
+    resolver reads ``main_category_matches``, so the helper writes one row —
+    the same shape the Worker stores for a 0.9-score match.)
+    """
+    category = await _classification_category(session)
     article = Main(
         username="tester",
         title="Thesis",
@@ -77,10 +109,17 @@ async def _article(session: AsyncSession, field: Field | None = None, status: st
         supervisor="Supervisor",
         status=status,
         field_id=field.id if field else None,
+        category_id=category.id if category else None,
         output_json=dict(OUTPUT) if status == "review" else None,
     )
     session.add(article)
+    await session.flush()
+    if category is not None:
+        session.add(MainCategoryMatch(
+            main_id=article.id, category_id=category.id, score=0.9, rank=1, reason="test",
+        ))
     await session.commit()
+    await _route_to_all(session)
     return article
 
 
@@ -311,35 +350,15 @@ def test_configured_clients_skips_platforms_without_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_every_active_channel_is_a_target_even_with_a_legacy_field_route(
-    session: AsyncSession,
-):
-    """A field->channel row no longer narrows delivery (item 6).
-
-    It used to be the whole resolution: an article went only to the channels
-    its field was routed to. Both channels now receive it, because the rule is
-    "the news goes to all channels".
-    """
-    field = await _field(session)
-    bale = await _channel(session, "bale", 100)
-    telegram = await _channel(session, "telegram", 200)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=bale.id))
-    await session.commit()
-
-    article = await _article(session, field)
-    channels = await channels_for_article(session, article)
-    assert [c.id for c in channels] == [bale.id, telegram.id]
-
-
 @pytest.mark.asyncio
 async def test_channels_for_article_covers_every_active_channel(session: AsyncSession):
     field = await _field(session)
-    first = await _channel(session, "bale", 100)
-    second = await _channel(session, "telegram", 200)
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
     await session.commit()
 
     article = await _article(session, field)
-    assert len(await channels_for_article(session, article)) == 2
+    assert len(await channels_for_article_multi(session, article)) == 2
 
 
 @pytest.mark.asyncio
@@ -351,8 +370,8 @@ async def test_only_inactive_channels_are_excluded(session: AsyncSession):
     await session.commit()
 
     article = await _article(session, field)
-    channels = await channels_for_article(session, article)
-    assert [c.id for c in channels] == [active.id]
+    channels = await channels_for_article_multi(session, article)
+    assert [c.id for c, _s in channels] == [active.id]
 
 
 @pytest.mark.asyncio
@@ -361,7 +380,7 @@ async def test_inactive_channel_is_never_resolved(session: AsyncSession):
     session.add(channel)
     await session.commit()
     article = await _article(session)
-    assert await channels_for_article(session, article) == []
+    assert await channels_for_article_multi(session, article) == []
 
 
 # --------------------------------------------------------------------------
@@ -376,8 +395,6 @@ async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession, m
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
     channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
     article = await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -392,15 +409,8 @@ async def test_ensure_queues_deliveries_for_review_rows(session: AsyncSession, m
 @pytest.mark.asyncio
 async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
     field = await _field(session)
-    first = await _channel(session, "bale", 100)
-    second = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
-    )
-    await session.commit()
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 2
@@ -409,9 +419,7 @@ async def test_ensure_creates_one_delivery_per_channel(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_is_idempotent(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    await _channel(session)
     await _article(session, field)
 
     assert await ensure_pending_deliveries(session) == 1
@@ -422,9 +430,7 @@ async def test_ensure_is_idempotent(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    await _channel(session)
 
     await _article(session, field, status="processing")  # not generated yet
     empty = await _article(session, field)
@@ -437,9 +443,7 @@ async def test_ensure_ignores_unprocessed_and_empty_rows(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_ensure_picks_up_articles_processed_later(session: AsyncSession):
     field = await _field(session)
-    channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    await _channel(session)
 
     article = await _article(session, field, status="processing")
     assert await ensure_pending_deliveries(session) == 0
@@ -461,9 +465,7 @@ async def test_ensure_reaches_articles_beyond_a_saturated_batch(session: AsyncSe
     and never recovers as the queue drains.
     """
     field = await _field(session)
-    channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
+    await _channel(session)
 
     for _ in range(5):
         await _article(session, field)
@@ -496,13 +498,6 @@ async def test_ensure_returns_article_delivered_to_one_channel_but_not_another(
     field = await _field(session)
     first = await _channel(session, "bale", 100)
     second = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=first.id),
-            FieldChannelRoute(field_id=field.id, channel_id=second.id),
-        ]
-    )
-    await session.commit()
 
     article = await _article(session, field)
     session.add(
@@ -536,8 +531,6 @@ async def _pending(session: AsyncSession, **kwargs) -> Delivery:
         channel = (await session.execute(select(Channel).order_by(Channel.id))).scalars().first()
     if channel is None:
         channel = await _channel(session)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=channel.id))
-    await session.commit()
     article = await _article(session, field)
     delivery = Delivery(main_id=article.id, channel_id=channel.id, **kwargs)
     session.add(delivery)
@@ -618,7 +611,7 @@ async def test_recover_stale_deliveries(session: AsyncSession):
 
 
 async def _claimed(session: AsyncSession) -> Delivery:
-    delivery = await _pending(session)
+    await _pending(session)
     return await claim_next_delivery(session)
 
 
@@ -768,9 +761,7 @@ async def test_telegram_channel_uses_telegram_client(session: AsyncSession, monk
     # Send-path test: opt out of the human gate so the queued row is claimable.
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
-    telegram = await _channel(session, "telegram", 987)
-    session.add(FieldChannelRoute(field_id=field.id, channel_id=telegram.id))
-    await session.commit()
+    await _channel(session, "telegram", 987)
     await _article(session, field)
 
     await ensure_pending_deliveries(session)
@@ -791,16 +782,9 @@ async def test_processed_article_reaches_every_routed_channel(session: AsyncSess
     # Send-path test: opt out of the human gate so queued rows are claimable.
     monkeypatch.setattr(settings, "require_human_confirmation", False)
     field = await _field(session)
-    bale = await _channel(session, "bale", 100)
-    telegram = await _channel(session, "telegram", 200)
-    session.add_all(
-        [
-            FieldChannelRoute(field_id=field.id, channel_id=bale.id),
-            FieldChannelRoute(field_id=field.id, channel_id=telegram.id),
-        ]
-    )
-    await session.commit()
-    article = await _article(session, field)
+    await _channel(session, "bale", 100)
+    await _channel(session, "telegram", 200)
+    await _article(session, field)
 
     clients = {"bale": StubClient(), "telegram": StubClient()}
     for _ in range(2):
