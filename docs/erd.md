@@ -26,11 +26,6 @@ erDiagram
         INTEGER short_code
         TIMESTAMP created_at
     }
-    # deprecated is retained for retiring a row without breaking its FKs, but
-    # the pre-ISCED rule vocabulary is gone: migration 024 remapped its fields,
-    # records and deliveries onto the closest live rows, then deleted it. The
-    # 29 ISCED-F 2013 intermediate fields + other stay live; isc_code is
-    # indicative metadata only (not used for routing, nullable by design).
 
     fields {
         SERIAL id PK
@@ -39,9 +34,6 @@ erDiagram
         VARCHAR source
         TIMESTAMP created_at
     }
-    # fields is only a dedup identity for a discipline name. It has no
-    # category, keyword, or channel route. main.field_id references it, but
-    # neither classification nor routing reads the field row.
 
     models {
         SERIAL id PK
@@ -89,9 +81,6 @@ erDiagram
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
-    # main.category_id is the DISPLAY primary (the rank-1 match's category);
-    # the full multi-category answer lives in main_category_matches and is
-    # what routing actually reads.
 
     main_category_matches {
         SERIAL id PK
@@ -103,20 +92,6 @@ erDiagram
         INTEGER model_id FK
         TIMESTAMP created_at
     }
-    # One row per (category, score, rank) the combined generation call — or a
-    # reviewer — classified a record into. Promotion rules:
-    #   - rank 1 is the primary (highest score; main.category_id mirrors it);
-    #   - ck_main_cat_matches_score pins score to 0..1;
-    #   - a review override ('POST /records/{id}/category-matches' or the
-    #     panel's «تعیین دستی دسته») REPLACES all rows: one manual match with
-    #     score 1.0 and reason «تعیین دستی توسط بازبین», or the single other
-    #     fallback (score 0.0, reason 'no auto-match') when cleared;
-    #   - model_id is NULL on manual/override rows, so an LLM answer is never
-    #     mistaken for a human decision;
-    #   - routing reads ONLY qualifying rows: score >=
-    #     settings.min_category_relevance, category NOT deprecated, category
-    #     != 'other'. An other-only record has one row and sends nothing.
-    # Indexes: (main_id) for the record page, (score) for threshold queries.
 
     roles {
         SERIAL id PK
@@ -134,9 +109,6 @@ erDiagram
         TIMESTAMP deleted_at
         TIMESTAMP created_at
     }
-    # deleted_at tombstones a removed console account (migration 020): the row
-    # is kept so audit_logs.user_id keeps resolving the author, but every
-    # panel listing and the login path filter it out.
 
     audit_logs {
         SERIAL id PK
@@ -159,33 +131,12 @@ erDiagram
         TIMESTAMP created_at
         TIMESTAMP activated_at
     }
-    # Many channels coexist; the pair (platform, chat_id) is unique
-    # (uq_channels_platform_chat) so one destination is never registered
-    # twice. bot_token_encrypted is a per-channel Fernet token, write-only.
-    # Deleting is not unconditional: a channel with deliveries is disabled.
-    #
-    # activated_at is the channel's start line: an article is delivered here
-    # only if main.created_at >= channels.activated_at. It is seeded from
-    # created_at for existing rows and refreshed every time the channel is
-    # switched ON, so neither a new channel nor a re-enabled one inherits the
-    # archive that predates it.
 
     category_channel_routes {
-        INTEGER category_id PK,FK
-        INTEGER channel_id PK,FK
+        INTEGER category_id PK
+        INTEGER channel_id PK
         TIMESTAMP created_at
     }
-    # THE routing matrix, edited one category at a time on the panel's
-    # /categories page: a category reaches exactly the channels ticked here —
-    # and nothing more. It is consulted through main_category_matches now:
-    # every qualifying match of a record contributes the channels of its
-    # category, and the per-channel union (source 'multi' when two categories
-    # hit the same channel) is what gets queued. A category with no rows here
-    # publishes nothing — no fallback to "every active channel", because a
-    # fallback would make the matrix a control that looks live and is not.
-    # Legacy note: deliveries written before v2-combined were remapped to the
-    # closest ISCED category by migration 024. Routing still reads only the
-    # current matches of a record.
 
     deliveries {
         SERIAL id PK
@@ -204,6 +155,33 @@ erDiagram
         TIMESTAMP updated_at
     }
 ```
+
+## Schema notes
+
+- `categories.deprecated` retires a category without breaking its foreign
+  keys. The pre-ISCED vocabulary was remapped and removed by migration 024;
+  `isc_code` is indicative metadata only.
+- `fields` is only a normalized dedup identity. It has no category, keyword,
+  or channel route; `main.field_id` references it for audit/dedup, and neither
+  classification nor routing reads the field row.
+- `main.category_id` is the display primary category (the rank-1 match).
+  The full multi-category answer lives in `main_category_matches`, which is
+  what routing reads.
+- `main_category_matches` stores one row per category match. Rank 1 is the
+  primary; scores are clamped to 0..1. A manual override replaces all rows with
+  one score-1.0 match; clearing returns the single `other` fallback. Routing
+  reads only qualifying, non-deprecated, non-`other` matches at or above
+  `MIN_CATEGORY_RELEVANCE`.
+- `panel_users.deleted_at` tombstones removed accounts so audit history still
+  resolves the author.
+- `channels.activated_at` is the channel start line: articles created before
+  it are never delivered there, so a newly enabled channel does not receive
+  the archive.
+- `category_channel_routes` is the strict routing matrix. A category reaches
+  exactly the channels selected on `/categories`; a category with no routes
+  publishes nothing.
+- `deliveries` records one row per article × channel and carries the send
+  status, attempt count, provider message id, and error.
 
 `main.status` is the generation lifecycle: `ready`, `processing`, `review`,
 `approved`, `published`, `failed`, `rejected` (explicit human rejection from
