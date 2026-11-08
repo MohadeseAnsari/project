@@ -1,8 +1,10 @@
 """Versioned system prompt for the COMBINED generation + classification call.
 
-v3-compact: ONE structured LLM response per thesis carries both the
+v4-reasons: ONE structured LLM response per thesis carries both the
 journalistic article and the ISCED-F 2013 classification (up to 3
 ``CategoryMatchCompact`` entries: code 0-29, integer score 0-100, short reason).
+Every match must include a short Persian reason; the former optimization that
+dropped reasons for high-confidence matches is retired.
 The category list uses internal short codes and shortened descriptions to cut
 the classification output token count (~75 %). The full 29-category vocabulary
 lives in ``app/news/isced.py`` and is embedded once at import time, so the
@@ -71,7 +73,7 @@ def _compact_category_block() -> str:
     return "\n".join(lines)
 
 
-PROMPT_VERSION = "v3-compact"
+PROMPT_VERSION = "v4-reasons"
 
 SYSTEM_PROMPT = (
     """You are an experienced Iranian journalist AND an academic classification expert.
@@ -90,7 +92,7 @@ CLASSIFICATION RULES:
 - code: EXACT integer from the list above (0-29). Do NOT invent codes.
 - score: integer 0-100. Use 90+ only for near-certain matches.
 - reason: Persian, AT MOST 5 words (e.g., "ML + تشخیص پزشکی", "قلب + فیزیولوژی").
-  Empty string ("") is REQUIRED if score >= 90 (high confidence needs no explanation).
+  REQUIRED for every category, even when the score is 90 or higher.
 - If no category fits, return categories: [].
 - A thesis about "مهندسی پزشکی" → codes 17 AND 24.
 - A thesis about "ML for medical imaging" → codes 16 AND 24.

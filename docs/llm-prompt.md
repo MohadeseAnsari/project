@@ -1,9 +1,9 @@
 # The LLM prompt: exactly what is sent, and where each part comes from
 
-This documents the **v3-compact** contract: ONE PydanticAI call per thesis
+This documents the **v4-reasons** contract: ONE PydanticAI call per thesis
 returns the article AND its ISCED-F 2013 classification together
-(`v3-compact`, seeded active by `migrations/025_category_isc_code.sql`;
-the retired v2-combined row stays for audit).
+(`v4-reasons`, seeded active by `migrations/028_require_category_reasons.sql`;
+the older v2-combined and v3-compact rows stay for audit).
 
 Everything below is enforced by tests, not just described:
 `tests/test_prompt_contract.py` asserts the message ORDER, the placeholders,
@@ -57,11 +57,11 @@ with no supervisor still generates.
 
 ## The system prompt, verbatim
 
-This is the packaged fallback `v2-combined` text from
-`app/news/prompts.py::SYSTEM_PROMPT`. The
-ACTIVE row in the `prompts` table is seeded from this exact text by migration
-025 and `tests/test_combined_classification.py` fails if DB and code drift —
-so what follows is also what the database runs:
+This is the packaged `v4-reasons` text from
+`app/news/prompts.py::SYSTEM_PROMPT`. The ACTIVE row in the `prompts` table is
+seeded from this exact text by migration 028, and
+`tests/test_combined_classification.py` fails if DB and code drift — so what
+follows is also what the database runs:
 
 ```
 You are an experienced Iranian journalist AND an academic classification expert.
@@ -109,7 +109,7 @@ CLASSIFICATION RULES:
 - code: EXACT integer from the list above (0-29). Do NOT invent codes.
 - score: integer 0-100. Use 90+ only for near-certain matches.
 - reason: Persian, AT MOST 5 words (e.g., "ML + تشخیص پزشکی", "قلب + فیزیولوژی").
-  Empty string ("") is REQUIRED if score >= 90 (high confidence needs no explanation).
+  REQUIRED for every category, even when the score is 90 or higher.
 - If no category fits, return categories: [].
 - A thesis about "مهندسی پزشکی" → codes 17 AND 24.
 - A thesis about "ML for medical imaging" → codes 16 AND 24.
@@ -142,7 +142,7 @@ Notes on the embedded pieces:
   pins the database rows to the same character sequences. A category answered
   with a different normalization does not resolve and is treated as
   hallucinated.
-- `PROMPT_VERSION = "v2-combined"` is stamped on every generated record
+- `PROMPT_VERSION = "v4-reasons"` is stamped on every generated record
   via `main.prompt_id` (snapshot), so a stored answer can always be traced to
   the exact prompt text that produced it.
 
@@ -158,9 +158,9 @@ fails the record with the validation error (no retries, no silent scrapping):
   "body": "...",           // full article
   "categories": [          // 0..3 entries, empty = unclassified
     {
-      "category": "بهداشت",   // EXACT name from the numbered list, or other
-      "score": 0.9,           // self-assessed relevance, 0.0-1.0
-      "reason": "چکیده درباره پزشکی است" // short Persian justification
+      "code": 24,             // EXACT integer from the numbered list
+      "score": 90,            // self-assessed relevance, 0-100
+      "reason": "پزشکی و سلامت" // required short Persian justification
     }
   ]
 }
@@ -227,7 +227,7 @@ message; `tests/test_worker.py::test_secret_not_sent_to_llm` enforces it.
 ## What the database vs code owns now (item 13, current answer)
 
 **In the database (editable at runtime, no deploy):** the system prompt (the
-active `v2-combined` row — seeded by migration 023 so a fresh deployment
+active `v4-reasons` row — seeded by migration 028 so a fresh deployment
 classifies from the start), the model row (name, real model id, endpoint, key,
 temperature, token cap), and each record's snapshot of the prompt and model it
 was generated with.

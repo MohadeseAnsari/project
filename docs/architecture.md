@@ -77,7 +77,7 @@ See [codebase-guide.md](codebase-guide.md) for the full guide (request/Worker li
 One call, one answer, one point of trust:
 
 - Classification of a thesis comes from the SAME LLM call that writes the news
-  (v3-compact): the model answers with up to 3
+  (v4-reasons): the model answers with up to 3
   `{code 0-29, score 0-100, reason}` entries next to the article; the worker
   maps codes back to ISCED-F 2013 category rows (compact output, ~75 % fewer
   classification tokens).
@@ -322,7 +322,7 @@ project/
 │   │   ├── normalization.py # Field normalization (dedup identity)
 │   ├── news/
 │   │   ├── generation.py    # Combined LLM call (news + classification)
-│   │   ├── prompts.py       # v3-compact prompt template
+│   │   ├── prompts.py       # v4-reasons prompt template
 │   │   └── isced.py         # Canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/
 │   │   └── worker.py        # Sequential worker

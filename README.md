@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688)
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791)
 ![Docker Compose](https://img.shields.io/badge/docker-compose-ready-2496ED)
-![Tests](https://img.shields.io/badge/tests-697%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-698%20passed-brightgreen)
 
 **A thesis-to-channel news pipeline for IranDoc.** A thesis is submitted as
 structured metadata; one LLM call writes the Persian news article and classifies
@@ -263,7 +263,6 @@ Environment variables are read from the process environment, then `.env`.
 | `LLM_MAX_OUTPUT_TOKENS` | `1000` | Output token cap |
 | `TOP_N_CATEGORIES` | `3` | Maximum stored category matches per record |
 | `MIN_CATEGORY_RELEVANCE` | `0.5` | Minimum score for a match to route |
-| `SKIP_REASON_ABOVE_SCORE` | `90` | Optional reason threshold for compact output |
 | `STORE_LLM_RAW_OUTPUT` | `false` | Store the raw LLM response for debugging |
 | `REQUIRE_HUMAN_CONFIRMATION` | `false` | Gate deliveries behind manual approval |
 | `UNMATCHED_CATEGORY_BEHAVIOR` | `review` | `review`, `fallback_other`, or `failed` |
@@ -483,7 +482,7 @@ Coverage highlights:
 - Panel routing, permissions, CSRF, templates, and layering
 - Worker recovery and failure handling
 
-Latest run: **697 passed, 2 skipped**.
+Latest run: **698 passed, 2 skipped**.
 
 Lint the application, scripts, and tests:
 
