@@ -201,7 +201,9 @@ def test_prompts_embed_the_exact_vocabulary():
     """The system prompt must contain all 29 names + the fallback."""
     from app.news.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert PROMPT_VERSION == "v3-compact"
+    assert PROMPT_VERSION == "v4-reasons"
+    assert "REQUIRED for every category" in SYSTEM_PROMPT
+    assert "Empty string" not in SYSTEM_PROMPT
     for name in ISCED_CATEGORY_NAMES:
         assert name in SYSTEM_PROMPT, f"{name} missing from the combined prompt"
     assert "score" in SYSTEM_PROMPT or "نمره" in SYSTEM_PROMPT
@@ -387,6 +389,20 @@ async def test_worker_dedupes_compact_code(session: AsyncSession):
     rows = await _matches(session, job.id)
     assert len(rows) == 1
     assert rows[0][1] == 0.9  # kept highest
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_reason_is_stored(session: AsyncSession):
+    """The retired reason-skipping optimization must not return."""
+    vocab = await _seed_vocabulary(session, "بهداشت", OTHER_CATEGORY)
+    await _seed_worker_world(session)
+    job = await _JobBuilder(session).run(categories=[
+        {"code": vocab["بهداشت"].short_code, "score": 95, "reason": "high confidence"},
+    ])
+    rows = await _matches(session, job.id)
+    assert len(rows) == 1
+    assert rows[0][1] == 0.95
+    assert rows[0][3] == "high confidence"
 
 
 @pytest.mark.asyncio

@@ -274,7 +274,7 @@ class CategoryMatchCompact(BaseModel):
 class GeneratedNews(BaseModel):
     """Structured LLM output: news + classification in ONE response.
 
-    The single call per thesis (v3-compact) writes the article and the
+    The single call per thesis (v4-reasons) writes the article and the
     ISCED-F 2013 classification together. ``categories`` defaults to [] so
     older constructors (tests, saved drafts) keep working unchanged.
     """

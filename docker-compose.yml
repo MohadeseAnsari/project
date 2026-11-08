@@ -59,8 +59,7 @@ services:
       # Combined generation + ISCED-F 2013 classification (v2-combined).
       TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
       MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
-      # Compact LLM output (v3-compact).
-      SKIP_REASON_ABOVE_SCORE: ${SKIP_REASON_ABOVE_SCORE:-90}
+      # Compact LLM output (v4-reasons).
       STORE_LLM_RAW_OUTPUT: ${STORE_LLM_RAW_OUTPUT:-false}
       # Browser origins allowed to call the API (the demo UI is served from :8080).
       # Add the host you will present from, e.g. "http://example.com:8080".
@@ -106,8 +105,7 @@ services:
       # Combined generation + ISCED-F 2013 classification (v2-combined).
       TOP_N_CATEGORIES: ${TOP_N_CATEGORIES:-3}
       MIN_CATEGORY_RELEVANCE: ${MIN_CATEGORY_RELEVANCE:-0.5}
-      # Compact LLM output (v3-compact).
-      SKIP_REASON_ABOVE_SCORE: ${SKIP_REASON_ABOVE_SCORE:-90}
+      # Compact LLM output (v4-reasons).
       STORE_LLM_RAW_OUTPUT: ${STORE_LLM_RAW_OUTPUT:-false}
     volumes:
       - credentials_data:/app/data

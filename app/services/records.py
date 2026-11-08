@@ -321,7 +321,7 @@ async def normalize_llm_categories(session, output) -> list[dict]:
 
     validated: list[dict] = []
     for match in getattr(output, "categories", None) or []:
-        # Compact form (v3-compact): code + int score + reason.
+        # Compact form (v4-reasons): code + int score + reason.
         code = getattr(match, "code", None)
         if code is not None:
             category = code_to_category.get(code)
@@ -408,18 +408,15 @@ async def store_generated_classification(
 
     if qualifying:
         for rank, match in enumerate(qualifying, start=1):
-            # Skip the reason for high-confidence matches when configured
-            # (Optimization D + feature flag). Default threshold 90.
-            if match["score"] * 100 >= settings.skip_reason_above_score:
-                reason = None
-            else:
-                reason = match["reason"]
+            # Reasons are required for every match. The old high-confidence
+            # reason-skipping optimization was retired because it made the
+            # audit trail inconsistent.
             session.add(MainCategoryMatch(
                 main_id=record.id,
                 category_id=match["category_id"],
                 score=match["score"],
                 rank=rank,
-                reason=reason,
+                reason=match["reason"],
                 model_id=model_id,
                 prompt_id=prompt_id,
             ))

@@ -62,7 +62,7 @@ project/
 │   │   └── normalization.py  # Unicode NFC, zero-width removal, whitespace collapse
 │   ├── news/
 │   │   ├── generation.py     # PydanticAI Agent + AvalAI client
-│   │   ├── prompts.py        # versioned v2-combined prompt (injection-safe)
+│   │   ├── prompts.py        # versioned v4-reasons prompt (injection-safe)
 │   │   └── isced.py          # canonical 29 ISCED-F 2013 names + fallback
 │   ├── worker/worker.py      # persistent sequential Worker + recovery
 │   └── messaging/
@@ -157,7 +157,7 @@ changes and `docs/erd.md` for the full picture):
   nor routing reads it.
 - **models** — LLM model configuration; `is_active` selects the one in use.
 - **prompts** — versioned system prompts; `is_active` selects the one in use
-  (migration 023 seeds and activates `v2-combined`).
+  (migration 028 seeds and activates `v4-reasons`).
 - **main** — the thesis/news record and queue entry: thesis fields, `status`
   (`ready|processing|review|failed|rejected`, CHECK constraint), `field_id` /
   `category_id` (display primary — the rank-1 match) / `model_id` /
@@ -237,7 +237,7 @@ it. Re-running the seed script is idempotent
 
 ## 8. Classification (LLM, combined)
 
-Since v2-combined there is **no rule-based classifier in the live path**.
+There is **no rule-based classifier in the live path**.
 Classification of a thesis comes from the SAME LLM call that writes the news:
 the prompt embeds the 29 ISCED-F 2013 intermediate fields (canonical list in
 `app/news/isced.py`, with exact ZWNJ spelling) plus an `other` fallback, and

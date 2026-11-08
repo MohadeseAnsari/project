@@ -71,8 +71,6 @@ class Settings(BaseSettings):
     # "failed": move to failed with a clear error message.
     unmatched_category_behavior: str = "review"
 
-    # Compact LLM output (v3-compact).
-    skip_reason_above_score: int = 90
     store_llm_raw_output: bool = False
 
     # Outbound delivery (sender Worker).
