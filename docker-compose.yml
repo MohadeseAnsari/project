@@ -49,7 +49,7 @@ services:
       start_period: 10s
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
-      SHARED_SECRET: ${SHARED_SECRET}
+      SHARED_SECRET: ${SHARED_SECRET:?set SHARED_SECRET in .env}
       AVALAI_API_KEY: ${AVALAI_API_KEY}
       AVALAI_BASE_URL: ${AVALAI_BASE_URL:-https://api.avalai.ir/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
@@ -73,6 +73,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   # Static demo UI for the API. Separate from the API so the presentation page
   # can be reloaded or replaced without restarting the service it talks to.
@@ -160,8 +161,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       PANEL_ADMIN_USERNAME: ${PANEL_ADMIN_USERNAME:-admin}
-      PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:-}
-      PANEL_SECRET_KEY: ${PANEL_SECRET_KEY:-change-me-in-production}
+      PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:?set PANEL_ADMIN_PASSWORD in .env}
+      PANEL_SECRET_KEY: ${PANEL_SECRET_KEY:?set PANEL_SECRET_KEY in .env}
       PANEL_COOKIE_SECURE: ${PANEL_COOKIE_SECURE:-false}
       PANEL_SESSION_HOURS: ${PANEL_SESSION_HOURS:-12}
       PANEL_TRUSTED_PROXIES: ${PANEL_TRUSTED_PROXIES:-}

@@ -131,9 +131,6 @@ class Settings(BaseSettings):
     # on them can set the visitor IP the lockout and audit trail record.
     panel_trusted_proxies: str = ""
 
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-
     # Origins allowed to call the API from a browser, as a comma-separated list.
     #
     # Needed by the demo UI, which is served from a different port than the API
