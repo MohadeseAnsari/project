@@ -552,6 +552,7 @@ heartbeat, and pending deliveries.
 | [`docs/codebase-guide.md`](docs/codebase-guide.md) | Code layout and extension guide |
 | [`docs/erd.md`](docs/erd.md) | Entity relationship diagram |
 | [`docs/llm-prompt.md`](docs/llm-prompt.md) | Prompt and classification contract |
+| [`docs/deployment.md`](docs/deployment.md) | VPS deployment, backups, upgrades, and operations |
 | [`docs/demo-guide.md`](docs/demo-guide.md) | Machine API demo |
 
 ---
