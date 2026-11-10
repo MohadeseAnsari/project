@@ -51,7 +51,9 @@ Only expose what users need:
 | `8080` | Optional demo, only if needed |
 
 Do **not** expose PostgreSQL (`5432`) publicly. The Compose file binds it to
-loopback.
+loopback. The API also binds to loopback by default (`API_BIND=127.0.0.1`);
+publish it through the reverse proxy. Set `API_BIND=0.0.0.0` only if you
+intentionally want direct port-8000 access.
 
 ---
 
@@ -96,6 +98,10 @@ LLM_MODEL=gpt-5.6-luna
 Set these according to the deployment:
 
 ```dotenv
+# API listens on loopback; the reverse proxy is the public door.
+API_BIND=127.0.0.1
+API_PORT=8000
+
 # Panel listens on loopback; the reverse proxy is the public door.
 PANEL_PORT=127.0.0.1:8081
 
