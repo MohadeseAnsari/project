@@ -38,10 +38,13 @@ services:
 
   api:
     build: .
+    # Reach the host-hosted LLM (vLLM) from inside the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       # Loopback by default; expose the API through a TLS reverse proxy.
-      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8001}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""]
       interval: 30s
@@ -92,6 +95,9 @@ services:
 
   worker:
     build: .
+    # Reach the host-hosted LLM (vLLM) from inside the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: python -m app.worker.worker
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
@@ -156,9 +162,12 @@ services:
   # `8081` binds all interfaces (public emergency use, only behind TLS).
   web:
     build: .
+    # Reach the host-hosted LLM (vLLM) from inside the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: uvicorn app.panel.app:panel_app --host 0.0.0.0 --port 8081
     ports:
-      - "${PANEL_PORT:-8081}:8081"
+      - "${PANEL_PORT:-8082}:8081"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-irandoc_news}
       PANEL_ADMIN_USERNAME: ${PANEL_ADMIN_USERNAME:-admin}
